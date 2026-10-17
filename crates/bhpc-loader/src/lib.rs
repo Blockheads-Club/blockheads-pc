@@ -22,6 +22,9 @@ mod tests_dl;
 mod tests_init;
 #[cfg(test)]
 mod tests_multi;
+#[cfg(test)]
+mod tests_unwind;
+pub mod unwind;
 
 use bhpc_mem::{GuestMemory, MemError};
 use elf::{Dynamic, Elf, Sym};
