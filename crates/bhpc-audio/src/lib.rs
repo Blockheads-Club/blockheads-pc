@@ -7,21 +7,29 @@
 //!   guest enqueues is played through the mixer. Buffer-queue callbacks run on a pump thread.
 //! * [`track`]: a host model of `android.media.AudioTrack` for the fake JVM, feeding the same mixer
 //!   (the fallback path of libOpenAL when `libOpenSLES.so` is not offered).
+//! * [`music`]: a `MediaPlayer` model decoding AAC/MP4, MP3, Ogg, FLAC and WAV into the mixer.
 //! * [`pcm`]: sample formats.
 //!
 //! See `README.md` for the wiring into `bhpc-run`.
 
 pub mod mixer;
+pub mod music;
 pub mod pcm;
 pub mod sles;
 pub mod track;
 
 pub use mixer::{EventQueue, MixError, Mixer, MixerEvent, PlayState, Stats, StreamId};
+pub use music::decode::Decoder;
+pub use music::player::{MediaPlayer, PlayerEvent, PlayerState, PumpGuard};
+pub use music::source::SliceSource;
+pub use music::MusicError;
 pub use pcm::{Frame, PcmFormat, SampleFormat};
 pub use sles::{ExportKind, GuestCall, PumpHandle, Sles, SlesError};
 pub use track::{AudioTrack, TrackError};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_music;
 #[cfg(test)]
 mod tests_sles;

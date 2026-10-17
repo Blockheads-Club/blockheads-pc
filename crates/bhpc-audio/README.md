@@ -8,6 +8,7 @@ Audio for the PC port (PLAN 1.6). Nothing in this crate links an audio library: 
 | `mixer` | `Mixer::fill(&mut [i16])`: sums any number of queued-PCM streams (play/pause/stop, gain, linear resampling, buffer-done events, underrun counter). |
 | `sles` | OpenSL ES HLE for the guest: `slCreateEngine`, the `SL_IID_*` variables and the Object, Engine, Play, BufferQueue (== AndroidSimpleBufferQueue) and Volume vtables, built in guest memory out of thunks. |
 | `track` | `AudioTrack` (MODE_STREAM) model for the fake JVM; blocking `write` paces libOpenAL's mixing thread. |
+| `music` | `MediaPlayer` model (setDataSource bytes/path/fd+offset+length, prepare, start, pause, stop, seekTo, setLooping, setVolume, getDuration/getCurrentPosition, release, listener events) decoding AAC-in-MP4 (all 9 game tracks), MP3, Ogg Vorbis, FLAC and WAV with symphonia (MPL-2.0, pure Rust) into a mixer stream. |
 | `pcm` | 8-bit unsigned, 16-bit signed and 32-bit float, mono/stereo, to stereo `i16`. |
 
 ## Why OpenSL ES first
@@ -68,3 +69,23 @@ copy of an interface ID (checked in 1.7.4), so the guest only ever uses the poin
 `COVERAGE_PACKAGES="bhpc-audio bhpc-input" scripts/coverage.sh` gates 100 % line and function coverage. The tests
 drive the vtables through real guest calls (`Cpu::call` on the thunk addresses, including a 4-instruction ARM
 callback that re-enqueues through the vtable on the pump thread) and need no game files.
+
+## Music (`MediaPlayer`)
+
+The game plays its nine `GameResources/*.mp4` tracks (AAC-LC, 44.1 kHz stereo, ~125 kb/s) through
+`com.apportable.media.MediaPlayer`. `music::player::MediaPlayer` is the host side of that class:
+
+```rust
+let player = MediaPlayer::new(mixer.clone());
+player.set_listener(|ev| { /* PlayerEvent::{Prepared, Completion, SeekComplete, Error} -> onXxx */ });
+player.set_data_source_fd(apk_file, entry_offset, entry_len)?; // or _path / _bytes / _reader
+player.prepare()?;                  // prepare_async() also emits Prepared
+let _pump = player.spawn_pump(Duration::from_millis(10)); // keep alive while playing
+player.start()?;
+```
+
+`pump()` keeps about one second decoded ahead in the mixer and fires `Completion` when the last frame
+has played; the pump thread (or any thread calling `pump()`) delivers completion and error events.
+Android state rules are enforced (`MusicError::IllegalState` maps to `IllegalStateException`).
+Known limits: one gain per mixer stream, so `setVolume(l, r)` uses the average; AAC seeks land within
+about 70 ms of the target.
