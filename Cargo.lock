@@ -39,6 +39,10 @@ name = "bhpc-gles"
 version = "0.0.0"
 
 [[package]]
+name = "bhpc-input"
+version = "0.0.0"
+
+[[package]]
 name = "bhpc-jni"
 version = "0.0.0"
 
