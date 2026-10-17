@@ -6,16 +6,20 @@ pub struct SymDef {
     pub value: u32,
     pub defined: bool,
     pub weak: bool,
+    pub size: u32,
 }
 
 pub fn def(name: &'static str, value: u32) -> SymDef {
-    SymDef { name, value, defined: true, weak: false }
+    SymDef { name, value, defined: true, weak: false, size: 0 }
+}
+pub fn def_sized(name: &'static str, value: u32, size: u32) -> SymDef {
+    SymDef { name, value, defined: true, weak: false, size }
 }
 pub fn undef(name: &'static str) -> SymDef {
-    SymDef { name, value: 0, defined: false, weak: false }
+    SymDef { name, value: 0, defined: false, weak: false, size: 0 }
 }
 pub fn weak_undef(name: &'static str) -> SymDef {
-    SymDef { name, value: 0, defined: false, weak: true }
+    SymDef { name, value: 0, defined: false, weak: true, size: 0 }
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +67,10 @@ pub struct Builder {
     pub huge_memsz: bool,
     pub segment_past_eof: bool,
     pub truncate_to: Option<usize>,
+    pub dt_flags: Option<u32>,
+    pub dt_symbolic: bool,
+    /// Emit two PT_LOADs: `[0, 0x1000)` R+X and `[0x1000, end)` R+W.
+    pub split_segments: bool,
 }
 
 impl Default for Builder {
@@ -97,6 +105,9 @@ impl Default for Builder {
             huge_memsz: false,
             segment_past_eof: false,
             truncate_to: None,
+            dt_flags: None,
+            dt_symbolic: false,
+            split_segments: false,
         }
     }
 }
@@ -120,14 +131,20 @@ pub struct Image {
 impl Builder {
     pub fn build(&self) -> Image {
         let base = self.vaddr_base; // file offset == vaddr - base for the single PT_LOAD
-        let nph = 1 + usize::from(!self.omit_dynamic) + usize::from(self.exidx);
-        let mut b = vec![0u8; 52 + 32 * 3]; // always room for three program headers
+        let nph = 1 + usize::from(self.split_segments) + usize::from(!self.omit_dynamic) + usize::from(self.exidx);
+        let mut b = vec![0u8; 52 + 32 * 4]; // always room for four program headers
         let vaddr = |off: usize| base + off as u32;
 
         // scratch data first, so its address does not depend on the table sizes
         let scratch_off = b.len();
         for w in &self.scratch {
             p32(&mut b, *w);
+        }
+
+        if self.split_segments {
+            while b.len() < 0x1000 {
+                b.push(0);
+            }
         }
 
         // strtab
@@ -151,7 +168,7 @@ impl Builder {
         for (s, no) in self.syms.iter().zip(&name_offs) {
             p32(&mut b, *no);
             p32(&mut b, s.value);
-            p32(&mut b, 0);
+            p32(&mut b, s.size);
             let bind: u8 = if s.weak { 2 } else { 1 };
             b.push(bind << 4 | 2);
             b.push(0);
@@ -235,6 +252,12 @@ impl Builder {
             dynv.push((6, vaddr(symtab_off)));
         }
         dynv.push((11, self.syment));
+        if let Some(f) = self.dt_flags {
+            dynv.push((30, f));
+        }
+        if self.dt_symbolic {
+            dynv.push((16, 0));
+        }
         match self.hash {
             HashKind::None => {}
             HashKind::Sysv => dynv.push((4, vaddr(hash_off))),
@@ -290,12 +313,16 @@ impl Builder {
         b[44..46].copy_from_slice(&(nph as u16).to_le_bytes());
 
         let mut ph = Vec::new();
-        let mut push_ph = |kind: u32, off: u32, va: u32, filesz: u32, memsz: u32| {
-            for x in [kind, off, va, va, filesz, memsz, 7, 0x1000] {
+        let mut push_ph = |kind: u32, off: u32, va: u32, filesz: u32, memsz: u32, flags: u32| {
+            for x in [kind, off, va, va, filesz, memsz, flags, 0x1000] {
                 p32(&mut ph, x);
             }
         };
-        if !self.no_load {
+        if self.split_segments {
+            push_ph(1, 0, base, 0x1000, 0x1000, 5);
+            let rest = file_end as u32 - 0x1000;
+            push_ph(1, 0x1000, base + 0x1000, rest, rest + self.extra_bss, 6);
+        } else if !self.no_load {
             let mut filesz = file_end as u32;
             let mut memsz = file_end as u32 + self.extra_bss;
             if self.filesz_gt_memsz {
@@ -308,15 +335,15 @@ impl Builder {
                 filesz += 0x1000;
                 memsz += 0x1000;
             }
-            push_ph(1, 0, base, filesz, memsz);
+            push_ph(1, 0, base, filesz, memsz, 7);
         } else {
-            push_ph(0x6474_e551, 0, 0, 0, 0); // PT_GNU_STACK only
+            push_ph(0x6474_e551, 0, 0, 0, 0, 6); // PT_GNU_STACK only
         }
         if !self.omit_dynamic {
-            push_ph(2, dyn_off as u32, vaddr(dyn_off), (total - dyn_off) as u32, (total - dyn_off) as u32);
+            push_ph(2, dyn_off as u32, vaddr(dyn_off), (total - dyn_off) as u32, (total - dyn_off) as u32, 6);
         }
         if self.exidx {
-            push_ph(0x7000_0001, exidx_off as u32, vaddr(exidx_off), 16, 16);
+            push_ph(0x7000_0001, exidx_off as u32, vaddr(exidx_off), 16, 16, 4);
         }
         b[52..52 + ph.len()].copy_from_slice(&ph);
 
@@ -325,4 +352,58 @@ impl Builder {
         }
         Image { bytes: b, scratch_vaddr: vaddr(scratch_off) }
     }
+}
+
+/// Build a zip archive. Each entry is `(name, data, deflate)`; deflated entries are really compressed.
+pub fn build_zip(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
+    fn crc(data: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for b in data {
+            c ^= *b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    let mut out = Vec::new();
+    let mut cd = Vec::new();
+    for (name, data, deflate) in entries {
+        let stored = if *deflate { miniz_oxide::deflate::compress_to_vec(data, 6) } else { data.to_vec() };
+        let method: u16 = if *deflate { 8 } else { 0 };
+        let off = out.len() as u32;
+        out.extend_from_slice(b"PK\x03\x04");
+        out.extend_from_slice(&[20, 0, 0, 0]);
+        out.extend_from_slice(&method.to_le_bytes());
+        out.extend_from_slice(&[0; 4]);
+        for x in [crc(data), stored.len() as u32, data.len() as u32] {
+            out.extend_from_slice(&x.to_le_bytes());
+        }
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&stored);
+
+        cd.extend_from_slice(b"PK\x01\x02");
+        cd.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+        cd.extend_from_slice(&method.to_le_bytes());
+        cd.extend_from_slice(&[0; 4]);
+        for x in [crc(data), stored.len() as u32, data.len() as u32] {
+            cd.extend_from_slice(&x.to_le_bytes());
+        }
+        cd.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        cd.extend_from_slice(&[0; 12]);
+        cd.extend_from_slice(&off.to_le_bytes());
+        cd.extend_from_slice(name.as_bytes());
+    }
+    let cd_off = out.len() as u32;
+    out.extend_from_slice(&cd);
+    out.extend_from_slice(b"PK\x05\x06");
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(cd.len() as u32).to_le_bytes());
+    out.extend_from_slice(&cd_off.to_le_bytes());
+    out.extend_from_slice(&[0; 2]);
+    out
 }

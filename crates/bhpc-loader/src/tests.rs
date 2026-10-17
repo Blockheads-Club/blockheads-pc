@@ -301,6 +301,8 @@ fn error_display_and_conversion() {
         LoadError::Truncated,
         LoadError::BadAddress(0x10),
         LoadError::Unresolved("sym".into()),
+        LoadError::NotFound("libx.so".into()),
+        LoadError::Source("zip".into()),
         bhpc_mem::MemError::OutOfSpace.into(),
     ];
     let text: Vec<String> = all.iter().map(|e| e.to_string()).collect();
@@ -309,7 +311,9 @@ fn error_display_and_conversion() {
     assert_eq!(text[2], "truncated ELF file");
     assert_eq!(text[3], "address 0x10 is outside the image");
     assert_eq!(text[4], "unresolved symbol sym");
-    assert!(text[5].starts_with("guest memory:"));
+    assert_eq!(text[5], "library libx.so not found");
+    assert_eq!(text[6], "library source: zip");
+    assert!(text[7].starts_with("guest memory:"));
     let _: &dyn std::error::Error = &all[0];
 }
 
@@ -319,4 +323,14 @@ fn host_symbols_trait_is_implemented_for_closures() {
     let h: &mut dyn HostSymbols = &mut f;
     assert_eq!(h.resolve("a"), Some(1));
     assert_eq!(h.resolve("b"), None);
+}
+
+#[test]
+fn every_truncation_of_the_headers_is_an_error_not_a_panic() {
+    let full = Builder { exidx: true, syms: vec![def("a", 4)], ..Default::default() }.build().bytes;
+    let mut l = Linker::new(mem());
+    for n in 0..52 + 32 * 4 {
+        let err = l.load("t.so", &full[..n], &mut no_host()).unwrap_err();
+        assert!(matches!(err, LoadError::BadElf(_) | LoadError::Truncated), "length {n}: {err:?}");
+    }
 }

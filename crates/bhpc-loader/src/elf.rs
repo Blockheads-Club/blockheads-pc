@@ -25,6 +25,7 @@ const DT_RELA: u32 = 7;
 const DT_SYMENT: u32 = 11;
 const DT_INIT: u32 = 12;
 const DT_SONAME: u32 = 14;
+const DT_SYMBOLIC: u32 = 16;
 const DT_REL: u32 = 17;
 const DT_RELSZ: u32 = 18;
 const DT_JMPREL: u32 = 23;
@@ -32,6 +33,8 @@ const DT_INIT_ARRAY: u32 = 25;
 const DT_FINI_ARRAY: u32 = 26;
 const DT_INIT_ARRAYSZ: u32 = 27;
 const DT_FINI_ARRAYSZ: u32 = 28;
+const DT_FLAGS: u32 = 30;
+const DF_SYMBOLIC: u32 = 2;
 const DT_GNU_HASH: u32 = 0x6fff_fef5;
 
 const MAX_DYNAMIC_ENTRIES: u32 = 4096;
@@ -52,6 +55,7 @@ pub struct Phdr {
     pub vaddr: u32,
     pub filesz: u32,
     pub memsz: u32,
+    pub flags: u32,
 }
 
 /// Parsed ELF file header and program headers.
@@ -92,6 +96,7 @@ impl<'a> Elf<'a> {
                 vaddr: u32le(data, o + 8)?,
                 filesz: u32le(data, o + 16)?,
                 memsz: u32le(data, o + 20)?,
+                flags: u32le(data, o + 24)?,
             });
         }
         Ok(Elf { data, phdrs })
@@ -146,6 +151,7 @@ impl<'a> Elf<'a> {
 pub struct Sym {
     pub name: String,
     pub value: u32,
+    pub size: u32,
     info: u8,
     shndx: u16,
 }
@@ -169,6 +175,8 @@ pub struct Dynamic {
     pub init_arraysz: u32,
     pub fini_array: Option<u32>,
     pub fini_arraysz: u32,
+    /// `DT_SYMBOLIC` or `DF_SYMBOLIC`: references to symbols defined in the object bind locally.
+    pub symbolic: bool,
     pub rel: Option<u32>,
     pub relsz: u32,
     pub jmprel: Option<u32>,
@@ -209,6 +217,8 @@ impl Dynamic {
                 DT_RELSZ => d.relsz = val,
                 DT_JMPREL => d.jmprel = Some(val),
                 DT_INIT => d.init = Some(val),
+                DT_SYMBOLIC => d.symbolic = true,
+                DT_FLAGS => d.symbolic |= val & DF_SYMBOLIC != 0,
                 DT_INIT_ARRAY => d.init_array = Some(val),
                 DT_INIT_ARRAYSZ => d.init_arraysz = val,
                 DT_FINI_ARRAY => d.fini_array = Some(val),
@@ -283,6 +293,7 @@ impl Dynamic {
             out.push(Sym {
                 name,
                 value: mem.read_u32(a + 4)?,
+                size: mem.read_u32(a + 8)?,
                 info: mem.read_u8(a + 12)?,
                 shndx: mem.read_u16(a + 14)?,
             });
