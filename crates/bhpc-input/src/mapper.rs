@@ -1,0 +1,350 @@
+//! The stateful host-to-guest mapping.
+
+use crate::event::{EventSink, GuestEvent, HostAction, HostEvent, HostKey, Lifecycle, Mods, MouseButton};
+use crate::keymap;
+use crate::text::TextModel;
+
+/// Tunables of the mapping. Distances are in content units (see `content`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Config {
+    /// Size of the coordinate space the guest sees. `None` passes window pixels through unscaled.
+    /// The PLAN default is a 1024x768 surface.
+    pub content: Option<(f32, f32)>,
+    /// Initial window size in pixels (updated by `Resized`).
+    pub window: (u32, u32),
+    /// Distance between the two fingers of a right-drag pan.
+    pub pan_spacing: f32,
+    /// Finger distance from the centre when a pinch starts (half the finger spacing).
+    pub pinch_start_radius: f32,
+    /// Radius change per wheel notch.
+    pub pinch_step: f32,
+    pub pinch_min_radius: f32,
+    pub pinch_max_radius: f32,
+    /// A wheel pinch ends when no wheel event arrived for this long.
+    pub pinch_idle_ms: i64,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            content: Some((1024.0, 768.0)),
+            window: (1024, 768),
+            pan_spacing: 80.0,
+            pinch_start_radius: 100.0,
+            pinch_step: 20.0,
+            pinch_min_radius: 20.0,
+            pinch_max_radius: 400.0,
+            pinch_idle_ms: 150,
+        }
+    }
+}
+
+type Pt = (f32, f32);
+
+#[derive(Debug, Clone, PartialEq)]
+enum Gesture {
+    None,
+    /// One finger, pointer 0.
+    Touch,
+    /// Two fingers `spacing` apart, centred on the cursor.
+    Pan,
+    /// Two fingers `radius` either side of `center`; `anchor` is `Some` for Ctrl+drag (the radius
+    /// follows the cursor), `None` for the wheel (which ends on idle).
+    Pinch {
+        center: Pt,
+        radius: f32,
+        anchor: Option<(Pt, f32)>,
+        last_wheel_ms: i64,
+    },
+}
+
+struct TextFocus {
+    field: i32,
+    model: TextModel,
+}
+
+/// Translates [`HostEvent`]s into [`GuestEvent`]s. One instance per window.
+pub struct InputMapper {
+    cfg: Config,
+    gesture: Gesture,
+    /// Button that owns the active gesture (`None` for the wheel pinch).
+    owner: Option<MouseButton>,
+    /// Last cursor position in content units (what the guest last saw).
+    pos: Pt,
+    text: Option<TextFocus>,
+}
+
+impl InputMapper {
+    pub fn new(cfg: Config) -> InputMapper {
+        InputMapper { cfg, gesture: Gesture::None, owner: None, pos: (0.0, 0.0), text: None }
+    }
+
+    /// True while a touch, pan or pinch is in progress.
+    pub fn gesture_active(&self) -> bool {
+        self.gesture != Gesture::None
+    }
+
+    /// Window pixels to content units.
+    pub fn to_content(&self, x: f32, y: f32) -> Pt {
+        match self.cfg.content {
+            Some((cw, ch)) if self.cfg.window.0 > 0 && self.cfg.window.1 > 0 => {
+                (x * cw / self.cfg.window.0 as f32, y * ch / self.cfg.window.1 as f32)
+            }
+            _ => (x, y),
+        }
+    }
+
+    /// Contents of the focused text field as the host tracks it, if one has focus.
+    pub fn text(&self) -> Option<String> {
+        self.text.as_ref().map(|t| t.model.text())
+    }
+
+    /// A guest text field gained (`Some((handle, current text))`) or lost (`None`) focus. Emits the
+    /// matching start/stop-text-input host action when the focus state changes.
+    pub fn set_text_focus(&mut self, focus: Option<(i32, &str)>, sink: &mut dyn EventSink) {
+        let had = self.text.is_some();
+        self.text = focus.map(|(field, s)| TextFocus { field, model: TextModel::new(s) });
+        match (had, self.text.is_some()) {
+            (false, true) => sink.host_action(HostAction::StartTextInput),
+            (true, false) => sink.host_action(HostAction::StopTextInput),
+            _ => {}
+        }
+    }
+
+    /// Advance time: ends a wheel pinch that has been idle. Call about once per frame.
+    pub fn tick(&mut self, now_ms: i64, sink: &mut dyn EventSink) {
+        if let Gesture::Pinch { anchor: None, last_wheel_ms, .. } = self.gesture {
+            if now_ms - last_wheel_ms >= self.cfg.pinch_idle_ms {
+                self.end_gesture(now_ms, sink);
+            }
+        }
+    }
+
+    /// Process one host event.
+    pub fn handle(&mut self, ev: HostEvent, now_ms: i64, sink: &mut dyn EventSink) {
+        match ev {
+            HostEvent::MouseMove { x, y } => {
+                let p = self.to_content(x, y);
+                self.move_to(p, now_ms, sink);
+            }
+            HostEvent::MouseButton { button, pressed: true, x, y, mods } => {
+                self.press(button, self.to_content(x, y), mods, now_ms, sink)
+            }
+            HostEvent::MouseButton { button, pressed: false, x, y, .. } => {
+                if self.owner == Some(button) {
+                    let p = self.to_content(x, y);
+                    self.move_to(p, now_ms, sink);
+                    self.end_gesture(now_ms, sink);
+                }
+            }
+            HostEvent::Wheel { dy, x, y } => self.wheel(dy, self.to_content(x, y), now_ms, sink),
+            HostEvent::Key { key, pressed, repeat, mods } => self.key(key, pressed, repeat, mods, now_ms, sink),
+            HostEvent::TextInput(s) => self.insert_text(&s, sink),
+            HostEvent::FocusGained => {
+                sink.deliver(&GuestEvent::WindowFocus(true));
+                sink.deliver(&GuestEvent::Lifecycle(Lifecycle::DidBecomeActive));
+            }
+            HostEvent::FocusLost => {
+                self.cancel_gesture(now_ms, sink);
+                sink.deliver(&GuestEvent::WindowFocus(false));
+                sink.deliver(&GuestEvent::Lifecycle(Lifecycle::WillResignActive));
+            }
+            HostEvent::Minimized => {
+                self.cancel_gesture(now_ms, sink);
+                sink.deliver(&GuestEvent::Lifecycle(Lifecycle::DidEnterBackground));
+            }
+            HostEvent::Restored => {
+                sink.deliver(&GuestEvent::Lifecycle(Lifecycle::WillEnterForeground));
+            }
+            HostEvent::Resized { width, height } => {
+                self.cfg.window = (width, height);
+                sink.deliver(&GuestEvent::SurfaceChanged { width, height });
+            }
+            HostEvent::Quit => sink.host_action(HostAction::Quit),
+        }
+    }
+
+    // ---------- gestures ----------
+
+    /// Current finger positions, pointer ids 0 and (for two-finger gestures) 1.
+    fn fingers(&self) -> (Vec<i32>, Vec<f32>, Vec<f32>) {
+        let (x, y) = self.pos;
+        match &self.gesture {
+            Gesture::None => (vec![], vec![], vec![]),
+            Gesture::Touch => (vec![0], vec![x], vec![y]),
+            Gesture::Pan => {
+                let h = self.cfg.pan_spacing / 2.0;
+                (vec![0, 1], vec![x - h, x + h], vec![y, y])
+            }
+            Gesture::Pinch { center, radius, .. } => {
+                (vec![0, 1], vec![center.0 - radius, center.0 + radius], vec![center.1, center.1])
+            }
+        }
+    }
+
+    fn begin_gesture(&mut self, g: Gesture, owner: Option<MouseButton>, now_ms: i64, sink: &mut dyn EventSink) {
+        self.gesture = g;
+        self.owner = owner;
+        let (ids, xs, ys) = self.fingers();
+        for i in 0..ids.len() {
+            sink.deliver(&GuestEvent::TouchBegin { id: ids[i], x: xs[i], y: ys[i], time_ms: now_ms });
+        }
+    }
+
+    fn end_gesture(&mut self, now_ms: i64, sink: &mut dyn EventSink) {
+        let (ids, xs, ys) = self.fingers();
+        for i in 0..ids.len() {
+            sink.deliver(&GuestEvent::TouchEnd { id: ids[i], x: xs[i], y: ys[i], time_ms: now_ms });
+        }
+        self.gesture = Gesture::None;
+        self.owner = None;
+    }
+
+    fn cancel_gesture(&mut self, now_ms: i64, sink: &mut dyn EventSink) {
+        let (ids, xs, ys) = self.fingers();
+        if !ids.is_empty() {
+            sink.deliver(&GuestEvent::TouchCancel { ids, xs, ys, time_ms: now_ms });
+        }
+        self.gesture = Gesture::None;
+        self.owner = None;
+    }
+
+    fn send_move(&self, now_ms: i64, sink: &mut dyn EventSink) {
+        let (ids, xs, ys) = self.fingers();
+        sink.deliver(&GuestEvent::TouchMove { ids, xs, ys, time_ms: now_ms });
+    }
+
+    fn press(&mut self, button: MouseButton, p: Pt, mods: Mods, now_ms: i64, sink: &mut dyn EventSink) {
+        // A wheel pinch gives way to a click.
+        if matches!(self.gesture, Gesture::Pinch { anchor: None, .. }) {
+            self.end_gesture(now_ms, sink);
+        }
+        if self.gesture != Gesture::None {
+            return;
+        }
+        self.pos = p;
+        match button {
+            MouseButton::Left if mods.ctrl => {
+                let r = self.cfg.pinch_start_radius;
+                let g = Gesture::Pinch { center: p, radius: r, anchor: Some((p, r)), last_wheel_ms: now_ms };
+                self.begin_gesture(g, Some(button), now_ms, sink);
+            }
+            MouseButton::Left => self.begin_gesture(Gesture::Touch, Some(button), now_ms, sink),
+            MouseButton::Right => self.begin_gesture(Gesture::Pan, Some(button), now_ms, sink),
+            MouseButton::Middle => {}
+        }
+    }
+
+    fn move_to(&mut self, p: Pt, now_ms: i64, sink: &mut dyn EventSink) {
+        if p == self.pos {
+            return;
+        }
+        self.pos = p;
+        match self.gesture.clone() {
+            Gesture::None => {}
+            Gesture::Touch | Gesture::Pan => self.send_move(now_ms, sink),
+            Gesture::Pinch { anchor: None, .. } => {} // the wheel owns the radius
+            Gesture::Pinch { center, anchor: Some((a, r0)), last_wheel_ms, .. } => {
+                let radius =
+                    (r0 + (p.0 - a.0) - (p.1 - a.1)).clamp(self.cfg.pinch_min_radius, self.cfg.pinch_max_radius);
+                self.gesture = Gesture::Pinch { center, radius, anchor: Some((a, r0)), last_wheel_ms };
+                self.send_move(now_ms, sink);
+            }
+        }
+    }
+
+    fn wheel(&mut self, dy: f32, p: Pt, now_ms: i64, sink: &mut dyn EventSink) {
+        if matches!(self.gesture, Gesture::None) {
+            self.pos = p;
+            let g =
+                Gesture::Pinch { center: p, radius: self.cfg.pinch_start_radius, anchor: None, last_wheel_ms: now_ms };
+            self.begin_gesture(g, None, now_ms, sink);
+        }
+        if let Gesture::Pinch { center, radius, anchor: None, .. } = self.gesture {
+            let next = (radius + dy * self.cfg.pinch_step).clamp(self.cfg.pinch_min_radius, self.cfg.pinch_max_radius);
+            self.gesture = Gesture::Pinch { center, radius: next, anchor: None, last_wheel_ms: now_ms };
+            if next != radius {
+                self.send_move(now_ms, sink);
+            }
+        }
+        // Any other gesture owns the cursor: the wheel is ignored.
+    }
+
+    // ---------- keyboard and text ----------
+
+    fn key(&mut self, key: HostKey, pressed: bool, repeat: bool, mods: Mods, now_ms: i64, sink: &mut dyn EventSink) {
+        if key == HostKey::F11 {
+            if pressed && !repeat {
+                sink.host_action(HostAction::ToggleFullscreen);
+            }
+            return;
+        }
+        if key == HostKey::Escape && repeat {
+            return;
+        }
+        if self.text.is_some() && key != HostKey::Escape {
+            if pressed {
+                self.edit_key(key, repeat, sink);
+            }
+            return;
+        }
+        let Some(key_code) = keymap::key_code(key) else { return };
+        let (unicode, meta) = (keymap::unicode(key, mods), keymap::meta_state(mods));
+        let ev = if pressed {
+            GuestEvent::KeyDown { key_code, unicode, meta, time_ms: now_ms }
+        } else {
+            GuestEvent::KeyUp { key_code, unicode, meta, time_ms: now_ms }
+        };
+        sink.deliver(&ev);
+    }
+
+    fn edit_key(&mut self, key: HostKey, repeat: bool, sink: &mut dyn EventSink) {
+        let Some(tf) = self.text.as_mut() else { return };
+        match key {
+            HostKey::Backspace => {
+                let r = tf.model.back_range();
+                self.replace_range(r, sink)
+            }
+            HostKey::Delete => {
+                let r = tf.model.forward_range();
+                self.replace_range(r, sink)
+            }
+            HostKey::Left => tf.model.left(),
+            HostKey::Right => tf.model.right(),
+            HostKey::Home => tf.model.home(),
+            HostKey::End => tf.model.end(),
+            HostKey::Enter if !repeat => {
+                sink.deliver(&GuestEvent::TextShouldReturn { field: tf.field });
+            }
+            _ => {}
+        }
+    }
+
+    fn replace_range(&mut self, range: Option<(usize, usize)>, sink: &mut dyn EventSink) {
+        if let Some((loc, len)) = range {
+            self.change(loc, len, "", sink);
+        }
+    }
+
+    fn insert_text(&mut self, s: &str, sink: &mut dyn EventSink) {
+        if let Some(tf) = &self.text {
+            let at = tf.model.caret();
+            self.change(at, 0, s, sink);
+        }
+    }
+
+    /// Ask the guest whether `[loc, loc+len)` may become `with`; apply it if so.
+    fn change(&mut self, loc: usize, len: usize, with: &str, sink: &mut dyn EventSink) {
+        let Some(tf) = self.text.as_mut() else { return };
+        let ev = GuestEvent::TextShouldChange {
+            field: tf.field,
+            location: loc as u32,
+            length: len as u32,
+            replacement: with.to_string(),
+        };
+        if sink.deliver(&ev) {
+            tf.model.replace(loc, len, with);
+            sink.deliver(&GuestEvent::TextDidChange { field: tf.field });
+        }
+    }
+}

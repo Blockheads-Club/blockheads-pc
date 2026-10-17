@@ -1,1 +1,27 @@
-//! Placeholder for a later milestone (see `docs/feasibility/PLAN.md`).
+//! Audio for the Blockheads PC port (PLAN 1.6).
+//!
+//! * [`mixer`]: a device-independent stereo mixer. The audio device (SDL2 `AudioCallback`, cpal, a
+//!   WAV writer) only calls [`Mixer::fill`]; nothing here links an audio library.
+//! * [`sles`]: OpenSL ES HLE. The guest's `libOpenSLES.so` calls (`slCreateEngine`, the object,
+//!   engine, play, buffer-queue and volume vtables) are served from guest memory, and the PCM the
+//!   guest enqueues is played through the mixer. Buffer-queue callbacks run on a pump thread.
+//! * [`track`]: a host model of `android.media.AudioTrack` for the fake JVM, feeding the same mixer
+//!   (the fallback path of libOpenAL when `libOpenSLES.so` is not offered).
+//! * [`pcm`]: sample formats.
+//!
+//! See `README.md` for the wiring into `bhpc-run`.
+
+pub mod mixer;
+pub mod pcm;
+pub mod sles;
+pub mod track;
+
+pub use mixer::{EventQueue, MixError, Mixer, MixerEvent, PlayState, Stats, StreamId};
+pub use pcm::{Frame, PcmFormat, SampleFormat};
+pub use sles::{ExportKind, GuestCall, PumpHandle, Sles, SlesError};
+pub use track::{AudioTrack, TrackError};
+
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod tests_sles;

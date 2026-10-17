@@ -10,6 +10,7 @@ members = [
     "crates/bhpc-jni",
     "crates/bhpc-gles",
     "crates/bhpc-audio",
+    "crates/bhpc-input",
     "crates/bhpc-app",
 ]
 

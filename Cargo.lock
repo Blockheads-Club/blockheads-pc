@@ -21,6 +21,10 @@ dependencies = [
 [[package]]
 name = "bhpc-audio"
 version = "0.0.0"
+dependencies = [
+ "bhpc-cpu",
+ "bhpc-mem",
+]
 
 [[package]]
 name = "bhpc-bionic"
@@ -48,6 +52,10 @@ dependencies = [
  "bhpc-loader",
  "bhpc-mem",
 ]
+
+[[package]]
+name = "bhpc-input"
+version = "0.0.0"
 
 [[package]]
 name = "bhpc-jni"

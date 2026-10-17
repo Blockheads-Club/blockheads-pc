@@ -4,4 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Placeholder crate for a later milestone (see docs/feasibility/PLAN.md)."
+description = "Audio for the Blockheads PC port: a PCM mixer, an OpenSL ES HLE for the guest and an AudioTrack model, independent of any audio device."
+
+[dependencies]
+bhpc-mem.workspace = true
+bhpc-cpu.workspace = true
