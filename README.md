@@ -24,6 +24,7 @@ milestones. Nothing here runs the game yet; the spike runs our own NDK-built tes
 | `bhpc-cpu` | dynarmic A32 JIT behind a small C ABI shim (`crates/bhpc-cpu/shim`), SVC thunk ABI |
 | `bhpc-loader` | ELF32/ARM loader: PT_LOAD mapping, RELATIVE/ABS32/GLOB_DAT/JUMP_SLOT, symbol binding |
 | `bhpc-run` | M0 runner and thunk benchmark (`bhpc-run fixtures/hello.so`) |
+| `bhpc-vfs` | Lazy read-only APK assets, writable data dir, Android path mapping, system fonts (OFL font bundled) |
 | `bhpc-bionic`, `-jni`, `-gles`, `-audio`, `-app` | empty stubs for later milestones |
 
 ## Build and run

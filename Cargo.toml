@@ -5,6 +5,7 @@ members = [
     "crates/bhpc-cpu",
     "crates/bhpc-loader",
     "crates/bhpc-run",
+    "crates/bhpc-vfs",
     # Stubs for later milestones (see docs/feasibility/PLAN.md).
     "crates/bhpc-bionic",
     "crates/bhpc-jni",
