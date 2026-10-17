@@ -337,11 +337,8 @@ struct ExitGuard {
 
 impl Drop for ExitGuard {
     fn drop(&mut self) {
-        let failure = if std::thread::panicking() {
-            Some("host panic in a guest thread".to_string())
-        } else {
-            self.failure.take()
-        };
+        let panic_note = "host panic in a guest thread".to_string();
+        let failure = self.failure.take().or(std::thread::panicking().then_some(panic_note));
         self.sched.thread_exit(failure);
     }
 }
