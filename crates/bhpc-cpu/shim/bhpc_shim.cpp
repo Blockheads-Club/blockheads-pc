@@ -8,6 +8,9 @@
 #include <dynarmic/interface/A32/config.h>
 #include <dynarmic/interface/exclusive_monitor.h>
 
+#include "dynarmic/frontend/A32/a32_ir_emitter.h"
+#include "dynarmic/ir/basic_block.h"
+
 namespace {
 
 struct Callbacks final : Dynarmic::A32::UserCallbacks {
@@ -32,6 +35,29 @@ struct Callbacks final : Dynarmic::A32::UserCallbacks {
     void CallSVC(std::uint32_t swi) override { cb.svc(cb.user, swi); }
     void ExceptionRaised(std::uint32_t pc, Dynarmic::A32::Exception e) override {
         cb.exception(cb.user, pc, static_cast<std::uint32_t>(e));
+    }
+    // Two guards on the instruction about to be translated.
+    //  * An all-zero word is `andeq r0, r0, r0`, which no compiler emits: executing one means a jump into
+    //    zero-filled memory (bss, an unrelocated function pointer). Treat it as undefined so the stop is
+    //    reported where it happens. Running on would also be pathological: a run of conditional
+    //    instructions becomes one huge block, and dynarmic's conditional bookkeeping rescans the whole
+    //    block per instruction (quadratic time).
+    //  * Cap the length of an unconditional block for the same quadratic-time reason (huge straight-line
+    //    static initialisers).
+    bool PreCodeReadHook(bool is_thumb, std::uint32_t pc, Dynarmic::A32::IREmitter& ir) override {
+        constexpr std::uint64_t kMaxBlockInstructions = 256;
+        if (!is_thumb && MemoryRead32(pc) == 0) {
+            ir.UpdateUpperLocationDescriptor();
+            ir.BranchWritePC(ir.Imm32(pc + 4));
+            ir.ExceptionRaised(Dynarmic::A32::Exception::UndefinedInstruction);
+            ir.SetTerm(Dynarmic::IR::Term::CheckHalt{Dynarmic::IR::Term::ReturnToDispatch{}});
+            return false;
+        }
+        if (ir.block.CycleCount() >= kMaxBlockInstructions && ir.block.GetCondition() == Dynarmic::IR::Cond::AL) {
+            ir.SetTerm(Dynarmic::IR::Term::LinkBlockFast{ir.current_location});
+            return false;
+        }
+        return true;
     }
     void AddTicks(std::uint64_t t) override { ticks = t > ticks ? 0 : ticks - t; }
     std::uint64_t GetTicksRemaining() override { return ticks; }

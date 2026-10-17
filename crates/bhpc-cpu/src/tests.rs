@@ -632,6 +632,32 @@ fn failures_in_nested_calls_propagate() {
 }
 
 #[test]
+fn stop_regs_capture_the_failing_registers_including_nested_ones() {
+    let mut cpu = setup();
+    assert_eq!(cpu.stop_regs(), None);
+    // Top level: undefined instruction with a recognisable r5 and live sp/lr.
+    put(&cpu, CODE, &[0xE3A0_5077, 0xE7F0_00F0]); // mov r5,#0x77 ; udf
+    assert!(cpu.call(CODE, &[]).is_err());
+    let r = cpu.stop_regs().unwrap();
+    assert_eq!(r[5], 0x77);
+    assert!((CODE + 4..=CODE + 8).contains(&r[15]), "{:#x}", r[15]);
+    assert_eq!(r[14], RETURN_ADDR);
+    // A later success clears it.
+    put(&cpu, CODE, &[BX_LR, BX_LR]);
+    cpu.clear_cache();
+    cpu.call(CODE, &[]).unwrap();
+    assert_eq!(cpu.stop_regs(), None);
+    // Nested failure: the comparator's registers win over the qsort caller's.
+    let q = register_qsort(&cpu);
+    put(&cpu, CODE + 0x200, &[0xE3A0_6055, 0xE7F0_00F0]);
+    put(&cpu, DATA, &[2, 1]);
+    assert!(cpu.call(q, &[DATA, 2, 4, CODE + 0x200]).is_err());
+    let r = cpu.stop_regs().unwrap();
+    assert_eq!(r[6], 0x55);
+    assert!((CODE + 0x204..=CODE + 0x208).contains(&r[15]), "{:#x}", r[15]);
+}
+
+#[test]
 fn nested_call_shares_the_cycle_budget() {
     let mem = Arc::new(GuestMemory::new().unwrap());
     mem.map(CODE, 0x1000).unwrap();

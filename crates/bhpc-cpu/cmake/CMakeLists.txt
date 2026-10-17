@@ -16,6 +16,6 @@ set(DYNARMIC_USE_PRECOMPILED_HEADERS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${BHPC_DYNARMIC_DIR} dynarmic EXCLUDE_FROM_ALL)
 
 add_library(bhpc_shim STATIC ${BHPC_SHIM_DIR}/bhpc_shim.cpp)
-target_include_directories(bhpc_shim PRIVATE ${BHPC_SHIM_DIR})
+target_include_directories(bhpc_shim PRIVATE ${BHPC_SHIM_DIR} ${BHPC_DYNARMIC_DIR}/src ${BHPC_DYNARMIC_DIR}/externals/mcl/include ${BHPC_DYNARMIC_DIR}/externals/fmt/include ${BHPC_DYNARMIC_DIR}/externals/robin-map/include)
 target_link_libraries(bhpc_shim PRIVATE dynarmic)
 install(TARGETS bhpc_shim ARCHIVE DESTINATION lib)

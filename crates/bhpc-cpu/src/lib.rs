@@ -246,6 +246,8 @@ pub struct Cpu {
     stop: Option<Stop>,
     running: bool,
     trace: bool,
+    /// r0..r15 at the moment the last top-level call failed (innermost nested call wins).
+    stop_regs: Option<[u32; 16]>,
 }
 
 // SAFETY: a Cpu is only ever driven from one thread at a time (it owns its JIT instance); the
@@ -274,7 +276,9 @@ impl Cpu {
     /// stack pointer and entry point. May be moved to and driven from another OS thread.
     pub fn new_thread(&self) -> Result<Box<Cpu>, CpuError> {
         let pid = self.shared.alloc_pid()?;
-        Ok(Self::build(self.shared.clone(), self.opts, pid, true, 0))
+        let mut cpu = Self::build(self.shared.clone(), self.opts, pid, true, 0);
+        cpu.trace = self.trace;
+        Ok(cpu)
     }
 
     fn build(shared: Arc<Shared>, opts: CpuOptions, pid: usize, owns_pid: bool, depth: u32) -> Box<Cpu> {
@@ -292,6 +296,7 @@ impl Cpu {
             stop: None,
             running: false,
             trace: false,
+            stop_regs: None,
         });
         let cb = ffi::bhpc_callbacks {
             user: (&mut *cpu as *mut Cpu).cast::<c_void>(),
@@ -552,6 +557,17 @@ impl Cpu {
         unsafe { ffi::bhpc_jit_halt(self.jit) };
     }
 
+    /// True if this CPU counts cycles (the watchdog is armed).
+    pub fn cycle_counting(&self) -> bool {
+        self.opts.cycle_counting
+    }
+
+    /// r0..r15 as they were when the last top-level [`Cpu::call`] failed (taken from the innermost
+    /// nested call if the failure happened there); `None` if it succeeded or nothing ran.
+    pub fn stop_regs(&self) -> Option<[u32; 16]> {
+        self.stop_regs
+    }
+
     // ---------- running ----------
 
     /// Run from the current pc until the guest stops.
@@ -596,6 +612,7 @@ impl Cpu {
         if self.running {
             return self.call_nested(addr, args, on_step.is_none());
         }
+        self.stop_regs = None;
         let saved_sp = self.sp();
         let saved_lr = self.lr();
         let saved_cpsr = self.cpsr();
@@ -618,6 +635,9 @@ impl Cpu {
             Some(f) => self.run_stepping(f),
         };
         let res = CallResult { r0: self.reg(0), r1: self.reg(1) };
+        if stop != Stop::Returned && self.stop_regs.is_none() {
+            self.stop_regs = Some(std::array::from_fn(|i| self.reg(i)));
+        }
         self.set_sp(saved_sp);
         self.set_reg(R_LR, saved_lr);
         // SAFETY: valid jit.
@@ -649,6 +669,7 @@ impl Cpu {
             child.set_ticks(ticks);
         }
         let res = child.call_with(addr, args, None);
+        self.stop_regs = child.stop_regs.take();
         if counting {
             let left = child.ticks();
             self.set_ticks(left);
@@ -823,8 +844,10 @@ mod tramp {
         let slot = swi as usize;
         if c.trace {
             let name = c.shared.table.name_of_slot(slot).unwrap_or_else(|| "?".into());
+            let th = std::thread::current();
             eprintln!(
-                "[thunk] {name}({:#x}, {:#x}, {:#x}, {:#x}) lr={:#x}",
+                "[thunk{}] {name}({:#x}, {:#x}, {:#x}, {:#x}) lr={:#x}",
+                th.name().filter(|n| *n != "main").map_or(String::new(), |n| format!(" {n}")),
                 c.reg(0),
                 c.reg(1),
                 c.reg(2),
