@@ -60,7 +60,16 @@ fn virtual_parent_directories() {
     assert_eq!(v.read_dir("/nope").err(), Some(VfsError::NotFound));
     assert_eq!(v.open("/nope", OpenFlags::read_only()).err(), Some(VfsError::NotFound));
     // The backend has no "/data": the lookup falls back to the virtual directory.
-    assert_eq!(v.mkdir("/data"), Err(VfsError::ReadOnly));
+    assert_eq!(v.mkdir("/data"), Err(VfsError::Exists));
+    // A read-only backend: existing paths are EEXIST, new ones EROFS, and removing nothing is ENOENT.
+    assert_eq!(v.mkdir("/proc"), Err(VfsError::Exists));
+    assert_eq!(v.mkdir("/proc/new"), Err(VfsError::ReadOnly));
+    assert_eq!(v.unlink("/proc/cpuinfo"), Err(VfsError::ReadOnly));
+    assert_eq!(v.unlink("/proc/none"), Err(VfsError::NotFound));
+    assert_eq!(v.rmdir("/proc/none"), Err(VfsError::NotFound));
+    // readlink without any backend below the path.
+    let empty = Vfs::default();
+    assert_eq!(empty.readlink("/x"), Err(VfsError::NotFound));
 }
 
 #[test]

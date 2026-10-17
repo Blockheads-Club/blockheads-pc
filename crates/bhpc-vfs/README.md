@@ -39,7 +39,11 @@ Longest prefix wins; parents of mount points exist as virtual directories; anyth
 Host names containing `\` or `:` are refused (`EINVAL`) so a guest path can never become a Windows drive/UNC path. Android is case
 sensitive; Windows and macOS hosts usually are not.
 
-## Wiring in bhpc-run / bhpc-bionic / bhpc-jni (not done here, those crates are not ours)
+## Wiring in bhpc-run / bhpc-bionic / bhpc-jni (done in the M2 merge)
+
+bionic keeps only a descriptor table over `Arc<dyn FileSystem>` (`bhpc_bionic::vfs::Vfs`, `Config::fs`); `bhpc-run` builds `Storage` and
+hands `storage.vfs` to bionic, `storage.assets` to the JNI `Assets` trait (implemented for `AssetManager`) and `storage.guest.env()` to the
+guest environment. `readlink` (`/proc/self/exe`) and `/dev/zero` were added for bionic. The text below is the original plan.
 
 1. Startup, before loading libs:
    ```rust

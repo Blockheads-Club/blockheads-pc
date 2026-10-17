@@ -191,7 +191,11 @@ impl FileSystem for Vfs {
     fn mkdir(&self, path: &str) -> Result<()> {
         let abs = self.resolve(path)?;
         let r = match self.find(&abs) {
-            Some((_, fs, rest)) => fs.mkdir(&rest),
+            // A read-only backend refuses everything, but an existing path is `EEXIST` first.
+            Some((_, fs, rest)) => match fs.mkdir(&rest) {
+                Err(VfsError::ReadOnly) if self.stat(&abs).is_ok() => Err(VfsError::Exists),
+                r => r,
+            },
             None if self.is_virtual_dir(&abs) => Err(VfsError::Exists),
             None => Err(VfsError::NotFound),
         };
@@ -201,7 +205,10 @@ impl FileSystem for Vfs {
     fn unlink(&self, path: &str) -> Result<()> {
         let abs = self.resolve(path)?;
         let r = match self.find(&abs) {
-            Some((_, fs, rest)) => fs.unlink(&rest),
+            Some((_, fs, rest)) => match fs.unlink(&rest) {
+                Err(VfsError::ReadOnly) if self.stat(&abs) == Err(VfsError::NotFound) => Err(VfsError::NotFound),
+                r => r,
+            },
             None => Err(self.denied(&abs)),
         };
         self.miss("unlink", &abs, r)
@@ -210,10 +217,25 @@ impl FileSystem for Vfs {
     fn rmdir(&self, path: &str) -> Result<()> {
         let abs = self.resolve(path)?;
         let r = match self.find(&abs) {
-            Some((_, fs, rest)) => fs.rmdir(&rest),
+            Some((_, fs, rest)) => match fs.rmdir(&rest) {
+                Err(VfsError::ReadOnly) if self.stat(&abs) == Err(VfsError::NotFound) => Err(VfsError::NotFound),
+                r => r,
+            },
             None => Err(self.denied(&abs)),
         };
         self.miss("rmdir", &abs, r)
+    }
+
+    fn readlink(&self, path: &str) -> Result<String> {
+        let abs = self.resolve(path)?;
+        let r = match self.find(&abs) {
+            Some((_, fs, rest)) => match fs.readlink(&rest) {
+                Err(VfsError::Invalid) => self.stat(&abs).and(Err(VfsError::Invalid)),
+                r => r,
+            },
+            None => self.stat(&abs).and(Err(VfsError::Invalid)),
+        };
+        self.miss("readlink", &abs, r)
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<()> {

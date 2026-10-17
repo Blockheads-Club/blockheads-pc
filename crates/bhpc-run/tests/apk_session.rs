@@ -60,8 +60,9 @@ fn apk_file(dir: &Tmp, libs: &[(&str, Vec<u8>)]) -> PathBuf {
 }
 
 fn config(apk: PathBuf) -> InitConfig {
-    let mut cfg = InitConfig::new(apk);
+    let mut cfg = InitConfig::new(apk.clone());
     cfg.force = true;
+    cfg.data_dir = Some(apk.with_extension("data"));
     cfg
 }
 
@@ -103,7 +104,7 @@ fn constructors_hooks_and_report_on_a_healthy_apk() {
     assert_eq!(rep.histogram.iter().find(|(n, _)| n == "getpid").map(|(_, c)| *c), Some(1));
     assert!(rep.unimplemented_hits.is_empty());
     assert_eq!((rep.threads_created, rep.threads_alive), (0, 0));
-    assert!(dir.0.join("data/data/files").is_dir() && dir.0.join("data/sdcard/Download").is_dir());
+    assert!(dir.0.join("data/home/Documents").is_dir() && dir.0.join("data/sdcard").is_dir());
     let text = report_text(&rep, 25);
     for needle in [
         "build unknown",
@@ -139,7 +140,7 @@ fn the_loader_hooks_run_in_order_with_the_fake_java_vm() {
     let mem = sess.cpu.mem();
     let base = bias + 52 + 32 * 4;
     assert_eq!(mem.read_u32(base + 24).unwrap(), 1);
-    assert_eq!(mem.read_u32(base + 28).unwrap(), sess.jni.vm);
+    assert_eq!(mem.read_u32(base + 28).unwrap(), sess.jni.java_vm);
     assert_eq!(sess.host_libs.len(), 0);
     assert_eq!(sess.range.len(), 2);
     sess.shutdown();
@@ -270,7 +271,7 @@ fn the_apk_is_mounted_for_the_guest_and_unusable_apks_are_rejected() {
     let apk = apk_file(&dir, &[("libApplication.so", ok.clone())]);
     let cfg = config(apk.clone());
     let sess = Session::open(&cfg, Box::new(std::io::sink())).unwrap();
-    let guest_path = lock(&sess.st).vfs.config().apk_path();
+    let guest_path = bhpc_vfs::GuestPaths::new(&cfg.package).code_path();
     let fd = lock(&sess.st).vfs.open(&guest_path, 0).unwrap();
     assert_eq!(lock(&sess.st).vfs.read(fd, 4).unwrap(), b"PK\x03\x04");
     // Not an APK / missing file / unknown build without --force / no libApplication.
@@ -364,7 +365,9 @@ fn the_report_prints_every_section_and_survives_write_errors() {
 fn run_errors_describe_themselves() {
     let e: RunError = bhpc_loader::apk::ApkError::NotZip.into();
     assert_eq!(e.to_string(), "not a zip/APK file");
-    let e: RunError = bhpc_jni::JniError::OutOfMemory.into();
-    assert_eq!(e.to_string(), "jni: guest heap exhausted");
+    let e: RunError = bhpc_jni::JniError::Install("tables".into()).into();
+    assert_eq!(e.to_string(), "jni: tables");
+    let e: RunError = bhpc_vfs::VfsError::NotFound.into();
+    assert_eq!(e.to_string(), "vfs: no such file or directory");
     assert_eq!(Release::V1_7_4.version(), "1.7.4");
 }

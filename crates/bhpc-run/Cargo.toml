@@ -20,6 +20,7 @@ bhpc-cpu.workspace = true
 bhpc-loader.workspace = true
 bhpc-bionic.workspace = true
 bhpc-jni.workspace = true
+bhpc-vfs.workspace = true
 
 [dev-dependencies]
 bhpc-loader = { workspace = true, features = ["test-elf"] }

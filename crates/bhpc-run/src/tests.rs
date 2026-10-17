@@ -94,7 +94,8 @@ fn run_error_display_and_conversions() {
         CpuError::TooManyThunks.into(),
         LoadError::Truncated.into(),
         bhpc_loader::apk::ApkError::NotZip.into(),
-        bhpc_jni::JniError::OutOfMemory.into(),
+        bhpc_jni::JniError::Install("guest heap exhausted".into()).into(),
+        bhpc_vfs::VfsError::Io.into(),
         RunError::NoEntry("e".into()),
         RunError::Guest(Stop::Nested),
         RunError::Watchdog { pc: 0x10, lr: 0x20 },
@@ -106,9 +107,10 @@ fn run_error_display_and_conversions() {
     assert!(text[3].starts_with("load:"));
     assert_eq!(text[4], "not a zip/APK file");
     assert_eq!(text[5], "jni: guest heap exhausted");
-    assert!(text[6].contains("does not export `e`"));
-    assert!(text[7].contains("guest stopped"));
-    assert!(text[8].contains("0x00000010") && text[8].contains("0x00000020"));
+    assert_eq!(text[6], "vfs: input/output error");
+    assert!(text[7].contains("does not export `e`"));
+    assert!(text[8].contains("guest stopped"));
+    assert!(text[9].contains("0x00000010") && text[9].contains("0x00000020"));
     let _: &dyn std::error::Error = &all[0];
 }
 
@@ -119,4 +121,25 @@ fn new_env_has_stack_and_heap() {
     assert_eq!(cpu.ticks(), 1000);
     assert!(cpu.mem().is_mapped(STACK_TOP - 4, 4));
     assert!(cpu.mem().is_mapped(HEAP_BASE, 4));
+}
+
+#[test]
+fn the_fake_vm_allocates_from_the_bionic_heap() {
+    use bhpc_jni::vm::GuestAlloc;
+    let (_cpu, st) = new_env(sink(), Some(1000)).unwrap();
+    let mut h = crate::apkrun::BionicHeap(st.clone());
+    let p = h.alloc(64);
+    assert!(p >= HEAP_BASE);
+    h.free(p);
+    assert_eq!(h.alloc(64), p, "freed blocks are reused");
+}
+
+#[test]
+fn data_dirs_prefer_the_configured_root() {
+    use crate::apkrun::data_dirs;
+    use bhpc_vfs::DataDirs;
+    let user = DataDirs::new("/user/default");
+    assert_eq!(data_dirs(Some(std::path::Path::new("/x")), Some(user.clone())).root, std::path::Path::new("/x"));
+    assert_eq!(data_dirs(None, Some(user.clone())), user);
+    assert!(data_dirs(None, None).root.ends_with("blockheads-pc"));
 }

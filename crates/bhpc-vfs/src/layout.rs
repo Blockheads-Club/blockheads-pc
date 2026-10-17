@@ -101,6 +101,12 @@ pub struct SystemInfo {
     pub mem_total_kb: u64,
     /// Content of `/etc/resolv.conf`.
     pub resolv_conf: String,
+    /// Process id shown as `/proc/<pid>` (`/proc/self` always exists).
+    pub pid: u32,
+    /// Package name: the process command line (`/proc/self/cmdline`). [`build`] fills it in.
+    pub package: String,
+    /// Target of `/proc/self/exe`. [`build`] fills in the guest path of the APK.
+    pub exe: String,
 }
 
 impl Default for SystemInfo {
@@ -111,6 +117,9 @@ impl Default for SystemInfo {
             cpu_part: 0xc09,
             mem_total_kb: 2 * 1024 * 1024,
             resolv_conf: read_or(Path::new("/etc/resolv.conf"), "nameserver 1.1.1.1\n"),
+            pid: std::process::id(),
+            package: DEFAULT_PACKAGE.to_string(),
+            exe: GuestPaths::new(DEFAULT_PACKAGE).code_path(),
         }
     }
 }
@@ -208,6 +217,13 @@ impl GuestPaths {
             kv("ANDROID_DATA_DIRECTORY", "/data".to_string()),
             kv("ANDROID_EXTERNAL_STORAGE", "/sdcard".to_string()),
             kv("ANDROID_DOWNLOAD_DIRECTORY", "/sdcard/Download".to_string()),
+            kv("CFProcessPath", format!("{}/{}", self.code_path(), self.package.rsplit('.').next().unwrap_or("app"))),
+            kv("DEBUG_BUILD", "0".to_string()),
+            kv("NSUnrecognizedForwardingDisabled", "1".to_string()),
+            kv("VERSION_CODE", "1".to_string()),
+            kv("LOCALE", "en_US".to_string()),
+            kv("LANGUAGES", "en".to_string()),
+            kv("TZ", "UTC".to_string()),
         ]
     }
 }
@@ -264,7 +280,12 @@ pub fn system_files(sys: &SystemInfo) -> MemFs {
     }
     m.insert_text("/system/etc/hosts", "127.0.0.1 localhost\n::1 ip6-localhost\n");
     m.insert_text("/etc/resolv.conf", &sys.resolv_conf);
+    for root in ["/proc/self".to_string(), format!("/proc/{}", sys.pid)] {
+        m.insert(&format!("{root}/cmdline"), Node::Bytes(format!("{}\0", sys.package).into_bytes().into()));
+        m.insert_link(&format!("{root}/exe"), &sys.exe);
+    }
     m.insert("/dev/null", Node::Null);
+    m.insert("/dev/zero", Node::Zero);
     m.insert("/dev/urandom", Node::Random);
     m.insert("/dev/random", Node::Random);
     m.insert_text(fonts::SYSTEM_FONTS_XML, &fonts::system_fonts_xml());
@@ -284,7 +305,8 @@ pub fn build(cfg: &VfsConfig, apk: Arc<ApkArchive>) -> Storage {
         vfs.mount(at, fs).expect("static mount points are valid");
     };
 
-    mount("/", Arc::new(system_files(&cfg.system)));
+    let sys = SystemInfo { package: cfg.package.clone(), exe: guest.code_path(), ..cfg.system.clone() };
+    mount("/", Arc::new(system_files(&sys)));
     mount("/system/fonts", Arc::new(FontFs::new(Some(apk.clone()), Some(d.fonts.clone()))));
     mount("/System", Arc::new(ZipFs::new(apk.clone(), "com.apportable.system")));
     mount(&guest.code_path(), Arc::new(SingleFile::new(&cfg.apk_path)));

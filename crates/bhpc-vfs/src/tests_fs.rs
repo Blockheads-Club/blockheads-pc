@@ -285,3 +285,23 @@ fn memfs_nested_dirs_list_only_direct_children() {
     let a: Vec<_> = m.read_dir("/a").unwrap().into_iter().map(|e| (e.name, e.kind)).collect();
     assert_eq!(a, [("b".to_string(), FileKind::Dir), ("d.txt".to_string(), FileKind::File)]);
 }
+
+#[test]
+fn memfs_zero_device_and_links() {
+    let mut m = MemFs::new();
+    m.insert("/dev/zero", Node::Zero);
+    m.insert_link("/proc/self/exe", "/data/app/x/base.apk");
+    m.insert_text("/proc/f", "t");
+    let mut z = m.open("/dev/zero", OpenFlags::read_only()).unwrap();
+    let mut b = [7u8; 8];
+    assert_eq!(z.read(&mut b), Ok(8));
+    assert_eq!(b, [0; 8]);
+    assert_eq!(z.write(b"abc"), Ok(3));
+    assert_eq!(m.readlink("/proc/self/exe").unwrap(), "/data/app/x/base.apk");
+    assert_eq!(m.readlink("/proc/f"), Err(VfsError::Invalid));
+    assert_eq!(m.readlink("/proc"), Err(VfsError::Invalid));
+    assert_eq!(m.readlink("/nope"), Err(VfsError::NotFound));
+    // A link stats as an empty file and cannot be opened here (its target is in another backend).
+    assert_eq!(m.stat("/proc/self/exe").unwrap().size, 0);
+    assert_eq!(m.open("/proc/self/exe", OpenFlags::read_only()).err(), Some(VfsError::NotFound));
+}

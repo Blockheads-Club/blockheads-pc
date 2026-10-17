@@ -28,6 +28,7 @@ pub enum RunError {
     Load(LoadError),
     Apk(bhpc_loader::apk::ApkError),
     Jni(bhpc_jni::JniError),
+    Vfs(bhpc_vfs::VfsError),
     /// The module does not export the requested entry symbol.
     NoEntry(String),
     /// The guest stopped abnormally.
@@ -48,6 +49,7 @@ impl fmt::Display for RunError {
             RunError::Load(e) => write!(f, "load: {e}"),
             RunError::Apk(e) => write!(f, "{e}"),
             RunError::Jni(e) => write!(f, "jni: {e}"),
+            RunError::Vfs(e) => write!(f, "vfs: {e}"),
             RunError::NoEntry(s) => write!(f, "module does not export `{s}`"),
             RunError::Guest(s) => write!(f, "guest stopped: {s}"),
             RunError::Watchdog { pc, lr } => write!(f, "watchdog expired at pc {pc:#010x} (lr {lr:#010x})"),
@@ -77,6 +79,12 @@ impl From<bhpc_loader::apk::ApkError> for RunError {
         RunError::Apk(e)
     }
 }
+impl From<bhpc_vfs::VfsError> for RunError {
+    fn from(e: bhpc_vfs::VfsError) -> Self {
+        RunError::Vfs(e)
+    }
+}
+
 impl From<bhpc_jni::JniError> for RunError {
     fn from(e: bhpc_jni::JniError) -> Self {
         RunError::Jni(e)

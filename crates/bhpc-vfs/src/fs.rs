@@ -157,6 +157,11 @@ pub trait FileSystem: Send + Sync {
     fn rename(&self, _from: &str, _to: &str) -> Result<()> {
         Err(VfsError::ReadOnly)
     }
+    /// `readlink`. Backends without symbolic links answer `EINVAL` ("not a link") for every path;
+    /// [`crate::Vfs`] turns that into `ENOENT` for paths that do not exist.
+    fn readlink(&self, _path: &str) -> Result<String> {
+        Err(VfsError::Invalid)
+    }
 }
 
 /// A fully in-memory, read-only cursor shared by assets, synthetic files and zip entries.

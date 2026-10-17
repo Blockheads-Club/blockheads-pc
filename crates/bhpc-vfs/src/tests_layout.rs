@@ -80,6 +80,10 @@ fn guest_paths_and_env() {
     assert_eq!(get("HOME"), Some("/data/data/com.x/files"));
     assert_eq!(get("PACKAGE_CODE_PATH"), Some("/data/app/com.x-1/base.apk"));
     assert_eq!(get("OBBDIR"), Some("/sdcard/Android/obb/com.x"));
+    assert_eq!(get("CFProcessPath"), Some("/data/app/com.x-1/base.apk/x"));
+    assert_eq!(get("TZ"), Some("UTC"));
+    // A package without dots still yields a process name.
+    assert!(GuestPaths::new("solo").env().iter().any(|(k, v)| k == "CFProcessPath" && v.ends_with("/solo")));
     for k in [
         "PACKAGE_NAME",
         "PACKAGE_RESOURCE_PATH",
@@ -90,6 +94,12 @@ fn guest_paths_and_env() {
         "ANDROID_DATA_DIRECTORY",
         "ANDROID_EXTERNAL_STORAGE",
         "ANDROID_DOWNLOAD_DIRECTORY",
+        "DEBUG_BUILD",
+        "NSUnrecognizedForwardingDisabled",
+        "VERSION_CODE",
+        "LOCALE",
+        "LANGUAGES",
+        "TZ",
     ] {
         assert!(get(k).is_some(), "{k}");
     }
@@ -158,6 +168,21 @@ fn standard_mounts_map_android_paths_to_host() {
     assert!(read(&**v, "/system/fonts/Roboto-Regular.ttf").len() > 100_000);
     assert!(read(&**v, SYSTEM_FONTS_XML).starts_with(b"<?xml"));
     assert!(read(&**v, "/proc/cpuinfo").starts_with(b"processor"));
+    // The process looks like the game: command line, exe link, /dev/zero.
+    let pid = std::process::id();
+    assert_eq!(read(&**v, "/proc/self/cmdline"), b"com.noodlecake.blockheads\0");
+    assert_eq!(read(&**v, &format!("/proc/{pid}/cmdline")), b"com.noodlecake.blockheads\0");
+    assert_eq!(v.readlink("/proc/self/exe").unwrap(), code);
+    assert_eq!(v.readlink(&format!("/proc/{pid}/exe")).unwrap(), code);
+    assert_eq!(v.readlink("/proc/cpuinfo"), Err(VfsError::Invalid));
+    assert_eq!(v.readlink(&code), Err(VfsError::Invalid));
+    assert_eq!(v.readlink("/sdcard"), Err(VfsError::Invalid));
+    assert_eq!(v.readlink("/not/there"), Err(VfsError::NotFound));
+    let mut z = v.open("/dev/zero", OpenFlags::read_only()).unwrap();
+    let mut zb = [1u8; 4];
+    assert_eq!(z.read(&mut zb), Ok(4));
+    assert_eq!(zb, [0; 4]);
+
     let mut r = v.open("/dev/urandom", OpenFlags::read_only()).unwrap();
     assert_eq!(r.read(&mut [0u8; 16]), Ok(16));
 
@@ -171,7 +196,7 @@ fn standard_mounts_map_android_paths_to_host() {
 
     // Unmapped paths are ENOENT and remembered.
     assert_eq!(v.stat("/system/lib/libOpenSLES.so"), Err(VfsError::NotFound));
-    assert_eq!(v.take_misses(), ["open /sdcard/Download/x", "stat /system/lib/libOpenSLES.so"]);
+    assert_eq!(v.take_misses(), ["open /sdcard/Download/x", "readlink /not/there", "stat /system/lib/libOpenSLES.so"]);
 
     // AssetManager shares the archive.
     assert_eq!(s.assets.open("hello.txt").unwrap().buffer(), b"hello world");

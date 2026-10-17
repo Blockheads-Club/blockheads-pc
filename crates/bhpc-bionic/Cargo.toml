@@ -10,6 +10,7 @@ description = "Host re-implementation of the bionic libc subset the Blockheads l
 bhpc-mem.workspace = true
 bhpc-cpu.workspace = true
 bhpc-loader.workspace = true
+bhpc-vfs.workspace = true
 
 [dev-dependencies]
 libc.workspace = true

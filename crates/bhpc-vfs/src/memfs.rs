@@ -16,6 +16,10 @@ pub enum Node {
     Null,
     /// `/dev/urandom`: infinite host randomness.
     Random,
+    /// `/dev/zero`: endless zero bytes, writes are swallowed.
+    Zero,
+    /// A symbolic link (`/proc/self/exe`); only `readlink` follows it.
+    Link(Arc<str>),
 }
 
 /// A read-mostly tree of synthetic files, built once and immutable afterwards.
@@ -45,6 +49,11 @@ impl MemFs {
         self.nodes.insert(path.to_string(), node);
     }
 
+    /// Adds a symbolic link at `path` pointing at `target`.
+    pub fn insert_link(&mut self, path: &str, target: &str) {
+        self.insert(path, Node::Link(target.into()));
+    }
+
     /// Adds a text file.
     pub fn insert_text(&mut self, path: &str, text: &str) {
         self.insert(path, Node::Bytes(text.as_bytes().to_vec().into()));
@@ -59,7 +68,11 @@ struct MemFile {
 impl VFile for MemFile {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         match &self.node {
-            Node::Null => Ok(0),
+            Node::Null | Node::Link(_) => Ok(0),
+            Node::Zero => {
+                buf.fill(0);
+                Ok(buf.len())
+            }
             Node::Random => {
                 getrandom::fill(buf).map_err(|_| VfsError::Io)?;
                 Ok(buf.len())
@@ -76,8 +89,8 @@ impl VFile for MemFile {
 
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         match self.node {
-            Node::Null | Node::Random => Ok(buf.len()),
-            Node::Bytes(_) => Err(VfsError::BadFd),
+            Node::Null | Node::Random | Node::Zero => Ok(buf.len()),
+            Node::Bytes(_) | Node::Link(_) => Err(VfsError::BadFd),
         }
     }
 
@@ -106,6 +119,10 @@ impl FileSystem for MemFs {
     fn open(&self, path: &str, flags: OpenFlags) -> Result<Box<dyn VFile>> {
         match self.nodes.get(path) {
             Some(node) => {
+                if matches!(node, Node::Link(_)) {
+                    // The target lives in another backend; only `readlink` follows the link.
+                    return Err(VfsError::NotFound);
+                }
                 let device = !matches!(node, Node::Bytes(_));
                 if (flags.write || flags.truncate || flags.create) && !device {
                     return Err(VfsError::ReadOnly);
@@ -123,6 +140,7 @@ impl FileSystem for MemFs {
     fn stat(&self, path: &str) -> Result<Stat> {
         match self.nodes.get(path) {
             Some(Node::Bytes(b)) => Ok(Stat::file(b.len() as u64)),
+            Some(Node::Link(_)) => Ok(Stat::file(0)),
             Some(_) => Ok(Stat { readonly: false, ..Stat::file(0) }),
             None if self.dirs.contains(path) => Ok(Stat::dir()),
             None => Err(VfsError::NotFound),
@@ -148,5 +166,14 @@ impl FileSystem for MemFs {
             }
         }
         Ok(out.into_iter().map(|(name, kind)| DirEntry { name, kind }).collect())
+    }
+
+    fn readlink(&self, path: &str) -> Result<String> {
+        match self.nodes.get(path) {
+            Some(Node::Link(t)) => Ok(t.to_string()),
+            Some(_) => Err(VfsError::Invalid),
+            None if self.dirs.contains(path) => Err(VfsError::Invalid),
+            None => Err(VfsError::NotFound),
+        }
     }
 }

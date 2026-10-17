@@ -943,7 +943,6 @@ mod tests {
 mod file_tests {
     use crate::layout::file;
     use crate::tests_env::{Env, SCRATCH};
-    use crate::vfs::{FsConfig, Mount};
     use bhpc_cpu::{Cpu, Stop};
     use std::sync::{Arc, Mutex};
 
@@ -971,10 +970,7 @@ mod file_tests {
         std::fs::create_dir_all(dir.join("rw")).unwrap();
         let host = dir.join("rw");
         let e = Env::with(move |cfg| {
-            cfg.fs = FsConfig {
-                package: "pkg".into(),
-                mounts: vec![Mount { guest: "/data/data/pkg".into(), host, writable: true }],
-            };
+            cfg.fs = crate::vfs::test_fs(host);
         });
         (e, Tmp(dir))
     }

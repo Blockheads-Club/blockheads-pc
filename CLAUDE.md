@@ -42,5 +42,9 @@ Umbrella rules: `../AGENTS.md`.
   function must be a *shared* thunk (they all are via `bhpc_bionic::builtin`). Blocking calls go through
   `sched::block`, never through `std::sync` waits while holding the State lock.
 - The Java-side loader is emulated in `bhpc-run/src/apkrun.rs`: environment variables come from
-  `FsConfig::env`, and after each library's constructors `JNI_OnLoad(vm)` and (libv only) `libv_init` run.
+  `bhpc_vfs::GuestPaths::env`, and after each library's constructors `JNI_OnLoad(vm)` and (libv only) `libv_init` run.
+- File layer: `bhpc-vfs` owns paths, mounts, `/proc` `/dev` content and the Android path map; `bhpc-bionic/src/vfs.rs`
+  is only the guest fd table over `Arc<dyn FileSystem>` (`Config::fs`). `--data-dir D` is a `bhpc_vfs::DataDirs`
+  root (home/, cache/, sdcard/, ...); without it the per-user default is used. The fake JVM is `bhpc-jni`
+  (`bhpc_jni::install`): lenient, so unknown Java classes/members are invented and counted, calls answer 0/NULL.
 - Never `lock(st)` twice in one expression/`match` scrutinee (the fake JNI deadlocked once that way).

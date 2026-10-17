@@ -9,6 +9,7 @@ use bhpc_loader::init::{
     run_constructors, CallFailure, CtorFailure, CtorInfo, CtorKind, GuestCaller, InitOptions, InitTrace,
 };
 use bhpc_loader::Linker;
+use bhpc_vfs::{DataDirs, Storage, VfsConfig};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -22,7 +23,8 @@ pub const BACKTRACE_DEPTH: usize = 32;
 #[derive(Debug, Clone)]
 pub struct InitConfig {
     pub apk: PathBuf,
-    /// Host directory behind `/data/data/<package>` and `/sdcard` (created on demand); `None` mounts nothing.
+    /// Host directory behind `/data/data/<package>` and `/sdcard` (see `bhpc_vfs::DataDirs`, created on demand);
+    /// `None` uses the per-user default (`$XDG_DATA_HOME/blockheads-pc`, ...).
     pub data_dir: Option<PathBuf>,
     /// Android package name reported to the guest.
     pub package: String,
@@ -48,7 +50,7 @@ impl InitConfig {
         InitConfig {
             apk,
             data_dir: None,
-            package: bhpc_bionic::vfs::FsConfig::default().package,
+            package: bhpc_vfs::layout::DEFAULT_PACKAGE.to_string(),
             force: false,
             trace_thunks: false,
             trace_fs: false,
@@ -216,6 +218,28 @@ fn loader_hooks(m: &bhpc_loader::Module, vm: u32) -> Vec<(u32, [u32; 3])> {
     v
 }
 
+/// Host data directories: the configured root, else the per-user default, else a directory below the
+/// system temp dir (a platform without a data directory).
+pub fn data_dirs(configured: Option<&std::path::Path>, default: Option<DataDirs>) -> DataDirs {
+    match (configured, default) {
+        (Some(root), _) => DataDirs::new(root),
+        (None, Some(dirs)) => dirs,
+        (None, None) => DataDirs::new(std::env::temp_dir().join("blockheads-pc")),
+    }
+}
+
+/// The bionic heap as the fake VM's allocator, so JNI buffers live in the guest's own heap.
+pub struct BionicHeap(pub Shared);
+
+impl bhpc_jni::vm::GuestAlloc for BionicHeap {
+    fn alloc(&mut self, size: u32) -> u32 {
+        lock(&self.0).heap.alloc(size)
+    }
+    fn free(&mut self, ptr: u32) {
+        lock(&self.0).heap.free(ptr);
+    }
+}
+
 /// A loaded APK: guest memory, CPU, bionic state and the linked modules.
 pub struct Session {
     pub cpu: Box<Cpu>,
@@ -243,17 +267,14 @@ impl Session {
     ) -> Result<Session, RunError> {
         let mut apk = Apk::open(&cfg.apk)?;
         let release = apk.verify(cfg.force)?;
-        let mut fs = bhpc_bionic::vfs::FsConfig { package: cfg.package.clone(), ..Default::default() };
-        if let Some(dir) = &cfg.data_dir {
-            for sub in fs.data_dirs() {
-                std::fs::create_dir_all(dir.join(sub))?;
-            }
-            fs = fs.with_data_root(dir);
-        }
-        fs = fs.with_apk(&cfg.apk);
+        let dirs = data_dirs(cfg.data_dir.as_deref(), DataDirs::platform_default());
+        dirs.create_all()?;
+        let mut vcfg = VfsConfig::new(&cfg.apk, dirs);
+        vcfg.package = cfg.package.clone();
+        let storage = Storage::open(&vcfg)?;
         let mut bcfg = bhpc_bionic::Config { stdout: out, log, ..bhpc_bionic::Config::default() };
-        bcfg.env.extend(fs.env());
-        bcfg.fs = fs;
+        bcfg.env.extend(storage.guest.env());
+        bcfg.fs = storage.vfs.clone();
         let (mut cpu, st) = new_env_with(bcfg, Some(cfg.watchdog_cycles))?;
         cpu.set_trace_thunks(cfg.trace_thunks);
         lock(&st).vfs.trace = cfg.trace_fs;
@@ -263,7 +284,9 @@ impl Session {
             linker.load_all(&[ROOT_LIB], &mut apk, &mut hle)?
         };
         register_exidx(&linker, &st);
-        let jni = bhpc_jni::install(&cpu, &st)?;
+        let (mem, platform) = (cpu.mem().clone(), bhpc_jni::Platform::for_guest(&storage.guest));
+        let jcfg = bhpc_jni::VmConfig::new(platform, Box::new(storage.assets));
+        let jni = bhpc_jni::install(&cpu, mem, Box::new(BionicHeap(st.clone())), jcfg)?;
         jni.set_trace(cfg.trace_jni);
         Ok(Session { cpu, st, linker, jni, release, host_libs: summary.host_libs, range: summary.range })
     }
@@ -277,7 +300,7 @@ impl Session {
             Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p)?)),
             None => None,
         };
-        let vm = self.jni.vm;
+        let vm = self.jni.java_vm;
         let modules = &self.linker.modules()[self.range.clone()];
         let mut caller = CpuCaller { cpu: &mut self.cpu, pc_trace, last_stop: None };
         let opts =
@@ -300,8 +323,12 @@ impl Session {
             // The Java loader initialises libv right after loading it, before any other library runs.
             let hooks = if ok { loader_hooks(m, vm) } else { Vec::new() };
             let mut hook_failed = false;
+            let pid = caller.cpu.processor_id();
             for (entry, args) in hooks {
-                if let Err(failure) = caller.call(entry, args, opts.watchdog_cycles) {
+                self.jni.enter(pid);
+                let r = caller.call(entry, args, opts.watchdog_cycles);
+                self.jni.leave(pid);
+                if let Err(failure) = r {
                     let f = CtorFailure { module: m.name.clone(), kind: CtorKind::Init, entry, failure };
                     rep.failures.push(f);
                     hook_failed = true;
@@ -359,13 +386,14 @@ pub fn init_only(cfg: &InitConfig, out: Box<dyn Write + Send>) -> Result<InitRep
         threads_alive: s.sched.live().saturating_sub(1),
         thread_failure: s.sched.failure(),
         jni: {
+            let u = sess.jni.usage();
             JniSummary {
-                classes: sess.jni.classes().len(),
-                methods: sess.jni.methods().len(),
-                fields: sess.jni.fields().len(),
-                natives: sess.jni.natives().len(),
-                java_calls: sess.jni.java_calls(),
-                exception_pending: sess.jni.exception_pending(),
+                classes: u.classes,
+                methods: u.methods,
+                fields: u.fields,
+                natives: u.natives,
+                java_calls: u.java_calls,
+                exception_pending: u.exception_pending,
             }
         },
     };

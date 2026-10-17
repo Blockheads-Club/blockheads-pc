@@ -886,7 +886,6 @@ pub(crate) fn tables() -> [&'static [(&'static str, Impl)]; 3] {
 mod tests {
     use super::*;
     use crate::tests_env::{Env, SCRATCH};
-    use crate::vfs::{FsConfig, Mount};
     use bhpc_cpu::Stop;
 
     const A: u32 = SCRATCH;
@@ -912,10 +911,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("rw")).unwrap();
         let host = dir.join("rw");
         let e = Env::with(move |cfg| {
-            cfg.fs = FsConfig {
-                package: "pkg".into(),
-                mounts: vec![Mount { guest: "/data/data/pkg".into(), host, writable: true }],
-            };
+            cfg.fs = crate::vfs::test_fs(host);
         });
         (e, Tmp(dir))
     }
@@ -1118,7 +1114,7 @@ mod tests {
         let mut e = Env::new();
         let p = put(&e, A, "/proc/self/exe");
         let n = call(&mut e, "readlink", &[p, OUT, 200]);
-        assert_eq!(e.mem().read_bytes(OUT, n).unwrap(), b"/data/app/com.noodlecake.blockheads-1.apk");
+        assert_eq!(e.mem().read_bytes(OUT, n).unwrap(), b"/data/app/com.noodlecake.blockheads-1/base.apk");
         assert_eq!(call(&mut e, "readlink", &[p, OUT, 5]), 5, "truncated to the buffer");
         let __p = put(&e, B, "/nope");
         assert_eq!(call(&mut e, "readlink", &[__p, OUT, 5]), NEG1);

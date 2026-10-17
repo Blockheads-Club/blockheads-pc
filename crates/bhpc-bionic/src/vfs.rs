@@ -1,11 +1,12 @@
-//! The guest's file system: a small set of virtual files (`/proc`, `/dev`, `/sys`) plus host directories
-//! mounted into the guest namespace. Everything else does not exist. All paths are normalised lexically
-//! before use, so a guest cannot escape a mount with `..`.
+//! The guest's descriptor table on top of [`bhpc_vfs`]. All path handling, mounts, `/proc` and `/dev`
+//! content and the Android-to-host mapping live in `bhpc-vfs`; this module only owns what is per
+//! process: descriptor numbers, file positions (inside each [`VFile`]), directory cursors and the
+//! `errno` / `struct stat` vocabulary of the libc layer.
 
+use bhpc_vfs::{FileKind, FileSystem, OpenFlags, VFile, VfsError};
 use std::collections::BTreeMap;
-use std::fs;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::io::SeekFrom;
+use std::sync::Arc;
 
 pub const EPERM: u32 = 1;
 pub const ENOENT: u32 = 2;
@@ -37,91 +38,6 @@ pub const S_IFREG: u32 = 0o100_000;
 /// Highest descriptor number handed out.
 pub const MAX_FDS: i32 = 1024;
 
-/// A host directory visible in the guest.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Mount {
-    /// Absolute, normalised guest path.
-    pub guest: String,
-    pub host: PathBuf,
-    pub writable: bool,
-}
-
-/// File-system configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FsConfig {
-    /// Android package name (the process "command line" and the app directory name).
-    pub package: String,
-    pub mounts: Vec<Mount>,
-}
-
-impl Default for FsConfig {
-    fn default() -> Self {
-        FsConfig { package: "com.noodlecake.blockheads".to_string(), mounts: Vec::new() }
-    }
-}
-
-impl FsConfig {
-    /// Mount `root/data` as `/data/data/<package>` and `root/sdcard` as `/sdcard`, both writable.
-    pub fn with_data_root(mut self, root: &std::path::Path) -> FsConfig {
-        let app = format!("/data/data/{}", self.package);
-        self.mounts.push(Mount { guest: app, host: root.join("data"), writable: true });
-        self.mounts.push(Mount { guest: "/sdcard".to_string(), host: root.join("sdcard"), writable: true });
-        self
-    }
-}
-
-impl FsConfig {
-    /// Guest path of the installed APK (`PACKAGE_CODE_PATH`).
-    pub fn apk_path(&self) -> String {
-        format!("/data/app/{}-1.apk", self.package)
-    }
-
-    /// Mount the host file `apk` read-only at [`FsConfig::apk_path`].
-    pub fn with_apk(mut self, apk: &std::path::Path) -> FsConfig {
-        let guest = self.apk_path();
-        self.mounts.push(Mount { guest, host: apk.to_path_buf(), writable: false });
-        self
-    }
-
-    /// Host sub-directories that [`FsConfig::with_data_root`] expects to exist.
-    pub fn data_dirs(&self) -> Vec<String> {
-        vec![
-            "data/files".to_string(),
-            "data/cache".to_string(),
-            "sdcard/Download".to_string(),
-            format!("sdcard/Android/data/{}/cache", self.package),
-            format!("sdcard/Android/obb/{}", self.package),
-        ]
-    }
-
-    /// Environment variables Apportable's Java-side loader provides to the native libraries.
-    pub fn env(&self) -> Vec<(String, String)> {
-        let p = &self.package;
-        let e = |k: &str, v: String| (k.to_string(), v);
-        vec![
-            e("TEMPDIR", format!("/data/data/{p}/cache")),
-            e("CACHEDIR", format!("/data/data/{p}/cache")),
-            e("EXTERNAL_CACHEDIR", format!("/sdcard/Android/data/{p}/cache")),
-            e("OBBDIR", format!("/sdcard/Android/obb/{p}")),
-            e("PACKAGE_CODE_PATH", self.apk_path()),
-            e("PACKAGE_RESOURCE_PATH", self.apk_path()),
-            e("PACKAGE_NAME", p.clone()),
-            e("CFProcessPath", format!("{}/{}", self.apk_path(), p.rsplit('.').next().unwrap_or("app"))),
-            e("ANDROID_DATA_DIRECTORY", format!("/data/data/{p}/files")),
-            e("ANDROID_DOWNLOAD_DIRECTORY", "/sdcard/Download".to_string()),
-            e("ANDROID_EXTERNAL_STORAGE", "/sdcard".to_string()),
-            e("HOME", format!("/data/data/{p}")),
-            e("TMPDIR", format!("/data/data/{p}/cache")),
-            e("DEBUG_BUILD", "0".to_string()),
-            e("NSUnrecognizedForwardingDisabled", "1".to_string()),
-            e("VERSION_CODE", "1".to_string()),
-            e("LOCALE", "en_US".to_string()),
-            e("LANGUAGES", "en".to_string()),
-            e("TZ", "UTC".to_string()),
-        ]
-    }
-}
-
 /// `stat` result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stat {
@@ -140,277 +56,104 @@ pub struct DirEntry {
     pub ino: u64,
 }
 
+fn errno(e: VfsError) -> u32 {
+    e.errno() as u32
+}
+
+fn stat_of(s: &bhpc_vfs::Stat) -> Stat {
+    let dir = s.kind == FileKind::Dir;
+    Stat {
+        mode: s.mode(),
+        size: if dir { 4096 } else { s.size },
+        mtime: s.mtime,
+        ino: if dir { 1 } else { 100 },
+        nlink: 1 + u32::from(dir),
+    }
+}
+
+/// The file system of a bare environment: `/proc`, `/sys`, `/dev` and `/etc` content only.
+pub fn default_fs() -> Arc<dyn FileSystem> {
+    let vfs = bhpc_vfs::Vfs::new();
+    let sys = bhpc_vfs::SystemInfo::default();
+    vfs.mount("/", Arc::new(bhpc_vfs::layout::system_files(&sys))).expect("the root is a valid mount point");
+    Arc::new(vfs)
+}
+
 enum Handle {
-    /// Read-only in-memory file.
-    Mem {
-        data: Vec<u8>,
-        pos: usize,
-    },
-    /// `/dev/null`.
-    Null,
-    /// `/dev/zero`.
-    Zero,
-    /// `/dev/urandom`, `/dev/random`.
-    Random,
-    Host {
-        file: fs::File,
-    },
-    Dir {
-        entries: Vec<DirEntry>,
-        pos: usize,
-    },
+    File(Box<dyn VFile>),
+    Dir { entries: Vec<DirEntry>, pos: usize },
 }
 
 struct Open {
     handle: Handle,
     flags: u32,
+    /// Path as the guest gave it, for `fstat`.
+    path: String,
 }
 
-enum Target {
-    Virtual(Vec<u8>),
-    VirtualDir(Vec<DirEntry>),
-    Device(Handle),
-    Host { path: PathBuf, writable: bool },
-}
-
-/// The file system plus the descriptor table.
+/// The descriptor table over a [`FileSystem`].
 pub struct Vfs {
-    cfg: FsConfig,
-    pid: u32,
+    fs: Arc<dyn FileSystem>,
     open: BTreeMap<i32, Open>,
-    cwd: String,
-    rng: u64,
     /// Log every path lookup to stderr (`--trace-fs`).
     pub trace: bool,
 }
 
-/// Map a host I/O error onto a Linux `errno`.
-pub fn errno_of(e: &std::io::Error) -> u32 {
-    use std::io::ErrorKind::*;
-    match e.raw_os_error() {
-        Some(n) if n > 0 => n as u32,
-        _ => match e.kind() {
-            NotFound => ENOENT,
-            PermissionDenied => EACCES,
-            AlreadyExists => EEXIST,
-            InvalidInput => EINVAL,
-            _ => EIO,
-        },
-    }
-}
-
-/// Lexically normalise `path` against `cwd`: absolute, no `.`, `..` or empty components.
-pub fn normalize(cwd: &str, path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    let full = if path.starts_with('/') { path.to_string() } else { format!("{cwd}/{path}") };
-    for p in full.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            other => parts.push(other),
-        }
-    }
-    format!("/{}", parts.join("/"))
-}
-
-const CPUINFO: &str = "Processor\t: ARMv7 Processor rev 0 (v7l)\nprocessor\t: 0\nBogoMIPS\t: 38.40\n\nFeatures\t: swp half thumb fastmult vfp edsp neon vfpv3 tls vfpv4 idiva idivt\nCPU implementer\t: 0x41\nCPU architecture: 7\nCPU variant\t: 0x0\nCPU part\t: 0xc07\nCPU revision\t: 0\n\nHardware\t: bhpc\nRevision\t: 0000\nSerial\t\t: 0000000000000000\n";
-const MEMINFO: &str = "MemTotal:        2048000 kB\nMemFree:         1024000 kB\nBuffers:           32768 kB\nCached:           512000 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n";
-
 impl Vfs {
-    pub fn new(cfg: FsConfig, pid: u32) -> Vfs {
-        Vfs {
-            cfg,
-            pid,
-            open: BTreeMap::new(),
-            cwd: "/".to_string(),
-            rng: 0x9E37_79B9_7F4A_7C15 ^ u64::from(pid),
-            trace: false,
-        }
+    pub fn new(fs: Arc<dyn FileSystem>) -> Vfs {
+        Vfs { fs, open: BTreeMap::new(), trace: false }
     }
 
-    pub fn config(&self) -> &FsConfig {
-        &self.cfg
-    }
-
-    fn virtual_file(&self, p: &str) -> Option<Vec<u8>> {
-        let cmdline = format!("{}\0", self.cfg.package).into_bytes();
-        let pid = self.pid.to_string();
-        let proc_pid = |rest: &str| -> Option<&str> {
-            let r = p.strip_prefix("/proc/")?;
-            let r = r.strip_prefix("self").or_else(|| r.strip_prefix(pid.as_str()))?;
-            r.strip_prefix('/').filter(|x| *x == rest)
-        };
-        if proc_pid("cmdline").is_some() {
-            return Some(cmdline);
-        }
-        match p {
-            "/proc/cpuinfo" => Some(CPUINFO.as_bytes().to_vec()),
-            "/proc/meminfo" => Some(MEMINFO.as_bytes().to_vec()),
-            "/sys/devices/system/cpu/present" | "/sys/devices/system/cpu/possible" => Some(b"0-3\n".to_vec()),
-            _ => None,
-        }
-    }
-
-    fn virtual_dir(&self, p: &str) -> Option<Vec<DirEntry>> {
-        let d = |names: &[&str]| -> Vec<DirEntry> {
-            names.iter().map(|n| DirEntry { name: (*n).to_string(), is_dir: true, ino: 1 }).collect()
-        };
-        let f = |names: &[&str]| -> Vec<DirEntry> {
-            names.iter().map(|n| DirEntry { name: (*n).to_string(), is_dir: false, ino: 2 }).collect()
-        };
-        let mut e = match p {
-            "/" => d(&["data", "dev", "proc", "sdcard", "sys", "system"]),
-            "/proc" => [d(&["self"]), f(&["cpuinfo", "meminfo"])].concat(),
-            "/dev" => f(&["null", "zero", "urandom", "random"]),
-            "/sys" => d(&["devices"]),
-            "/system" => Vec::new(),
-            "/data" => d(&["data"]),
-            "/data/data" => d(&[self.cfg.package.as_str()]),
-            _ => return None,
-        };
-        e.insert(0, DirEntry { name: "..".into(), is_dir: true, ino: 1 });
-        e.insert(0, DirEntry { name: ".".into(), is_dir: true, ino: 1 });
-        Some(e)
-    }
-
-    /// Mounts match whole path components; the longest guest prefix wins.
-    fn mount_for(&self, p: &str) -> Option<(&Mount, PathBuf)> {
-        self.cfg
-            .mounts
-            .iter()
-            .filter(|m| p == m.guest || p.strip_prefix(m.guest.as_str()).is_some_and(|r| r.starts_with('/')))
-            .max_by_key(|m| m.guest.len())
-            .map(|m| {
-                let rest = p[m.guest.len()..].trim_start_matches('/');
-                (m, if rest.is_empty() { m.host.clone() } else { m.host.join(rest) })
-            })
-    }
-
-    fn resolve(&self, path: &str) -> Result<(String, Target), u32> {
-        if path.is_empty() {
-            return Err(ENOENT);
-        }
-        let p = normalize(&self.cwd, path);
-        if self.trace {
-            eprintln!("[fs] {p}");
-        }
-        let t = match p.as_str() {
-            "/dev/null" => Target::Device(Handle::Null),
-            "/dev/zero" => Target::Device(Handle::Zero),
-            "/dev/urandom" | "/dev/random" => Target::Device(Handle::Random),
-            _ => {
-                if let Some((m, host)) = self.mount_for(&p) {
-                    Target::Host { path: host, writable: m.writable }
-                } else if let Some(d) = self.virtual_file(&p) {
-                    Target::Virtual(d)
-                } else if let Some(e) = self.virtual_dir(&p) {
-                    Target::VirtualDir(e)
-                } else if self.is_ancestor_of_mount(&p) {
-                    Target::VirtualDir(Vec::new())
-                } else {
-                    return Err(ENOENT);
-                }
-            }
-        };
-        Ok((p, t))
-    }
-
-    fn is_ancestor_of_mount(&self, p: &str) -> bool {
-        self.cfg.mounts.iter().any(|m| m.guest.starts_with(&format!("{}/", p.trim_end_matches('/'))))
+    /// The file system behind the descriptors.
+    pub fn fs(&self) -> &Arc<dyn FileSystem> {
+        &self.fs
     }
 
     fn alloc_fd(&self) -> Result<i32, u32> {
         (3..MAX_FDS).find(|fd| !self.open.contains_key(fd)).ok_or(EMFILE)
     }
 
-    fn next_random(&mut self) -> u8 {
-        self.rng ^= self.rng << 13;
-        self.rng ^= self.rng >> 7;
-        self.rng ^= self.rng << 17;
-        (self.rng >> 24) as u8
-    }
-
-    /// `open(2)`.
-    pub fn open(&mut self, path: &str, flags: u32) -> Result<i32, u32> {
-        let (_, target) = self.resolve(path)?;
-        let wants_write = flags & O_ACCMODE != 0 || flags & (O_CREAT | O_TRUNC) != 0;
-        let handle = match target {
-            Target::Device(h) => h,
-            Target::Virtual(data) => {
-                if flags & O_DIRECTORY != 0 {
-                    return Err(ENOTDIR);
-                }
-                if wants_write {
-                    return Err(if flags & O_CREAT != 0 && flags & O_EXCL != 0 { EEXIST } else { EACCES });
-                }
-                Handle::Mem { data, pos: 0 }
-            }
-            Target::VirtualDir(entries) => {
-                if wants_write {
-                    return Err(EISDIR);
-                }
-                Handle::Dir { entries, pos: 0 }
-            }
-            Target::Host { path: hp, writable } => {
-                if wants_write && !writable {
-                    return Err(EROFS);
-                }
-                let meta = fs::metadata(&hp);
-                if let Ok(m) = &meta {
-                    if m.is_dir() {
-                        if wants_write {
-                            return Err(EISDIR);
-                        }
-                        let entries = self.host_dir(&hp)?;
-                        return self.install(Handle::Dir { entries, pos: 0 }, flags);
-                    }
-                    if flags & O_DIRECTORY != 0 {
-                        return Err(ENOTDIR);
-                    }
-                    if flags & O_CREAT != 0 && flags & O_EXCL != 0 {
-                        return Err(EEXIST);
-                    }
-                } else if flags & O_CREAT == 0 {
-                    return Err(ENOENT);
-                }
-                let mut oo = fs::OpenOptions::new();
-                oo.read(flags & O_ACCMODE != O_WRONLY)
-                    .write(wants_write)
-                    .create(flags & O_CREAT != 0)
-                    .truncate(flags & O_TRUNC != 0)
-                    .append(flags & O_APPEND != 0 && flags & O_ACCMODE != 0);
-                let file = oo.open(&hp).map_err(|e| errno_of(&e))?;
-                Handle::Host { file }
-            }
-        };
-        self.install(handle, flags)
-    }
-
-    fn install(&mut self, handle: Handle, flags: u32) -> Result<i32, u32> {
-        let fd = self.alloc_fd()?;
-        self.open.insert(fd, Open { handle, flags });
-        Ok(fd)
-    }
-
-    fn host_dir(&self, hp: &std::path::Path) -> Result<Vec<DirEntry>, u32> {
+    fn dir_handle(&self, path: &str) -> Result<Handle, u32> {
         let mut entries = vec![
             DirEntry { name: ".".into(), is_dir: true, ino: 1 },
             DirEntry { name: "..".into(), is_dir: true, ino: 1 },
         ];
-        let mut names: Vec<_> = fs::read_dir(hp)
-            .map_err(|e| errno_of(&e))?
-            .filter_map(Result::ok)
-            .map(|e| (e.file_name().to_string_lossy().into_owned(), e.file_type().is_ok_and(|t| t.is_dir())))
-            .collect();
-        names.sort();
-        entries.extend(names.into_iter().enumerate().map(|(i, (name, is_dir))| DirEntry {
-            name,
-            is_dir,
+        let listed = self.fs.read_dir(path).map_err(errno)?;
+        entries.extend(listed.into_iter().enumerate().map(|(i, e)| DirEntry {
+            name: e.name,
+            is_dir: e.kind == FileKind::Dir,
             ino: 100 + i as u64,
         }));
-        Ok(entries)
+        Ok(Handle::Dir { entries, pos: 0 })
+    }
+
+    /// `open(2)`.
+    pub fn open(&mut self, path: &str, flags: u32) -> Result<i32, u32> {
+        if path.is_empty() {
+            return Err(ENOENT);
+        }
+        if self.trace {
+            eprintln!("[fs] {path}");
+        }
+        let wants_write = flags & O_ACCMODE != 0 || flags & (O_CREAT | O_TRUNC) != 0;
+        let handle = if flags & O_DIRECTORY != 0 {
+            if wants_write {
+                return Err(EISDIR);
+            }
+            match self.fs.stat(path).map_err(errno)?.kind {
+                FileKind::File => return Err(ENOTDIR),
+                FileKind::Dir => self.dir_handle(path)?,
+            }
+        } else {
+            match self.fs.open(path, OpenFlags::from_bionic(flags)) {
+                Ok(f) => Handle::File(f),
+                Err(VfsError::IsDir) if !wants_write => self.dir_handle(path)?,
+                Err(e) => return Err(errno(e)),
+            }
+        };
+        let fd = self.alloc_fd()?;
+        self.open.insert(fd, Open { handle, flags, path: path.to_string() });
+        Ok(fd)
     }
 
     /// True if `fd` is an open descriptor.
@@ -422,43 +165,23 @@ impl Vfs {
         self.open.remove(&fd).map(|_| ()).ok_or(EBADF)
     }
 
-    /// Read up to `n` bytes at the current position.
+    /// Read up to `n` bytes at the current position (fewer only at the end of the file).
     pub fn read(&mut self, fd: i32, n: usize) -> Result<Vec<u8>, u32> {
-        let rng: Vec<u8> = if matches!(self.open.get(&fd).map(|o| &o.handle), Some(Handle::Random)) {
-            (0..n).map(|_| self.next_random()).collect()
-        } else {
-            Vec::new()
-        };
         let o = self.open.get_mut(&fd).ok_or(EBADF)?;
         if o.flags & O_ACCMODE == O_WRONLY {
             return Err(EBADF);
         }
-        match &mut o.handle {
-            Handle::Mem { data, pos } => {
-                let end = (*pos + n).min(data.len());
-                let out = data[*pos..end].to_vec();
-                *pos = end;
-                Ok(out)
+        let Handle::File(f) = &mut o.handle else { return Err(EISDIR) };
+        let mut buf = vec![0; n];
+        let mut got = 0;
+        while got < n {
+            match f.read(&mut buf[got..]).map_err(errno)? {
+                0 => break,
+                k => got += k,
             }
-            Handle::Null => Ok(Vec::new()),
-            Handle::Zero => Ok(vec![0; n]),
-            Handle::Random => Ok(rng),
-            Handle::Host { file } => {
-                let mut buf = vec![0; n];
-                let mut got = 0;
-                while got < n {
-                    match file.read(&mut buf[got..]) {
-                        Ok(0) => break,
-                        Ok(k) => got += k,
-                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                        Err(e) => return Err(errno_of(&e)),
-                    }
-                }
-                buf.truncate(got);
-                Ok(buf)
-            }
-            Handle::Dir { .. } => Err(EISDIR),
         }
+        buf.truncate(got);
+        Ok(buf)
     }
 
     pub fn write(&mut self, fd: i32, data: &[u8]) -> Result<usize, u32> {
@@ -466,44 +189,34 @@ impl Vfs {
         if o.flags & O_ACCMODE == 0 {
             return Err(EBADF);
         }
-        match &mut o.handle {
-            Handle::Null | Handle::Zero | Handle::Random => Ok(data.len()),
-            Handle::Host { file } => file.write_all(data).map(|()| data.len()).map_err(|e| errno_of(&e)),
-            Handle::Mem { .. } => Err(EBADF),
-            Handle::Dir { .. } => Err(EISDIR),
+        let Handle::File(f) = &mut o.handle else { return Err(EISDIR) };
+        let mut done = 0;
+        while done < data.len() {
+            match f.write(&data[done..]).map_err(errno)? {
+                0 => return Err(EIO),
+                k => done += k,
+            }
         }
+        Ok(data.len())
     }
 
     /// `lseek(2)`; whence 0/1/2 = SET/CUR/END. Returns the new position.
     pub fn lseek(&mut self, fd: i32, off: i64, whence: u32) -> Result<u64, u32> {
         let o = self.open.get_mut(&fd).ok_or(EBADF)?;
-        let seek = |base: i64, off: i64| -> Result<u64, u32> {
-            u64::try_from(base.checked_add(off).ok_or(EINVAL)?).map_err(|_| EINVAL)
-        };
         match &mut o.handle {
-            Handle::Mem { data, pos } => {
-                let base = match whence {
-                    0 => 0,
-                    1 => *pos as i64,
-                    2 => data.len() as i64,
-                    _ => return Err(EINVAL),
-                };
-                *pos = seek(base, off)? as usize;
-                Ok(*pos as u64)
-            }
-            Handle::Null | Handle::Zero | Handle::Random => Ok(0),
-            Handle::Host { file } => {
+            Handle::File(f) => {
                 let from = match whence {
                     0 => SeekFrom::Start(u64::try_from(off).map_err(|_| EINVAL)?),
                     1 => SeekFrom::Current(off),
                     2 => SeekFrom::End(off),
                     _ => return Err(EINVAL),
                 };
-                file.seek(from).map_err(|e| errno_of(&e))
+                f.seek(from).map_err(errno)
             }
-            Handle::Dir { pos, entries, .. } => {
+            Handle::Dir { pos, entries } => {
                 // rewinddir / telldir style positioning.
-                let np = seek(if whence == 1 { *pos as i64 } else { 0 }, off)? as usize;
+                let base = if whence == 1 { *pos as i64 } else { 0 };
+                let np = u64::try_from(base.checked_add(off).ok_or(EINVAL)?).map_err(|_| EINVAL)? as usize;
                 *pos = np.min(entries.len());
                 Ok(*pos as u64)
             }
@@ -513,107 +226,66 @@ impl Vfs {
     pub fn ftruncate(&mut self, fd: i32, len: u64) -> Result<(), u32> {
         let o = self.open.get_mut(&fd).ok_or(EBADF)?;
         match &mut o.handle {
-            Handle::Host { file } if o.flags & O_ACCMODE != 0 => file.set_len(len).map_err(|e| errno_of(&e)),
+            Handle::File(f) => f.set_len(len).map_err(errno),
             Handle::Dir { .. } => Err(EISDIR),
-            _ => Err(EINVAL),
         }
     }
 
     pub fn fsync(&mut self, fd: i32) -> Result<(), u32> {
         match &mut self.open.get_mut(&fd).ok_or(EBADF)?.handle {
-            Handle::Host { file } => file.sync_all().map_err(|e| errno_of(&e)),
-            _ => Ok(()),
+            Handle::File(f) => f.sync().map_err(errno),
+            Handle::Dir { .. } => Ok(()),
         }
     }
 
-    fn stat_target(t: &Target) -> Result<Stat, u32> {
-        Ok(match t {
-            Target::Virtual(d) => Stat { mode: S_IFREG | 0o444, size: d.len() as u64, mtime: 0, ino: 3, nlink: 1 },
-            Target::VirtualDir(_) => Stat { mode: S_IFDIR | 0o755, size: 4096, mtime: 0, ino: 1, nlink: 2 },
-            Target::Device(_) => Stat { mode: S_IFCHR | 0o666, size: 0, mtime: 0, ino: 4, nlink: 1 },
-            Target::Host { path, .. } => return Self::stat_host(path),
-        })
-    }
-
-    fn stat_host(path: &std::path::Path) -> Result<Stat, u32> {
-        let m = fs::metadata(path).map_err(|e| errno_of(&e))?;
-        Ok(Self::stat_meta(&m))
-    }
-
-    fn stat_meta(m: &fs::Metadata) -> Stat {
-        let mtime = m
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_secs() as i64);
-        let perm = if m.permissions().readonly() { 0o444 } else { 0o644 };
-        let mode = if m.is_dir() { S_IFDIR | 0o755 } else { S_IFREG | perm };
-        Stat { mode, size: m.len(), mtime, ino: 100, nlink: 1 }
-    }
-
     pub fn stat(&self, path: &str) -> Result<Stat, u32> {
-        Self::stat_target(&self.resolve(path)?.1)
+        if path.is_empty() {
+            return Err(ENOENT);
+        }
+        self.fs.stat(path).map(|s| stat_of(&s)).map_err(errno)
     }
 
-    pub fn fstat(&self, fd: i32) -> Result<Stat, u32> {
-        let o = self.open.get(&fd).ok_or(EBADF)?;
-        Ok(match &o.handle {
-            Handle::Mem { data, .. } => {
-                Stat { mode: S_IFREG | 0o444, size: data.len() as u64, mtime: 0, ino: 3, nlink: 1 }
+    pub fn fstat(&mut self, fd: i32) -> Result<Stat, u32> {
+        let o = self.open.get_mut(&fd).ok_or(EBADF)?;
+        if let Ok(s) = self.fs.stat(&o.path) {
+            return Ok(stat_of(&s));
+        }
+        // The name is gone (unlinked while open): describe the open file itself.
+        match &mut o.handle {
+            Handle::File(f) => {
+                let size = f.len().map_err(errno)?;
+                Ok(Stat { mode: S_IFREG | 0o644, size, mtime: 0, ino: 100, nlink: 0 })
             }
-            Handle::Null | Handle::Zero | Handle::Random => {
-                Stat { mode: S_IFCHR | 0o666, size: 0, mtime: 0, ino: 4, nlink: 1 }
-            }
-            Handle::Host { file } => Self::stat_meta(&file.metadata().map_err(|e| errno_of(&e))?),
-            Handle::Dir { .. } => Stat { mode: S_IFDIR | 0o755, size: 4096, mtime: 0, ino: 1, nlink: 2 },
-        })
+            Handle::Dir { .. } => Ok(Stat { mode: S_IFDIR | 0o755, size: 4096, mtime: 0, ino: 1, nlink: 2 }),
+        }
     }
 
     /// `access(2)`: existence, and write permission only where something is writable.
     pub fn access(&self, path: &str, mode: u32) -> Result<(), u32> {
-        let (_, t) = self.resolve(path)?;
-        Self::stat_target(&t)?;
-        let writable = matches!(t, Target::Host { writable: true, .. } | Target::Device(_));
-        if mode & 2 != 0 && !writable {
+        if path.is_empty() {
+            return Err(ENOENT);
+        }
+        let s = self.fs.stat(path).map_err(errno)?;
+        if mode & 2 != 0 && s.readonly {
             return Err(EACCES);
         }
         Ok(())
     }
 
-    fn host_target(&self, path: &str) -> Result<PathBuf, u32> {
-        match self.resolve(path)?.1 {
-            Target::Host { path, writable: true } => Ok(path),
-            Target::Host { .. } => Err(EROFS),
-            _ => Err(EACCES),
-        }
-    }
-
     pub fn unlink(&mut self, path: &str) -> Result<(), u32> {
-        let hp = self.host_target(path)?;
-        if fs::metadata(&hp).is_ok_and(|m| m.is_dir()) {
-            return Err(EISDIR);
-        }
-        fs::remove_file(hp).map_err(|e| errno_of(&e))
+        self.fs.unlink(path).map_err(errno)
     }
 
     pub fn rmdir(&mut self, path: &str) -> Result<(), u32> {
-        let hp = self.host_target(path)?;
-        fs::remove_dir(hp).map_err(|e| errno_of(&e))
+        self.fs.rmdir(path).map_err(errno)
     }
 
-    /// `mkdir(2)`: virtual directories and files already exist; outside the mounts nothing can be created.
     pub fn mkdir(&mut self, path: &str) -> Result<(), u32> {
-        match self.resolve(path) {
-            Ok((_, Target::Host { path, writable: true })) => fs::create_dir(path).map_err(|e| errno_of(&e)),
-            Ok((_, Target::Host { .. })) => Err(EROFS),
-            Ok(_) => Err(EEXIST),
-            Err(_) => Err(EACCES),
-        }
+        self.fs.mkdir(path).map_err(errno)
     }
 
     pub fn rename(&mut self, from: &str, to: &str) -> Result<(), u32> {
-        let (a, b) = (self.host_target(from)?, self.host_target(to)?);
-        fs::rename(a, b).map_err(|e| errno_of(&e))
+        self.fs.rename(from, to).map_err(errno)
     }
 
     /// Next directory entry of an open directory.
@@ -624,11 +296,11 @@ impl Vfs {
                 *pos += usize::from(e.is_some());
                 Ok(e)
             }
-            _ => Err(ENOTDIR),
+            Handle::File(_) => Err(ENOTDIR),
         }
     }
 
-    /// Whole contents of the file at the descriptor's current offset region `[off, off + len)`, zero padded.
+    /// The bytes `[off, off + len)` of the file behind `fd`, zero padded; the position is unchanged.
     pub fn read_range(&mut self, fd: i32, off: u64, len: usize) -> Result<Vec<u8>, u32> {
         let saved = self.lseek(fd, 0, 1)?;
         self.lseek(fd, off as i64, 0)?;
@@ -639,22 +311,29 @@ impl Vfs {
         Ok(data)
     }
 
-    /// `readlink`: only `/proc/self/exe` exists.
+    /// `readlink`: only `/proc/self/exe` is a link.
     pub fn readlink(&self, path: &str) -> Result<String, u32> {
-        let p = normalize(&self.cwd, path);
-        if p == "/proc/self/exe" || p == format!("/proc/{}/exe", self.pid) {
-            return Ok(self.cfg.apk_path());
-        }
-        match self.resolve(path) {
-            Ok(_) => Err(EINVAL),
-            Err(e) => Err(e),
-        }
+        self.fs.readlink(path).map_err(errno)
     }
+}
+
+/// A file system with the synthetic files of package `pkg` and a writable `/data/data/pkg` backed by `host`.
+#[cfg(test)]
+pub(crate) fn test_fs(host: std::path::PathBuf) -> Arc<dyn FileSystem> {
+    let vfs = bhpc_vfs::Vfs::new();
+    let sys =
+        bhpc_vfs::SystemInfo { package: "pkg".into(), exe: "/data/app/pkg-1/base.apk".into(), ..Default::default() };
+    vfs.mount("/", Arc::new(bhpc_vfs::layout::system_files(&sys))).unwrap();
+    vfs.mount("/data/data/pkg", Arc::new(bhpc_vfs::hostfs::HostFs::new(host, true))).unwrap();
+    Arc::new(vfs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bhpc_vfs::hostfs::HostFs;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -665,7 +344,7 @@ mod tests {
     impl Tmp {
         fn new() -> Tmp {
             let p = std::env::temp_dir().join(format!(
-                "bhpc-vfs-{}-{}",
+                "bhpc-fd-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::SeqCst)
             ));
@@ -683,74 +362,73 @@ mod tests {
         }
     }
 
-    /// A VFS with `/data/data/pkg` (writable) and `/ro` (read-only) mounted from `tmp`.
+    /// `/data/data/pkg` (writable) and `/ro` (read-only) mounted from `tmp`, plus the synthetic files.
     fn vfs_with(tmp: &Tmp) -> Vfs {
         fs::create_dir_all(tmp.path("rw")).unwrap();
         fs::create_dir_all(tmp.path("ro")).unwrap();
-        let cfg = FsConfig {
+        let v = bhpc_vfs::Vfs::new();
+        let sys = bhpc_vfs::SystemInfo {
             package: "pkg".into(),
-            mounts: vec![
-                Mount { guest: "/data/data/pkg".into(), host: tmp.path("rw"), writable: true },
-                Mount { guest: "/ro".into(), host: tmp.path("ro"), writable: false },
-            ],
+            exe: "/data/app/pkg-1/base.apk".into(),
+            pid: 4242,
+            ..Default::default()
         };
-        Vfs::new(cfg, 77)
+        v.mount("/", Arc::new(bhpc_vfs::layout::system_files(&sys))).unwrap();
+        v.mount("/data/data/pkg", Arc::new(HostFs::new(tmp.path("rw"), true))).unwrap();
+        v.mount("/ro", Arc::new(HostFs::new(tmp.path("ro"), false))).unwrap();
+        Vfs::new(Arc::new(v))
     }
 
-    #[test]
-    fn normalize_collapses_dots_and_slashes() {
-        assert_eq!(normalize("/", "a//b/./c/../d"), "/a/b/d");
-        assert_eq!(normalize("/x/y", "z"), "/x/y/z");
-        assert_eq!(normalize("/x", "/../.."), "/");
-        assert_eq!(normalize("/", ""), "/");
+    /// A file that accepts nothing and whose name is gone.
+    struct Stuck;
+    impl VFile for Stuck {
+        fn read(&mut self, _: &mut [u8]) -> bhpc_vfs::Result<usize> {
+            Ok(0)
+        }
+        fn write(&mut self, _: &[u8]) -> bhpc_vfs::Result<usize> {
+            Ok(0)
+        }
+        fn seek(&mut self, _: SeekFrom) -> bhpc_vfs::Result<u64> {
+            Ok(0)
+        }
+        fn len(&mut self) -> bhpc_vfs::Result<u64> {
+            Ok(7)
+        }
+        fn set_len(&mut self, _: u64) -> bhpc_vfs::Result<()> {
+            Ok(())
+        }
+        fn sync(&mut self) -> bhpc_vfs::Result<()> {
+            Ok(())
+        }
     }
 
-    #[test]
-    fn errno_mapping_prefers_the_os_code_then_the_kind() {
-        let raw = std::io::Error::from_raw_os_error(13);
-        assert_eq!(errno_of(&raw), 13);
-        for (kind, want) in [
-            (std::io::ErrorKind::NotFound, ENOENT),
-            (std::io::ErrorKind::PermissionDenied, EACCES),
-            (std::io::ErrorKind::AlreadyExists, EEXIST),
-            (std::io::ErrorKind::InvalidInput, EINVAL),
-            (std::io::ErrorKind::Other, EIO),
-        ] {
-            assert_eq!(errno_of(&std::io::Error::from(kind)), want, "{kind:?}");
+    /// A file system whose single file opens fine but cannot be `stat`ed afterwards.
+    struct Ghost;
+    impl FileSystem for Ghost {
+        fn open(&self, path: &str, _: OpenFlags) -> bhpc_vfs::Result<Box<dyn VFile>> {
+            if path == "/dir" {
+                return Err(VfsError::IsDir);
+            }
+            Ok(Box::new(Stuck))
+        }
+        fn stat(&self, _: &str) -> bhpc_vfs::Result<bhpc_vfs::Stat> {
+            Err(VfsError::NotFound)
+        }
+        fn read_dir(&self, _: &str) -> bhpc_vfs::Result<Vec<bhpc_vfs::DirEntry>> {
+            Err(VfsError::NotFound)
         }
     }
 
     #[test]
-    fn config_helpers_describe_the_android_environment() {
-        let cfg = FsConfig::default();
-        assert_eq!(cfg.package, "com.noodlecake.blockheads");
-        assert_eq!(cfg.apk_path(), "/data/app/com.noodlecake.blockheads-1.apk");
-        let tmp = Tmp::new();
-        let cfg = cfg.with_data_root(&tmp.0).with_apk(std::path::Path::new("/some/game.apk"));
-        assert_eq!(cfg.mounts.len(), 3);
-        assert_eq!(cfg.mounts[2], Mount { guest: cfg.apk_path(), host: "/some/game.apk".into(), writable: false });
-        assert!(cfg.data_dirs().contains(&"sdcard/Android/obb/com.noodlecake.blockheads".to_string()));
-        let env = cfg.env();
-        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-        assert_eq!(get("PACKAGE_NAME").unwrap(), "com.noodlecake.blockheads");
-        assert_eq!(get("PACKAGE_CODE_PATH").unwrap(), cfg.apk_path());
-        assert_eq!(get("CFProcessPath").unwrap(), format!("{}/blockheads", cfg.apk_path()));
-        assert_eq!(get("HOME").unwrap(), "/data/data/com.noodlecake.blockheads");
-        assert_eq!(get("TZ").unwrap(), "UTC");
-        // A package without dots still yields a process name.
-        let single = FsConfig { package: "solo".into(), mounts: vec![] };
-        assert!(single.env().iter().any(|(k, v)| k == "CFProcessPath" && v.ends_with("/solo")));
-    }
-
-    #[test]
     fn virtual_files_and_directories() {
-        let mut v = Vfs::new(FsConfig::default(), 4242);
+        let tmp = Tmp::new();
+        let mut v = vfs_with(&tmp);
         let fd = v.open("/proc/self/cmdline", 0).unwrap();
-        assert_eq!(v.read(fd, 100).unwrap(), b"com.noodlecake.blockheads\0");
+        assert_eq!(v.read(fd, 100).unwrap(), b"pkg\0");
         assert_eq!(v.read(fd, 10).unwrap(), b"", "at end of file");
-        assert_eq!(v.lseek(fd, 4, 0).unwrap(), 4);
-        assert_eq!(v.lseek(fd, 2, 1).unwrap(), 6);
-        assert_eq!(v.lseek(fd, -1, 2).unwrap(), 25);
+        assert_eq!(v.lseek(fd, 1, 0).unwrap(), 1);
+        assert_eq!(v.lseek(fd, 2, 1).unwrap(), 3);
+        assert_eq!(v.lseek(fd, -1, 2).unwrap(), 3);
         assert_eq!(v.lseek(fd, -100, 0), Err(EINVAL));
         assert_eq!(v.lseek(fd, 0, 9), Err(EINVAL));
         assert_eq!(v.fstat(fd).unwrap().mode, S_IFREG | 0o444);
@@ -768,12 +446,15 @@ mod tests {
             assert!(text.contains(needle), "{path}");
         }
         // Writing or creating virtual files fails; directories cannot be opened for writing.
-        assert_eq!(v.open("/proc/cpuinfo", O_WRONLY), Err(EACCES));
-        assert_eq!(v.open("/proc/cpuinfo", O_CREAT | O_EXCL), Err(EEXIST));
+        assert_eq!(v.open("/proc/cpuinfo", O_WRONLY), Err(EROFS));
         assert_eq!(v.open("/proc/cpuinfo", O_DIRECTORY), Err(ENOTDIR));
         assert_eq!(v.open("/proc", O_WRONLY), Err(EISDIR));
+        assert_eq!(v.open("/proc", O_DIRECTORY | O_RDWR), Err(EISDIR));
         assert_eq!(v.open("", 0), Err(ENOENT));
+        assert_eq!(v.stat(""), Err(ENOENT));
+        assert_eq!(v.access("", 0), Err(ENOENT));
         assert_eq!(v.open("/nowhere", 0), Err(ENOENT));
+        assert_eq!(v.open("/nowhere", O_DIRECTORY), Err(ENOENT));
         // Listing.
         for dir in ["/", "/proc", "/dev", "/sys", "/system", "/data", "/data/data"] {
             let fd = v.open(dir, O_DIRECTORY).unwrap();
@@ -785,25 +466,32 @@ mod tests {
             assert_eq!(v.lseek(fd, 0, 0).unwrap(), 0, "rewinddir");
             assert_eq!(v.readdir(fd).unwrap().unwrap().name, ".");
             assert!(v.lseek(fd, 1000, 1).unwrap() >= 1, "clamped to the end");
+            assert_eq!(v.lseek(fd, -1000, 1), Err(EINVAL));
+            assert_eq!(v.lseek(fd, i64::MAX, 1), Err(EINVAL));
             assert_eq!(v.read(fd, 1), Err(EISDIR));
             assert_eq!(v.write(fd, b"x"), Err(EBADF), "directories are read-only handles");
             assert_eq!(v.ftruncate(fd, 0), Err(EISDIR));
-            assert_eq!(v.fstat(fd).unwrap().mode, S_IFDIR | 0o755);
+            v.fsync(fd).unwrap();
+            assert_eq!(v.fstat(fd).unwrap().mode, S_IFDIR | 0o555);
         }
+        // Opening a directory without O_DIRECTORY works too; a directory handle opened for writing does not.
         let d = v.open("/data/data", 0).unwrap();
         assert_eq!(v.readdir(d).unwrap().unwrap().name, ".");
         let f = v.open("/proc/cpuinfo", 0).unwrap();
         assert_eq!(v.readdir(f), Err(ENOTDIR));
         assert_eq!(v.readdir(999), Err(EBADF));
+        // The tracing switch only prints.
+        v.trace = true;
+        assert!(v.open("/proc/cpuinfo", 0).is_ok());
     }
 
     #[test]
     fn devices() {
-        let mut v = Vfs::new(FsConfig::default(), 1);
+        let tmp = Tmp::new();
+        let mut v = vfs_with(&tmp);
         let null = v.open("/dev/null", O_RDWR).unwrap();
         assert_eq!(v.write(null, b"abc").unwrap(), 3);
         assert_eq!(v.read(null, 8).unwrap(), b"");
-        assert_eq!(v.lseek(null, 5, 0).unwrap(), 0);
         let zero = v.open("/dev/zero", 0).unwrap();
         assert_eq!(v.read(zero, 4).unwrap(), [0; 4]);
         let rnd = v.open("/dev/urandom", 0).unwrap();
@@ -814,12 +502,16 @@ mod tests {
         let rnd2 = v.open("/dev/random", O_WRONLY).unwrap();
         assert_eq!(v.write(rnd2, b"seed").unwrap(), 4);
         assert_eq!(v.read(rnd2, 1), Err(EBADF), "write-only descriptor");
-        assert_eq!(v.fstat(null).unwrap().mode, S_IFCHR | 0o666);
-        assert_eq!(v.stat("/dev/zero").unwrap().mode, S_IFCHR | 0o666);
         assert!(v.access("/dev/null", 2).is_ok());
-        assert_eq!(v.ftruncate(null, 0), Err(EINVAL));
+        assert_eq!(v.access("/dev/null", 1), Ok(()));
+        assert!(v.ftruncate(null, 0).is_err());
         v.fsync(null).unwrap();
         assert_eq!(v.fsync(77), Err(EBADF));
+        assert_eq!(v.ftruncate(77, 0), Err(EBADF));
+        assert_eq!(v.fstat(77), Err(EBADF));
+        assert_eq!(v.lseek(77, 0, 0), Err(EBADF));
+        assert_eq!(v.read(77, 1), Err(EBADF));
+        assert_eq!(v.write(77, b"x"), Err(EBADF));
     }
 
     #[test]
@@ -855,7 +547,7 @@ mod tests {
         assert_eq!(fs::read(tmp.path("rw/f.txt")).unwrap(), b"abcd");
         let fd = v.open("/data/data/pkg/f.txt", 0).unwrap();
         assert_eq!(v.write(fd, b"x"), Err(EBADF));
-        assert_eq!(v.ftruncate(fd, 0), Err(EINVAL), "read-only descriptor");
+        assert_eq!(v.ftruncate(fd, 0), Err(EBADF), "read-only descriptor");
         // Exclusive creation and directories.
         assert_eq!(v.open("/data/data/pkg/f.txt", O_CREAT | O_EXCL | O_WRONLY), Err(EEXIST));
         assert_eq!(v.open("/data/data/pkg/f.txt", O_DIRECTORY), Err(ENOTDIR));
@@ -871,9 +563,7 @@ mod tests {
         assert_eq!(v.mkdir("/data/data/pkg/sub"), Err(EEXIST));
         assert_eq!(v.mkdir("/data/data/pkg/a/b"), Err(ENOENT));
         assert_eq!(v.mkdir("/data"), Err(EEXIST), "virtual directories exist already");
-        assert_eq!(v.mkdir("/proc/cpuinfo"), Err(EEXIST));
         assert_eq!(v.mkdir("/ro/x"), Err(EROFS));
-        assert_eq!(v.mkdir("/elsewhere/x"), Err(EACCES));
         let fd = v.open("/data/data/pkg/sub/a", O_WRONLY | O_CREAT).unwrap();
         v.close(fd).unwrap();
         fs::write(tmp.path("rw/sub/b"), b"x").unwrap();
@@ -888,12 +578,12 @@ mod tests {
         assert_eq!(v.unlink("/data/data/pkg/sub"), Err(EISDIR));
         v.rename("/data/data/pkg/sub/a", "/data/data/pkg/sub/c").unwrap();
         assert_eq!(v.rename("/data/data/pkg/sub/a", "/data/data/pkg/sub/d"), Err(ENOENT));
-        assert_eq!(v.rename("/data/data/pkg/sub/c", "/ro/c"), Err(EROFS));
+        assert_eq!(v.rename("/data/data/pkg/sub/c", "/ro/c"), Err(18), "EXDEV across mounts");
         v.unlink("/data/data/pkg/sub/c").unwrap();
         v.unlink("/data/data/pkg/sub/b").unwrap();
         assert_eq!(v.unlink("/data/data/pkg/sub/b"), Err(ENOENT));
         v.rmdir("/data/data/pkg/sub").unwrap();
-        assert_eq!(v.unlink("/proc/cpuinfo"), Err(EACCES));
+        assert_eq!(v.unlink("/proc/cpuinfo"), Err(EROFS));
         assert_eq!(v.rmdir("/ro"), Err(EROFS));
         assert_eq!(v.rmdir("/nothing/here"), Err(ENOENT));
         // Access and stat.
@@ -905,7 +595,7 @@ mod tests {
         assert!(v.access("/proc/cpuinfo", 4).is_ok());
         assert_eq!(v.access("/proc/cpuinfo", 2), Err(EACCES));
         assert_eq!(v.stat("/data/data/pkg").unwrap().mode, S_IFDIR | 0o755);
-        assert_eq!(v.stat("/proc").unwrap().mode, S_IFDIR | 0o755);
+        assert_eq!(v.stat("/data/data/pkg").unwrap().nlink, 2);
         assert_eq!(v.stat("/proc/cpuinfo").unwrap().mode, S_IFREG | 0o444);
         assert_eq!(v.stat("/none"), Err(ENOENT));
         // Read-only mount.
@@ -914,26 +604,19 @@ mod tests {
         assert_eq!(v.open("/ro/r.txt", O_CREAT), Err(EROFS));
         let fd = v.open("/ro/r.txt", 0).unwrap();
         assert_eq!(v.read(fd, 100).unwrap(), b"readonly");
-        let mut perm = fs::metadata(tmp.path("ro/r.txt")).unwrap().permissions();
-        perm.set_readonly(true);
-        fs::set_permissions(tmp.path("ro/r.txt"), perm).unwrap();
         assert_eq!(v.stat("/ro/r.txt").unwrap().mode, S_IFREG | 0o444);
         // Mounts match whole path components, and intermediate directories exist.
         assert_eq!(v.open("/ro2/x", 0), Err(ENOENT));
-        let cfg = FsConfig {
-            package: "p".into(),
-            mounts: vec![Mount { guest: "/a/b/c".into(), host: tmp.path("rw"), writable: true }],
-        };
-        let w = Vfs::new(cfg, 1);
-        assert_eq!(w.stat("/a/b").unwrap().mode, S_IFDIR | 0o755);
-        assert_eq!(w.stat("/a/bc"), Err(ENOENT));
+        assert_eq!(v.stat("/data").unwrap().mode, S_IFDIR | 0o555);
+        assert_eq!(v.stat("/data/datax"), Err(ENOENT));
     }
 
     #[test]
     fn readlink_and_descriptor_limits() {
-        let mut v = Vfs::new(FsConfig::default(), 9);
-        assert_eq!(v.readlink("/proc/self/exe").unwrap(), "/data/app/com.noodlecake.blockheads-1.apk");
-        assert!(v.readlink("/proc/9/exe").is_ok());
+        let tmp = Tmp::new();
+        let mut v = vfs_with(&tmp);
+        assert_eq!(v.readlink("/proc/self/exe").unwrap(), "/data/app/pkg-1/base.apk");
+        assert!(v.readlink("/proc/4242/exe").is_ok());
         assert_eq!(v.readlink("/proc/cpuinfo"), Err(EINVAL));
         assert_eq!(v.readlink("/nothing"), Err(ENOENT));
         // Descriptors start at 3 and the table is finite.
@@ -948,58 +631,34 @@ mod tests {
         v.close(5).unwrap();
         assert_eq!(v.open("/dev/null", 0).unwrap(), 5, "the lowest free descriptor is reused");
         assert!(v.is_open(5) && !v.is_open(MAX_FDS));
-        assert_eq!(v.config().package, "com.noodlecake.blockheads");
+        assert!(v.fs().stat("/proc/cpuinfo").is_ok());
     }
 
     #[test]
-    fn path_tracing_is_optional() {
-        let mut v = Vfs::new(FsConfig::default(), 1);
-        v.trace = true;
-        assert!(v.stat("/proc/cpuinfo").is_ok());
+    fn default_environment_has_the_synthetic_files() {
+        let mut v = Vfs::new(default_fs());
+        let fd = v.open("/proc/self/cmdline", 0).unwrap();
+        assert_eq!(v.read(fd, 100).unwrap(), b"com.noodlecake.blockheads\0");
+        assert_eq!(v.stat("/data/data/pkg"), Err(ENOENT));
     }
 
     #[test]
-    fn host_io_errors_are_translated() {
-        use std::os::fd::FromRawFd;
-        let tmp = Tmp::new();
-        let mut v = vfs_with(&tmp);
-        let dir_file = || fs::File::open(&tmp.0).unwrap();
-        // Reading a directory through a plain file handle fails with EISDIR.
-        v.open.insert(10, Open { handle: Handle::Host { file: dir_file() }, flags: 0 });
-        assert_eq!(v.read(10, 4), Err(EISDIR));
-        // Writing through a read-only OS handle, truncating it, syncing a pipe, seeking a pipe.
-        fs::write(tmp.path("rw/ro"), b"abc").unwrap();
-        v.open.insert(
-            11,
-            Open { handle: Handle::Host { file: fs::File::open(tmp.path("rw/ro")).unwrap() }, flags: O_RDWR },
-        );
-        assert!(v.write(11, b"x").is_err());
-        assert!(v.ftruncate(11, 0).is_err());
-        let mut fds = [0i32; 2];
-        // SAFETY: plain pipe(2) call with a two-element buffer.
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-        // SAFETY: the descriptors were just created and are owned by these files.
-        let (r, w) = unsafe { (fs::File::from_raw_fd(fds[0]), fs::File::from_raw_fd(fds[1])) };
-        v.open.insert(12, Open { handle: Handle::Host { file: r }, flags: 0 });
-        v.open.insert(13, Open { handle: Handle::Host { file: w }, flags: O_WRONLY });
-        assert_eq!(v.lseek(12, 0, 0), Err(ESPIPE));
-        assert!(v.fsync(12).is_err());
-        // A descriptor that was closed behind our back cannot be inspected.
-        // SAFETY: fd 900 is not open; the File is dropped immediately and closing it merely fails.
-        let stale = unsafe { fs::File::from_raw_fd(900) };
-        v.open.insert(14, Open { handle: Handle::Host { file: stale }, flags: 0 });
-        assert_eq!(v.fstat(14), Err(EBADF));
-        // Dropping the stale file would abort (std checks for double closes): leak it instead.
-        std::mem::forget(v.open.remove(&14));
-        // Writing to memory-backed and directory handles that claim to be writable.
-        v.open.insert(15, Open { handle: Handle::Mem { data: vec![1], pos: 0 }, flags: O_RDWR });
-        assert_eq!(v.write(15, b"x"), Err(EBADF));
-        v.open.insert(16, Open { handle: Handle::Dir { entries: vec![], pos: 0 }, flags: O_RDWR });
-        assert_eq!(v.write(16, b"x"), Err(EISDIR));
-        // Listing a directory that vanished.
-        assert_eq!(v.host_dir(&tmp.path("missing")), Err(ENOENT));
-        fs::create_dir(tmp.path("rw/full")).unwrap();
-        fs::write(tmp.path("rw/full/x"), b"").unwrap();
-        assert_eq!(v.rmdir("/data/data/pkg/full"), Err(ENOTEMPTY));
+    fn files_that_make_no_progress_or_lost_their_name() {
+        let mut v = Vfs::new(Arc::new(Ghost));
+        let fd = v.open("/x", O_RDWR).unwrap();
+        assert_eq!(v.write(fd, b"abc"), Err(EIO), "a file that accepts nothing is an I/O error");
+        assert_eq!(v.write(fd, b""), Ok(0));
+        assert_eq!(v.read(fd, 4).unwrap(), b"");
+        // fstat falls back to the open file when the name no longer resolves.
+        let st = v.fstat(fd).unwrap();
+        assert_eq!((st.mode, st.size, st.nlink), (S_IFREG | 0o644, 7, 0));
+        assert_eq!(v.lseek(fd, 3, 0), Ok(0));
+        assert_eq!(v.ftruncate(fd, 0), Ok(()));
+        assert_eq!(v.fsync(fd), Ok(()));
+        assert_eq!(v.open("/d", O_DIRECTORY), Err(ENOENT));
+        assert_eq!(v.open("/dir", 0), Err(ENOENT), "a directory that cannot be listed");
+        // A directory handle whose directory vanished still reports as a directory.
+        v.open.insert(20, Open { handle: Handle::Dir { entries: vec![], pos: 0 }, flags: 0, path: "/gone".into() });
+        assert_eq!(v.fstat(20).unwrap().mode, S_IFDIR | 0o755);
     }
 }

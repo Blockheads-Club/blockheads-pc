@@ -87,8 +87,8 @@ pub struct Config {
     pub cpus: u32,
     pub pid: u32,
     pub uid: u32,
-    /// File-system view of the guest.
-    pub fs: crate::vfs::FsConfig,
+    /// File-system view of the guest (`bhpc-vfs`: mount table, `/proc`, `/dev`, the Android path map).
+    pub fs: Arc<dyn bhpc_vfs::FileSystem>,
     /// Value of `__stack_chk_guard`; random when `None`.
     pub stack_guard: Option<u32>,
 }
@@ -113,7 +113,7 @@ impl Default for Config {
             cpus: 4,
             pid: std::process::id(),
             uid: 10000,
-            fs: crate::vfs::FsConfig::default(),
+            fs: crate::vfs::default_fs(),
             stack_guard: None,
         }
     }
@@ -261,7 +261,7 @@ impl State {
             unimplemented_bound: Vec::new(),
             unimplemented_hits: Vec::new(),
             sched: Arc::new(Sched::new()),
-            vfs: crate::vfs::Vfs::new(cfg.fs.clone(), cfg.pid),
+            vfs: crate::vfs::Vfs::new(cfg.fs),
             files: HashMap::new(),
             dirs: HashMap::new(),
             threads: HashMap::new(),

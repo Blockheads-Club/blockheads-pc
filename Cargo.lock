@@ -42,6 +42,7 @@ dependencies = [
  "bhpc-cpu",
  "bhpc-loader",
  "bhpc-mem",
+ "bhpc-vfs",
  "libc",
 ]
 
@@ -72,7 +73,10 @@ version = "0.0.0"
 dependencies = [
  "bhpc-bionic",
  "bhpc-cpu",
+ "bhpc-loader",
  "bhpc-mem",
+ "bhpc-vfs",
+ "zip",
 ]
 
 [[package]]
@@ -101,6 +105,7 @@ dependencies = [
  "bhpc-jni",
  "bhpc-loader",
  "bhpc-mem",
+ "bhpc-vfs",
 ]
 
 [[package]]
