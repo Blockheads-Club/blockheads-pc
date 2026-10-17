@@ -4,4 +4,19 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Placeholder crate for a later milestone (see docs/feasibility/PLAN.md)."
+description = "Window and main-loop skeleton for the Blockheads PC port: events, DPI metrics, fullscreen, frame pacing, SDL2 backend."
+
+[features]
+default = []
+# The SDL2 backend (links the system libSDL2; needs a display or SDL_VIDEODRIVER=offscreen to run).
+sdl = ["dep:sdl2"]
+# Build SDL2 from source and link it statically (what release builds use).
+sdl-bundled = ["sdl", "sdl2/bundled", "sdl2/static-link"]
+
+[dependencies]
+bhpc-gles = { path = "../bhpc-gles" }
+sdl2 = { version = "0.38", optional = true, default-features = false }
+
+[dev-dependencies]
+bhpc-mem.workspace = true
+bhpc-cpu.workspace = true
