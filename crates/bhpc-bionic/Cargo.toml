@@ -4,4 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Placeholder crate for a later milestone (see docs/feasibility/PLAN.md)."
+description = "Host re-implementation of the bionic libc subset the Blockheads libraries import."
+
+[dependencies]
+bhpc-mem.workspace = true
+bhpc-cpu.workspace = true
+bhpc-loader.workspace = true
+
+[dev-dependencies]
+libc.workspace = true
