@@ -65,7 +65,7 @@ fn errors_are_classified() {
     let (img, _) = image_with_code(&[0xE7F0_00F0], |b, at| b.syms = vec![bhpc_loader::testelf::def("entry", at)]);
     assert!(matches!(
         run_shared_object(&img.bytes, "entry", sink(), false, None, None),
-        Err(RunError::Guest(Stop::Exception { .. }))
+        Err(RunError::Guest(Stop::Undefined { word: 0xE7F0_00F0, .. }))
     ));
     // Failing constructor.
     let (img, _) = image_with_code(&[0xE7F0_00F0], |b, at| b.init = Some(at));

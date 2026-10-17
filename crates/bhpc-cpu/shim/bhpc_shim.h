@@ -10,6 +10,11 @@ extern "C" {
 #endif
 
 typedef struct bhpc_jit bhpc_jit;
+// Global exclusive monitor shared by every JIT instance that runs in the same guest memory.
+typedef struct bhpc_monitor bhpc_monitor;
+
+bhpc_monitor* bhpc_monitor_new(size_t processors);
+void bhpc_monitor_free(bhpc_monitor* m);
 
 typedef struct bhpc_callbacks {
     void* user;
@@ -34,8 +39,10 @@ typedef struct bhpc_callbacks {
     void (*interpreter_fallback)(void* user, uint32_t pc, size_t num_instructions);
 } bhpc_callbacks;
 
-// `fastmem_base` may be NULL to force the callback path for every access.
-bhpc_jit* bhpc_jit_new(const bhpc_callbacks* cb, uint8_t* fastmem_base, size_t code_cache_bytes, int cycle_counting);
+// `fastmem_base` may be NULL to force the callback path for every access. `monitor` must outlive the JIT and
+// `processor_id` must be below the processor count it was created with.
+bhpc_jit* bhpc_jit_new(const bhpc_callbacks* cb, uint8_t* fastmem_base, size_t code_cache_bytes, int cycle_counting,
+                       bhpc_monitor* monitor, size_t processor_id);
 // Only meaningful when created with cycle_counting: run stops when the budget is used up.
 void bhpc_jit_set_ticks(bhpc_jit* j, uint64_t ticks);
 uint64_t bhpc_jit_ticks(bhpc_jit* j);

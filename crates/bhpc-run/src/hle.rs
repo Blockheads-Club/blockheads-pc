@@ -324,6 +324,7 @@ mod tests {
         e.call("bhpc_check", &[SCRATCH + 0x100, 1]);
         e.call("bhpc_check", &[SCRATCH + 0x100, 0]);
         assert_eq!(e.out.text(), "hello\n  [ok] case\n  [FAIL] case\n");
+        e.out.clone().flush().unwrap();
         assert_eq!(e.st.lock().unwrap().checks, vec![("case".to_string(), true), ("case".to_string(), false)]);
         e.call("bhpc_nop", &[]);
     }

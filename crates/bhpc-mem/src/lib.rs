@@ -87,25 +87,8 @@ impl GuestMemory {
     /// Reserve the window.
     pub fn new() -> Result<Self, MemError> {
         let len = WINDOW_SIZE as usize + GUARD_SIZE;
-        // SAFETY: anonymous private reservation, no existing memory is touched.
-        let p = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                len,
-                libc::PROT_NONE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            )
-        };
-        if p == libc::MAP_FAILED {
-            return Err(MemError::Os(errno()));
-        }
-        Ok(GuestMemory {
-            base: p.cast(),
-            regions: RwLock::new(Vec::new()),
-            arena_cursor: Mutex::new(MODULE_ARENA_START as u64),
-        })
+        let base = sys::reserve(len).map_err(MemError::Os)?;
+        Ok(GuestMemory { base, regions: RwLock::new(Vec::new()), arena_cursor: Mutex::new(MODULE_ARENA_START as u64) })
     }
 
     /// Host address of guest address 0.
@@ -126,25 +109,14 @@ impl GuestMemory {
     pub fn map(&self, addr: u32, len: u32) -> Result<(), MemError> {
         let (start, end) = Self::check_range(addr, len)?;
         let start = start & !(PAGE_SIZE as u64 - 1);
+        // `check_range` bounded `end` by the (page-aligned) window size, so rounding cannot overflow it.
         let end = page_align_up(end);
-        if end > WINDOW_SIZE {
-            return Err(MemError::BadRange { addr, len });
-        }
         let mut regions = self.regions.write().unwrap();
         if regions.iter().any(|r| start < r.end && r.start < end) {
             return Err(MemError::Overlap { addr, len });
         }
         // SAFETY: the range is inside our own reservation.
-        let rc = unsafe {
-            libc::mprotect(
-                self.base.add(start as usize).cast(),
-                (end - start) as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-            )
-        };
-        if rc != 0 {
-            return Err(MemError::Os(errno()));
-        }
+        unsafe { sys::make_accessible(self.base.add(start as usize), (end - start) as usize) }.map_err(MemError::Os)?;
         regions.push(Region { start, end });
         Ok(())
     }
@@ -294,8 +266,68 @@ impl Drop for GuestMemory {
     }
 }
 
-fn errno() -> i32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+/// The two host calls that can fail. Under `cfg(test)` they can be made to fail on demand.
+mod sys {
+    #[cfg(test)]
+    thread_local! {
+        /// Number of upcoming `reserve` calls / `make_accessible` calls to fail with `ENOMEM`.
+        pub static FAIL_RESERVE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        pub static FAIL_PROTECT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    #[cfg(test)]
+    fn injected(flag: &'static std::thread::LocalKey<std::cell::Cell<u32>>) -> bool {
+        flag.with(|f| {
+            let n = f.get();
+            f.set(n.saturating_sub(1));
+            n > 0
+        })
+    }
+
+    fn errno() -> i32 {
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    }
+
+    /// Reserve `len` bytes of inaccessible address space.
+    pub fn reserve(len: usize) -> Result<*mut u8, i32> {
+        #[cfg(test)]
+        if injected(&FAIL_RESERVE) {
+            return Err(libc::ENOMEM);
+        }
+        // SAFETY: anonymous private reservation, no existing memory is touched.
+        let p = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                -1,
+                0,
+            )
+        };
+        if p == libc::MAP_FAILED {
+            Err(errno())
+        } else {
+            Ok(p.cast())
+        }
+    }
+
+    /// Make `[p, p+len)` readable and writable.
+    ///
+    /// # Safety
+    /// The range must lie inside a reservation made by [`reserve`].
+    pub unsafe fn make_accessible(p: *mut u8, len: usize) -> Result<(), i32> {
+        #[cfg(test)]
+        if injected(&FAIL_PROTECT) {
+            return Err(libc::ENOMEM);
+        }
+        // SAFETY: forwarded from the caller.
+        if unsafe { libc::mprotect(p.cast(), len, libc::PROT_READ | libc::PROT_WRITE) } != 0 {
+            Err(errno())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -413,6 +445,23 @@ mod tests {
         assert_eq!(m.cas_u32(0x1101, 5, 7), Ok(false));
         assert_eq!(m.read_u32(0x1101).unwrap(), 6);
         assert_eq!(m.cas_u32(0x9000, 0, 1), Err(MemError::Unmapped { addr: 0x9000, len: 4 }));
+    }
+
+    #[test]
+    fn host_failures_are_reported() {
+        sys::FAIL_RESERVE.with(|f| f.set(1));
+        assert_eq!(GuestMemory::new().err(), Some(MemError::Os(libc::ENOMEM)));
+        let m = GuestMemory::new().unwrap();
+        sys::FAIL_PROTECT.with(|f| f.set(1));
+        assert_eq!(m.map(0x1000, 0x1000), Err(MemError::Os(libc::ENOMEM)));
+        assert!(!m.is_mapped(0x1000, 1), "a failed map leaves no region behind");
+        m.map(0x1000, 0x1000).unwrap();
+        // The real host call fails too when handed an impossible range (not page aligned / outside).
+        // SAFETY: mprotect on an unaligned address is rejected by the kernel and touches nothing.
+        let e = unsafe { sys::make_accessible(m.base().add(1), 4096) };
+        assert_eq!(e, Err(libc::EINVAL));
+        let huge = sys::reserve(usize::MAX / 2);
+        assert_eq!(huge, Err(libc::ENOMEM));
     }
 
     #[test]

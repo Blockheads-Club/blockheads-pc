@@ -6,14 +6,27 @@
 //! When the guest executes one, the JIT calls back into [`Cpu`], which dispatches to the host
 //! closure registered for `n`. Arguments follow the AAPCS **softfp** convention (r0-r3, then the
 //! stack; 64-bit values in aligned register pairs), results go to r0 (and r1 for 64-bit values).
+//!
+//! # Threads and nested calls
+//!
+//! Everything a guest thread shares (memory, the [`ThunkTable`], the exclusive monitor) lives in
+//! one `Arc`'d `Shared`. [`Cpu::new_thread`] makes a sibling CPU with its own JIT and
+//! exclusive-monitor processor id. A host function that needs the result of a guest function
+//! (`qsort` comparators, `atexit` handlers, `pthread_once` routines) calls [`Cpu::call`] from
+//! inside the thunk: dynarmic forbids a second `Run()` on the same JIT, so the call runs on a
+//! lazily created *child* CPU that shares memory, thunks and the monitor and continues on the
+//! parent's stack. Use [`Cpu::tail_call`] instead when the guest function's result is the thunk's
+//! result (no extra JIT, no depth limit).
 
 mod ffi;
+mod table;
+
+pub use table::{SharedThunkFn, ThunkFn, ThunkTable};
 
 use bhpc_mem::{GuestMemory, MemError};
-use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// Guest address of the thunk page.
 pub const THUNK_BASE: u32 = 0xFFFC_0000;
@@ -25,6 +38,12 @@ pub const THUNK_STRIDE: u32 = 16;
 pub const MAX_THUNKS: u32 = THUNK_REGION / THUNK_STRIDE - 1;
 /// `lr` value used by [`Cpu::call`]; executing it ends the call.
 pub const RETURN_ADDR: u32 = THUNK_BASE;
+/// Maximum number of simultaneous guest threads (exclusive-monitor processors).
+pub const MAX_CPUS: usize = 64;
+/// Maximum depth of host-to-guest calls nested inside thunks.
+pub const MAX_NEST_DEPTH: u32 = 16;
+/// Code cache size of nested-call children (at most this, whatever the parent uses).
+const CHILD_CODE_CACHE: usize = 16 << 20;
 
 const R_IP: usize = 12;
 const R_SP: usize = 13;
@@ -32,6 +51,11 @@ const R_LR: usize = 14;
 const R_PC: usize = 15;
 const CPSR_T: u32 = 1 << 5;
 const CPSR_USER: u32 = 0x10;
+/// dynarmic `HaltReason::CacheInvalidation`.
+const HALT_CACHE_INVALIDATION: u32 = 2;
+/// dynarmic `A32::Exception` values we give a dedicated stop reason.
+const EXC_UNDEFINED: u32 = 0;
+const EXC_UNPREDICTABLE: u32 = 1;
 
 /// A guest memory access that hit an unmapped address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +72,12 @@ pub enum Stop {
     Returned,
     /// Unmapped memory access.
     Fault(Fault),
-    /// Undefined/unpredictable instruction, breakpoint... (`kind` is dynarmic's exception number).
+    /// The guest executed an undefined (unallocated) instruction. `word` is the instruction at
+    /// `pc` (for Thumb the 16-bit or combined 32-bit encoding).
+    Undefined { pc: u32, word: u32, thumb: bool },
+    /// The guest executed an instruction with unpredictable behaviour (see [`Stop::Undefined`]).
+    Unpredictable { pc: u32, word: u32, thumb: bool },
+    /// Any other dynarmic exception, such as a breakpoint (`kind` is dynarmic's exception number).
     Exception { pc: u32, kind: u32 },
     /// The JIT asked for interpretation of an instruction it cannot translate.
     Fallback { pc: u32 },
@@ -56,7 +85,8 @@ pub enum Stop {
     BadSvc(u32),
     /// A host function requested the stop (for example an unimplemented import).
     Host(String),
-    /// [`Cpu::call`] was used re-entrantly from inside a thunk.
+    /// A nested guest call from a thunk is impossible: too deep ([`MAX_NEST_DEPTH`]), a traced
+    /// call, or a serialised thunk re-entered itself (register it as a shared thunk instead).
     Nested,
     /// The JIT stopped for a reason other than the above (raw halt bits).
     Halted(u32),
@@ -75,11 +105,21 @@ impl fmt::Display for Stop {
                     x.addr
                 )
             }
+            Stop::Undefined { pc, word, thumb } => write!(
+                f,
+                "undefined {} instruction {word:#010x} at pc {pc:#010x}",
+                if *thumb { "thumb" } else { "arm" }
+            ),
+            Stop::Unpredictable { pc, word, thumb } => write!(
+                f,
+                "unpredictable {} instruction {word:#010x} at pc {pc:#010x}",
+                if *thumb { "thumb" } else { "arm" }
+            ),
             Stop::Exception { pc, kind } => write!(f, "guest exception {kind} at pc {pc:#010x}"),
             Stop::Fallback { pc } => write!(f, "interpreter fallback requested at pc {pc:#010x}"),
             Stop::BadSvc(n) => write!(f, "svc #{n} has no host function"),
             Stop::Host(m) => write!(f, "host stop: {m}"),
-            Stop::Nested => write!(f, "nested guest call from a thunk is not supported"),
+            Stop::Nested => write!(f, "nested guest call from a thunk is not possible here"),
             Stop::Halted(h) => write!(f, "jit halted ({h:#x})"),
         }
     }
@@ -92,6 +132,8 @@ impl std::error::Error for Stop {}
 pub enum CpuError {
     Mem(MemError),
     TooManyThunks,
+    /// All [`MAX_CPUS`] exclusive-monitor processors are in use.
+    TooManyCpus,
 }
 
 impl fmt::Display for CpuError {
@@ -99,6 +141,7 @@ impl fmt::Display for CpuError {
         match self {
             CpuError::Mem(e) => write!(f, "guest memory: {e}"),
             CpuError::TooManyThunks => write!(f, "thunk page is full"),
+            CpuError::TooManyCpus => write!(f, "too many guest threads"),
         }
     }
 }
@@ -129,14 +172,6 @@ impl Default for CpuOptions {
     }
 }
 
-/// A host function bound to an `svc` number.
-pub type ThunkFn = Box<dyn FnMut(&mut Cpu) + Send>;
-
-struct Thunk {
-    name: String,
-    f: Option<ThunkFn>,
-}
-
 /// Result of a guest call: r0 and r1 (the 32/64-bit AAPCS return registers).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallResult {
@@ -155,18 +190,66 @@ impl CallResult {
     }
 }
 
-/// One guest hardware thread: a JIT instance plus the thunk table.
+/// Owner of the global exclusive monitor.
+struct Monitor(*mut ffi::bhpc_monitor);
+
+// SAFETY: dynarmic's ExclusiveMonitor is internally locked and meant to be shared by all cores.
+unsafe impl Send for Monitor {}
+unsafe impl Sync for Monitor {}
+
+impl Drop for Monitor {
+    fn drop(&mut self) {
+        // SAFETY: created by `bhpc_monitor_new`, freed once, after every JIT using it is gone
+        // (each `Cpu` holds an `Arc<Shared>`).
+        unsafe { ffi::bhpc_monitor_free(self.0) };
+    }
+}
+
+/// State shared by all CPUs of one guest: memory, thunks, the exclusive monitor.
+struct Shared {
+    mem: Arc<GuestMemory>,
+    table: Arc<ThunkTable>,
+    monitor: Monitor,
+    /// Bit `i` set = processor id `i` is taken.
+    pids: Mutex<u64>,
+}
+
+impl Shared {
+    fn alloc_pid(&self) -> Result<usize, CpuError> {
+        let mut g = self.pids.lock().unwrap_or_else(PoisonError::into_inner);
+        let pid = (!*g).trailing_zeros() as usize;
+        if pid >= MAX_CPUS {
+            return Err(CpuError::TooManyCpus);
+        }
+        *g |= 1 << pid;
+        Ok(pid)
+    }
+
+    fn free_pid(&self, pid: usize) {
+        *self.pids.lock().unwrap_or_else(PoisonError::into_inner) &= !(1u64 << pid);
+    }
+}
+
+/// One guest hardware thread: a JIT instance plus handles to the state shared with its siblings.
 pub struct Cpu {
     jit: *mut ffi::bhpc_jit,
     mem: Arc<GuestMemory>,
-    thunks: Vec<Thunk>,
-    by_name: HashMap<String, u32>,
+    shared: Arc<Shared>,
+    opts: CpuOptions,
+    pid: usize,
+    /// Only the CPU that allocated `pid` releases it (nested-call children borrow the parent's).
+    owns_pid: bool,
+    /// 0 for a normal CPU, parent's depth + 1 for a nested-call child.
+    depth: u32,
+    parent: *mut Cpu,
+    child: Option<Box<Cpu>>,
     stop: Option<Stop>,
     running: bool,
     trace: bool,
 }
 
-// SAFETY: a Cpu is only ever driven from one thread at a time (it owns its JIT instance).
+// SAFETY: a Cpu is only ever driven from one thread at a time (it owns its JIT instance); the
+// raw `parent` pointer is only followed on that same thread.
 unsafe impl Send for Cpu {}
 
 impl Cpu {
@@ -175,20 +258,41 @@ impl Cpu {
         Self::with_options(mem, CpuOptions::default())
     }
 
-    /// Create a CPU: maps the thunk page and writes the return stub.
+    /// Create the first CPU of a guest: maps the thunk page and writes the return stub. Use
+    /// [`Cpu::new_thread`] for further CPUs on the same memory.
     pub fn with_options(mem: Arc<GuestMemory>, opts: CpuOptions) -> Result<Box<Cpu>, CpuError> {
-        mem.map(THUNK_BASE, THUNK_REGION)?;
+        let table = ThunkTable::new(mem.clone())?;
+        // SAFETY: plain allocation; freed by `Monitor::drop`.
+        let monitor = Monitor(unsafe { ffi::bhpc_monitor_new(MAX_CPUS) });
+        let shared = Arc::new(Shared { mem, table, monitor, pids: Mutex::new(0) });
+        let pid = shared.alloc_pid()?;
+        Ok(Self::build(shared, opts, pid, true, 0))
+    }
+
+    /// Create another guest thread: a CPU with its own JIT, registers and exclusive-monitor
+    /// processor id that shares this CPU's memory, thunk table and monitor. The caller sets its
+    /// stack pointer and entry point. May be moved to and driven from another OS thread.
+    pub fn new_thread(&self) -> Result<Box<Cpu>, CpuError> {
+        let pid = self.shared.alloc_pid()?;
+        Ok(Self::build(self.shared.clone(), self.opts, pid, true, 0))
+    }
+
+    fn build(shared: Arc<Shared>, opts: CpuOptions, pid: usize, owns_pid: bool, depth: u32) -> Box<Cpu> {
+        let mem = shared.mem.clone();
         let mut cpu = Box::new(Cpu {
             jit: std::ptr::null_mut(),
             mem: mem.clone(),
-            thunks: Vec::new(),
-            by_name: HashMap::new(),
+            shared,
+            opts,
+            pid,
+            owns_pid,
+            depth,
+            parent: std::ptr::null_mut(),
+            child: None,
             stop: None,
             running: false,
             trace: false,
         });
-        cpu.thunks.push(Thunk { name: "<return>".into(), f: None });
-        cpu.write_stub(0)?;
         let cb = ffi::bhpc_callbacks {
             user: (&mut *cpu as *mut Cpu).cast::<c_void>(),
             read8: tramp::read8,
@@ -208,20 +312,41 @@ impl Cpu {
             interpreter_fallback: tramp::fallback,
         };
         let fast = if opts.fastmem { mem.base() } else { std::ptr::null_mut() };
-        // SAFETY: callbacks outlive the JIT (both owned by the boxed Cpu); `fast` is our reservation.
-        cpu.jit = unsafe { ffi::bhpc_jit_new(&cb, fast, opts.code_cache_bytes, i32::from(opts.cycle_counting)) };
-        let cpsr = CPSR_USER;
+        // SAFETY: callbacks outlive the JIT (both owned by the boxed Cpu); `fast` is our reservation;
+        // the monitor outlives the JIT through `cpu.shared`.
+        cpu.jit = unsafe {
+            ffi::bhpc_jit_new(
+                &cb,
+                fast,
+                opts.code_cache_bytes,
+                i32::from(opts.cycle_counting),
+                cpu.shared.monitor.0,
+                pid,
+            )
+        };
         // SAFETY: jit was just created.
-        unsafe { ffi::bhpc_jit_set_cpsr(cpu.jit, cpsr) };
-        Ok(cpu)
+        unsafe { ffi::bhpc_jit_set_cpsr(cpu.jit, CPSR_USER) };
+        cpu
     }
 
-    fn write_stub(&self, slot: u32) -> Result<(), MemError> {
-        let a = THUNK_BASE + slot * THUNK_STRIDE;
-        self.mem.write_u32(a, 0xE1A0_C00E)?; // mov r12, lr
-        self.mem.write_u32(a + 4, 0xEF00_0000 | slot)?; // svc #slot
-        self.mem.write_u32(a + 8, 0xE12F_FF1C)?; // bx r12
-        self.mem.write_u32(a + 12, 0xE7F0_00F0) // udf #0 (never reached)
+    /// The thunk table shared by this CPU and all its siblings.
+    pub fn table(&self) -> &Arc<ThunkTable> {
+        &self.shared.table
+    }
+
+    /// The instruction encoding at `pc` in the current instruction set (0 if unreadable), and
+    /// whether it is Thumb. A 32-bit Thumb instruction is returned as `hw1 << 16 | hw2`.
+    fn instruction_at(&self, pc: u32) -> (u32, bool) {
+        if self.cpsr() & CPSR_T == 0 {
+            return (self.mem.read_u32(pc).unwrap_or(0), false);
+        }
+        let hw1 = u32::from(self.mem.read_u16(pc).unwrap_or(0));
+        if matches!(hw1 >> 11, 0b11101..=0b11111) {
+            let hw2 = u32::from(self.mem.read_u16(pc.wrapping_add(2)).unwrap_or(0));
+            (hw1 << 16 | hw2, true)
+        } else {
+            (hw1, true)
+        }
     }
 
     /// Set the remaining cycle budget; `run` returns [`Stop::Halted`] when it is used up.
@@ -247,41 +372,37 @@ impl Cpu {
         &self.mem
     }
 
+    /// Exclusive-monitor processor id of this CPU (nested-call children share their parent's).
+    pub fn processor_id(&self) -> usize {
+        self.pid
+    }
+
     // ---------- thunks ----------
 
-    /// Register (or look up) the thunk for `name`; returns its guest address (ARM, bit 0 clear).
-    pub fn register_thunk(&mut self, name: &str, f: ThunkFn) -> Result<u32, CpuError> {
-        if let Some(&slot) = self.by_name.get(name) {
-            self.thunks[slot as usize].f = Some(f);
-            return Ok(THUNK_BASE + slot * THUNK_STRIDE);
-        }
-        let slot = self.thunks.len() as u32;
-        if slot > MAX_THUNKS {
-            return Err(CpuError::TooManyThunks);
-        }
-        self.write_stub(slot)?;
-        self.thunks.push(Thunk { name: name.to_string(), f: Some(f) });
-        self.by_name.insert(name.to_string(), slot);
-        Ok(THUNK_BASE + slot * THUNK_STRIDE)
+    /// Register (or rebind) the serialised thunk for `name`; returns its guest address (ARM,
+    /// bit 0 clear). The table is shared with sibling CPUs, so this takes `&self`.
+    pub fn register_thunk(&self, name: &str, f: ThunkFn) -> Result<u32, CpuError> {
+        self.shared.table.register_thunk(name, f)
+    }
+
+    /// Register (or rebind) a re-entrant thunk (see [`SharedThunkFn`]).
+    pub fn register_shared_thunk(&self, name: &str, f: SharedThunkFn) -> Result<u32, CpuError> {
+        self.shared.table.register_shared_thunk(name, f)
     }
 
     /// Guest address of an already registered thunk.
     pub fn thunk_addr(&self, name: &str) -> Option<u32> {
-        self.by_name.get(name).map(|s| THUNK_BASE + s * THUNK_STRIDE)
+        self.shared.table.thunk_addr(name)
     }
 
     /// Name of the thunk at guest address `addr`, if any.
-    pub fn thunk_name(&self, addr: u32) -> Option<&str> {
-        let off = addr.checked_sub(THUNK_BASE)?;
-        if off % THUNK_STRIDE != 0 {
-            return None;
-        }
-        self.thunks.get((off / THUNK_STRIDE) as usize).map(|t| t.name.as_str())
+    pub fn thunk_name(&self, addr: u32) -> Option<String> {
+        self.shared.table.thunk_name(addr)
     }
 
     /// Number of registered thunks (excluding the return stub).
     pub fn thunk_count(&self) -> usize {
-        self.thunks.len() - 1
+        self.shared.table.thunk_count()
     }
 
     // ---------- registers ----------
@@ -359,16 +480,38 @@ impl Cpu {
         self.set_reg(R_PC, addr & !1);
     }
 
-    /// Drop all translated code.
-    pub fn clear_cache(&mut self) {
-        // SAFETY: valid jit.
-        unsafe { ffi::bhpc_jit_clear_cache(self.jit) };
+    /// Outermost CPU of this nested-call chain.
+    fn root(&mut self) -> &mut Cpu {
+        let mut p: *mut Cpu = self;
+        // SAFETY: `parent` pointers form a chain of live boxed CPUs ending in a null pointer.
+        unsafe {
+            while !(*p).parent.is_null() {
+                p = (*p).parent;
+            }
+            &mut *p
+        }
     }
 
-    /// Invalidate translated code for `[start, start+len)` (cacheflush).
+    /// Drop all translated code (of this CPU's whole nested-call chain).
+    pub fn clear_cache(&mut self) {
+        let mut c = Some(self.root());
+        while let Some(cpu) = c {
+            // SAFETY: valid jit.
+            unsafe { ffi::bhpc_jit_clear_cache(cpu.jit) };
+            c = cpu.child.as_deref_mut();
+        }
+    }
+
+    /// Invalidate translated code for `[start, start+len)` (cacheflush) in this CPU's whole
+    /// nested-call chain. Invalidating a running JIT makes it leave `Run()`; [`Cpu::run`] resumes
+    /// transparently. Other threads' JITs are not touched (call this on each of them).
     pub fn invalidate(&mut self, start: u32, len: u32) {
-        // SAFETY: valid jit.
-        unsafe { ffi::bhpc_jit_invalidate(self.jit, start, len as usize) };
+        let mut c = Some(self.root());
+        while let Some(cpu) = c {
+            // SAFETY: valid jit.
+            unsafe { ffi::bhpc_jit_invalidate(cpu.jit, start, len as usize) };
+            c = cpu.child.as_deref_mut();
+        }
     }
 
     // ---------- thunk argument/return ABI (AAPCS softfp) ----------
@@ -415,13 +558,21 @@ impl Cpu {
     pub fn run(&mut self) -> Stop {
         self.stop = None;
         self.running = true;
-        // SAFETY: valid jit; callbacks use `self` through the raw pointer registered at creation.
-        let halt = unsafe {
-            ffi::bhpc_jit_clear_halt(self.jit);
-            ffi::bhpc_jit_run(self.jit, (self as *mut Cpu).cast())
+        let stop = loop {
+            // SAFETY: valid jit; callbacks use `self` through the raw pointer registered at creation.
+            let halt = unsafe {
+                ffi::bhpc_jit_clear_halt(self.jit);
+                ffi::bhpc_jit_run(self.jit, (self as *mut Cpu).cast())
+            };
+            match self.stop.take() {
+                Some(s) => break s,
+                // A cacheflush inside a thunk only asks the JIT to re-enter with fresh code.
+                None if halt == HALT_CACHE_INVALIDATION => continue,
+                None => break Stop::Halted(halt),
+            }
         };
         self.running = false;
-        self.stop.take().unwrap_or(Stop::Halted(halt))
+        stop
     }
 
     /// Call the guest function at `addr` (bit 0 = Thumb) with word arguments, run it to completion
@@ -443,7 +594,7 @@ impl Cpu {
         on_step: Option<&mut dyn FnMut(&Cpu)>,
     ) -> Result<CallResult, Stop> {
         if self.running {
-            return Err(Stop::Nested);
+            return self.call_nested(addr, args, on_step.is_none());
         }
         let saved_sp = self.sp();
         let saved_lr = self.lr();
@@ -477,6 +628,46 @@ impl Cpu {
         }
     }
 
+    /// Run a guest call from inside a thunk on a child CPU (see the crate docs).
+    fn call_nested(&mut self, addr: u32, args: &[u32], untraced: bool) -> Result<CallResult, Stop> {
+        if !untraced || self.depth >= MAX_NEST_DEPTH {
+            return Err(Stop::Nested);
+        }
+        if self.child.is_none() {
+            let opts = CpuOptions { code_cache_bytes: self.opts.code_cache_bytes.min(CHILD_CODE_CACHE), ..self.opts };
+            let mut child = Self::build(self.shared.clone(), opts, self.pid, false, self.depth + 1);
+            child.parent = self;
+            self.child = Some(child);
+        }
+        let (sp, fpscr, trace, ticks) = (self.sp(), self.fpscr(), self.trace, self.ticks());
+        let counting = self.opts.cycle_counting;
+        let child = self.child.as_deref_mut().expect("child created above");
+        child.set_sp(sp);
+        child.set_fpscr(fpscr);
+        child.trace = trace;
+        if counting {
+            child.set_ticks(ticks);
+        }
+        let res = child.call_with(addr, args, None);
+        if counting {
+            let left = child.ticks();
+            self.set_ticks(left);
+        }
+        res
+    }
+
+    /// Call a guest function from inside a thunk; if it fails, stop this CPU with the same
+    /// reason and return `None`. The usual way for `qsort`-style thunks to call back.
+    pub fn call_or_stop(&mut self, addr: u32, args: &[u32]) -> Option<CallResult> {
+        match self.call(addr, args) {
+            Ok(r) => Some(r),
+            Err(stop) => {
+                self.request_stop(stop);
+                None
+            }
+        }
+    }
+
     fn run_stepping(&mut self, on_step: &mut dyn FnMut(&Cpu)) -> Stop {
         self.stop = None;
         self.running = true;
@@ -501,6 +692,9 @@ impl Drop for Cpu {
     fn drop(&mut self) {
         // SAFETY: freeing the JIT we created, exactly once.
         unsafe { ffi::bhpc_jit_free(self.jit) };
+        if self.owns_pid {
+            self.shared.free_pid(self.pid);
+        }
     }
 }
 
@@ -628,7 +822,7 @@ mod tramp {
         }
         let slot = swi as usize;
         if c.trace {
-            let name = c.thunks.get(slot).map_or("?", |t| t.name.as_str());
+            let name = c.shared.table.name_of_slot(slot).unwrap_or_else(|| "?".into());
             eprintln!(
                 "[thunk] {name}({:#x}, {:#x}, {:#x}, {:#x}) lr={:#x}",
                 c.reg(0),
@@ -638,13 +832,10 @@ mod tramp {
                 c.reg(12)
             );
         }
-        let f = c.thunks.get_mut(slot).and_then(|t| t.f.take());
-        match f {
-            Some(mut f) => {
-                f(c);
-                // Keep a replacement the thunk may have registered for itself.
-                if c.thunks[slot].f.is_none() {
-                    c.thunks[slot].f = Some(f);
+        match c.shared.table.handler(slot) {
+            Some(h) => {
+                if h.invoke(c).is_err() {
+                    c.request_stop(Stop::Nested);
                 }
             }
             None => c.request_stop(Stop::BadSvc(swi)),
@@ -652,7 +843,13 @@ mod tramp {
     }
 
     pub extern "C" fn exception(user: *mut c_void, pc: u32, kind: u32) {
-        cpu(user).request_stop(Stop::Exception { pc, kind });
+        let c = cpu(user);
+        let (word, thumb) = c.instruction_at(pc);
+        c.request_stop(match kind {
+            EXC_UNDEFINED => Stop::Undefined { pc, word, thumb },
+            EXC_UNPREDICTABLE => Stop::Unpredictable { pc, word, thumb },
+            _ => Stop::Exception { pc, kind },
+        });
     }
 
     pub extern "C" fn fallback(user: *mut c_void, pc: u32, _n: usize) {

@@ -9,6 +9,11 @@ pub struct bhpc_jit {
 }
 
 #[repr(C)]
+pub struct bhpc_monitor {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct bhpc_callbacks {
     pub user: *mut c_void,
@@ -30,11 +35,15 @@ pub struct bhpc_callbacks {
 }
 
 extern "C" {
+    pub fn bhpc_monitor_new(processors: usize) -> *mut bhpc_monitor;
+    pub fn bhpc_monitor_free(m: *mut bhpc_monitor);
     pub fn bhpc_jit_new(
         cb: *const bhpc_callbacks,
         fastmem_base: *mut u8,
         code_cache_bytes: usize,
         cycle_counting: i32,
+        monitor: *mut bhpc_monitor,
+        processor_id: usize,
     ) -> *mut bhpc_jit;
     pub fn bhpc_jit_set_ticks(j: *mut bhpc_jit, ticks: u64);
     pub fn bhpc_jit_ticks(j: *mut bhpc_jit) -> u64;

@@ -12,10 +12,16 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn std::io::Write) -> u8 {
+    run_with(args, stdout, stderr, &bench::measure)
+}
+
+type Measure<'a> = &'a dyn Fn(u32) -> Result<bench::ThunkTiming, bhpc_run::RunError>;
+
+fn run_with(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn std::io::Write, measure: Measure) -> u8 {
     match args.first().map(String::as_str) {
         Some("--bench-thunk") => {
             let n = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10_000_000);
-            match bench::measure(n) {
+            match measure(n) {
                 Ok(t) => {
                     let _ = writeln!(
                         stdout,
@@ -106,6 +112,14 @@ mod tests {
     }
 
     #[test]
+    fn bench_failure_is_reported() {
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        let failing = |_: u32| Err(bhpc_run::RunError::NoEntry("bench".into()));
+        assert_eq!(run_with(&s(&["--bench-thunk"]), &mut o, &mut e, &failing), 1);
+        assert!(String::from_utf8(e).unwrap().contains("bhpc-run: module does not export `bench`"));
+    }
+
+    #[test]
     fn missing_file_is_reported() {
         let (mut o, mut e) = (Vec::new(), Vec::new());
         assert_eq!(run(&s(&["/nonexistent/x.so"]), &mut o, &mut e), 2);
@@ -126,12 +140,8 @@ mod tests {
         let trace = std::env::temp_dir().join(format!("bhpc-pc-trace-{}.txt", std::process::id()));
         let (mut o, mut e) = (Vec::new(), Vec::new());
         let t = trace.to_string_lossy().to_string();
-        assert_eq!(
-            run(&s(&[fx, "--trace-pc", &t, "--watchdog", "100000000000"]), &mut o, &mut e),
-            0,
-            "{}",
-            String::from_utf8_lossy(&e)
-        );
+        let code = run(&s(&[fx, "--trace-pc", &t, "--watchdog", "100000000000"]), &mut o, &mut e);
+        assert_eq!((code, String::from_utf8_lossy(&e).into_owned()), (0, String::new()));
         let lines = std::fs::read_to_string(&trace).unwrap().lines().count();
         std::fs::remove_file(&trace).unwrap();
         assert!(lines > 1000);

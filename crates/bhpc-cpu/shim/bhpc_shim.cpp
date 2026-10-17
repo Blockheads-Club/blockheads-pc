@@ -41,18 +41,27 @@ struct Callbacks final : Dynarmic::A32::UserCallbacks {
 
 struct bhpc_jit {
     Callbacks callbacks;
-    Dynarmic::ExclusiveMonitor monitor{1};
     std::unique_ptr<Dynarmic::A32::Jit> jit;
+};
+
+struct bhpc_monitor {
+    explicit bhpc_monitor(size_t n) : monitor(n) {}
+    Dynarmic::ExclusiveMonitor monitor;
 };
 
 extern "C" {
 
-bhpc_jit* bhpc_jit_new(const bhpc_callbacks* cb, uint8_t* fastmem_base, size_t code_cache_bytes, int cycle_counting) {
+bhpc_monitor* bhpc_monitor_new(size_t processors) { return new bhpc_monitor(processors); }
+void bhpc_monitor_free(bhpc_monitor* m) { delete m; }
+
+bhpc_jit* bhpc_jit_new(const bhpc_callbacks* cb, uint8_t* fastmem_base, size_t code_cache_bytes, int cycle_counting,
+                       bhpc_monitor* monitor, size_t processor_id) {
     auto* j = new bhpc_jit();
     j->callbacks.cb = *cb;
     Dynarmic::A32::UserConfig conf;
     conf.callbacks = &j->callbacks;
-    conf.global_monitor = &j->monitor;
+    conf.global_monitor = &monitor->monitor;
+    conf.processor_id = processor_id;
     conf.arch_version = Dynarmic::A32::ArchVersion::v7;
     conf.enable_cycle_counting = cycle_counting != 0;
     conf.code_cache_size = code_cache_bytes;
