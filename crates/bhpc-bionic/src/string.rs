@@ -657,7 +657,7 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testenv::{Env, SCRATCH};
+    use crate::tests_env::{Env, SCRATCH};
     use bhpc_cpu::Stop;
 
     const A: u32 = SCRATCH;

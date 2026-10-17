@@ -1,8 +1,9 @@
 //! Shared host state and its construction.
 
+use crate::sched::{Sched, ThreadRec};
 use crate::{ctype, layout, timefns::HostClock, timefns::SystemClock};
 use bhpc_mem::{GuestHeap, GuestMemory, MemError};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -38,12 +39,30 @@ pub type LogSink = Box<dyn FnMut(&LogRecord) + Send>;
 pub(crate) struct MutexState {
     pub kind: u32,
     pub count: u32,
+    /// Thread id of the holder while `count > 0`.
+    pub owner: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RwState {
     pub readers: u32,
     pub writer: bool,
+}
+
+/// An anonymous or private-file `mmap` region carved out of the guest heap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Mapping {
+    pub len: u32,
+    /// Per page: still mapped (not yet `munmap`ed).
+    pub live: Vec<bool>,
+}
+
+/// Host-side state of an open `FILE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileRec {
+    pub fd: i32,
+    /// Bytes pushed back with `ungetc` (last pushed first).
+    pub unget: Vec<u8>,
 }
 
 pub(crate) struct EnvVar {
@@ -68,6 +87,8 @@ pub struct Config {
     pub cpus: u32,
     pub pid: u32,
     pub uid: u32,
+    /// File-system view of the guest.
+    pub fs: crate::vfs::FsConfig,
     /// Value of `__stack_chk_guard`; random when `None`.
     pub stack_guard: Option<u32>,
 }
@@ -92,6 +113,7 @@ impl Default for Config {
             cpus: 4,
             pid: std::process::id(),
             uid: 10000,
+            fs: crate::vfs::FsConfig::default(),
             stack_guard: None,
         }
     }
@@ -122,6 +144,23 @@ pub struct State {
     pub unimplemented_bound: Vec<String>,
     /// Names of trap thunks that were actually called.
     pub unimplemented_hits: Vec<String>,
+    /// The guest-thread scheduler (baton, blocking, deadlock detection).
+    pub sched: Arc<Sched>,
+    /// Virtual file system and descriptor table.
+    pub vfs: crate::vfs::Vfs,
+    /// Open `FILE`s other than the standard streams, by guest `FILE*`.
+    pub(crate) files: HashMap<u32, FileRec>,
+    /// Open `DIR`s: guest `DIR*` -> descriptor.
+    pub(crate) dirs: HashMap<u32, i32>,
+    /// Threads created by `pthread_create`, by `pthread_t`.
+    pub(crate) threads: HashMap<u32, ThreadRec>,
+    pub(crate) next_tid: u32,
+    /// Thread-specific values: `(tid, key) -> value`.
+    pub(crate) tls: HashMap<(u32, u32), u32>,
+    /// Condition-variable wait queues (tickets) by `pthread_cond_t` address, and the tickets signalled.
+    pub(crate) cond_q: HashMap<u32, VecDeque<u32>>,
+    pub(crate) woken: HashSet<u32>,
+    pub(crate) next_wait: u32,
     pub(crate) data: HashMap<&'static str, u32>,
     pub(crate) errno: u32,
     pub(crate) main_thread: u32,
@@ -136,11 +175,18 @@ pub struct State {
     pub(crate) environ_array: u32,
     pub(crate) strerror: HashMap<u32, u32>,
     pub(crate) rand48: u64,
+    /// Anonymous `mmap` regions handed out from the guest heap: base -> length.
+    pub(crate) mmaps: HashMap<u32, Mapping>,
 }
 
 pub type Shared = Arc<Mutex<State>>;
 
 impl State {
+    /// Number of threads created with `pthread_create` so far.
+    pub fn next_tid_value(&self) -> u32 {
+        self.next_tid
+    }
+
     /// Create the state, allocating the guest-visible data symbols from `heap`.
     pub fn new(mem: Arc<GuestMemory>, mut heap: GuestHeap, cfg: Config) -> Result<Shared, MemError> {
         let mut data = HashMap::new();
@@ -214,6 +260,16 @@ impl State {
             histogram: Vec::new(),
             unimplemented_bound: Vec::new(),
             unimplemented_hits: Vec::new(),
+            sched: Arc::new(Sched::new()),
+            vfs: crate::vfs::Vfs::new(cfg.fs.clone(), cfg.pid),
+            files: HashMap::new(),
+            dirs: HashMap::new(),
+            threads: HashMap::new(),
+            next_tid: 0,
+            tls: HashMap::new(),
+            cond_q: HashMap::new(),
+            woken: HashSet::new(),
+            next_wait: 1,
             data,
             errno,
             main_thread,
@@ -228,6 +284,7 @@ impl State {
             environ_array: 0,
             strerror: HashMap::new(),
             rand48: 0x1234_ABCD_330E,
+            mmaps: HashMap::new(),
         };
         let shared = Arc::new(Mutex::new(st));
         {

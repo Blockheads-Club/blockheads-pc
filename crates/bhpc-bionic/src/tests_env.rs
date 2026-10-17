@@ -93,7 +93,19 @@ impl Env {
         Env::build(16 << 20, f)
     }
 
+    /// An environment whose CPU counts cycles (the watchdog is armed).
+    pub fn counting() -> Env {
+        let opts = CpuOptions { cycle_counting: true, ..CpuOptions::default() };
+        let mut e = Env::build_with(16 << 20, opts, |_| {});
+        e.cpu.set_ticks(1 << 40);
+        e
+    }
+
     fn build(heap: u32, f: impl FnOnce(&mut Config)) -> Env {
+        Env::build_with(heap, CpuOptions::default(), f)
+    }
+
+    fn build_with(heap: u32, opts: CpuOptions, f: impl FnOnce(&mut Config)) -> Env {
         let mem = Arc::new(GuestMemory::new().unwrap());
         let heap = GuestHeap::new(mem.clone(), HEAP_BASE, heap).unwrap();
         mem.map(STACK_TOP - (1 << 20), 1 << 20).unwrap();
@@ -109,7 +121,7 @@ impl Env {
         };
         f(&mut cfg);
         let st = State::new(mem.clone(), heap, cfg).unwrap();
-        let mut cpu = Cpu::with_options(mem, CpuOptions::default()).unwrap();
+        let mut cpu = Cpu::with_options(mem, opts).unwrap();
         cpu.set_sp(STACK_TOP);
         Env { cpu, st, out, err, clock }
     }

@@ -20,14 +20,14 @@ macro_rules! args {
 
 /// Store `e` in the guest's `errno`.
 pub fn set_errno(c: &mut Cpu, st: &Shared, e: u32) {
-    let addr = lock(st).errno;
+    let addr = crate::sched::errno_addr(st);
     // The cell lives in the guest heap, which is always mapped.
     let _ = c.mem().write_u32(addr, e);
 }
 
 /// The guest's current `errno`.
 pub fn get_errno(c: &mut Cpu, st: &Shared) -> u32 {
-    let addr = lock(st).errno;
+    let addr = crate::sched::errno_addr(st);
     c.mem().read_u32(addr).unwrap_or(0)
 }
 
@@ -38,7 +38,7 @@ pub fn fail(c: &mut Cpu, st: &Shared, e: u32) {
 }
 
 fn errno_addr(c: &mut Cpu, st: &Shared) {
-    let a = lock(st).errno;
+    let a = crate::sched::errno_addr(st);
     c.ret_u32(a);
 }
 
@@ -102,6 +102,9 @@ fn getenv(c: &mut Cpu, st: &Shared) {
     let Some(name) = cstr(c, n) else { return };
     let s = lock(st);
     let r = s.env.iter().find(|e| e.name == name).map_or(0, |e| e.base + name.len() as u32 + 1);
+    if s.vfs.trace {
+        eprintln!("[env] {} -> {}", String::from_utf8_lossy(&name), if r == 0 { "unset" } else { "set" });
+    }
     drop(s);
     c.ret_u32(r);
 }
@@ -328,7 +331,7 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
 
 #[cfg(test)]
 mod tests {
-    use crate::testenv::{collecting_sink, Env, SCRATCH};
+    use crate::tests_env::{collecting_sink, Env, SCRATCH};
     use bhpc_cpu::Stop;
 
     const A: u32 = SCRATCH;
@@ -574,5 +577,15 @@ mod tests {
         let tzname = e.data("tzname");
         let p = e.mem().read_u32(tzname + 4).unwrap();
         assert_eq!(e.get_str(p), "UTC");
+    }
+
+    #[test]
+    fn getenv_can_be_traced() {
+        let mut e = Env::new();
+        crate::lock(&e.st).vfs.trace = true;
+        e.put_str(SCRATCH, "ANDROID_ROOT");
+        assert_ne!(e.call("getenv", &[SCRATCH]).r0, 0);
+        e.put_str(SCRATCH, "NO_SUCH_VARIABLE");
+        assert_eq!(e.call("getenv", &[SCRATCH]).r0, 0);
     }
 }

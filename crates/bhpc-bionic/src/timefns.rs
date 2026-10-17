@@ -214,7 +214,7 @@ fn nanosleep(c: &mut Cpu, st: &Shared) {
     if (sec as i32) < 0 || nsec >= 1_000_000_000 {
         return fail(c, st, errno::EINVAL);
     }
-    lock(st).clock.sleep(sec as u64 * 1_000_000_000 + nsec as u64);
+    crate::sched::sleep(c, st, sec as u64 * 1_000_000_000 + nsec as u64);
     if rem != 0 && !(wr32(c, rem + timespec::SEC, 0) && wr32(c, rem + timespec::NSEC, 0)) {
         return;
     }
@@ -223,14 +223,55 @@ fn nanosleep(c: &mut Cpu, st: &Shared) {
 
 fn usleep(c: &mut Cpu, st: &Shared) {
     let us = c.args().u32(c);
-    lock(st).clock.sleep(us as u64 * 1000);
+    crate::sched::sleep(c, st, us as u64 * 1000);
     c.ret_u32(0);
 }
 
 fn sleep(c: &mut Cpu, st: &Shared) {
     let s = c.args().u32(c);
-    lock(st).clock.sleep(s as u64 * 1_000_000_000);
+    crate::sched::sleep(c, st, s as u64 * 1_000_000_000);
     c.ret_u32(0);
+}
+
+/// Read a `struct tm` from guest memory.
+fn read_tm(c: &mut Cpu, at: u32) -> Option<crate::strftime::Tm> {
+    let mut w = [0i32; 9];
+    for (i, slot) in w.iter_mut().enumerate() {
+        *slot = rd32(c, at + 4 * i as u32)? as i32;
+    }
+    let gmtoff = rd32(c, at + tm::GMTOFF)? as i32;
+    let zone_ptr = rd32(c, at + tm::ZONE)?;
+    let zone = if zone_ptr == 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&crate::guest::cstr(c, zone_ptr)?).into_owned()
+    };
+    Some(crate::strftime::Tm {
+        sec: w[0],
+        min: w[1],
+        hour: w[2],
+        mday: w[3],
+        mon: w[4],
+        year: w[5],
+        wday: w[6],
+        yday: w[7],
+        gmtoff,
+        zone,
+    })
+}
+
+/// `strftime(buf, max, format, tm)`: length written (without the NUL), or 0 if it does not fit.
+fn strftime(c: &mut Cpu, _: &Shared) {
+    let mut a = c.args();
+    let (buf, max, fmt, tp) = (a.u32(c), a.u32(c), a.u32(c), a.u32(c));
+    let (Some(f), Some(t)) = (crate::guest::cstr(c, fmt), read_tm(c, tp)) else { return };
+    let out = crate::strftime::format_time(&f, &t);
+    if out.len() as u64 + 1 > u64::from(max) {
+        return c.ret_u32(0);
+    }
+    if crate::guest::wr_cstr(c, buf, &out) {
+        c.ret_u32(out.len() as u32);
+    }
 }
 
 fn tzset(_: &mut Cpu, _: &Shared) {}
@@ -250,12 +291,13 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("usleep", usleep),
     ("sleep", sleep),
     ("tzset", tzset),
+    ("strftime", strftime),
 ];
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testenv::{Env, SCRATCH};
+    use crate::tests_env::{Env, SCRATCH};
 
     #[test]
     fn civil_conversions_round_trip() {
@@ -389,5 +431,39 @@ mod tests {
         assert!(m1 >= 1000);
         assert!(c.cpu_time().0 < 100);
         c.sleep(1000);
+    }
+
+    #[test]
+    fn strftime_formats_a_guest_struct_tm() {
+        let mut e = Env::new();
+        // 2021-03-04 05:06:07 UTC via gmtime_r.
+        e.mem().write_u32(SCRATCH, 1_614_834_367).unwrap();
+        let tmp = SCRATCH + 0x80;
+        e.call("gmtime_r", &[SCRATCH, tmp]);
+        e.put_str(SCRATCH + 0x200, "%Y-%m-%d %H:%M:%S %Z");
+        let n = e.call("strftime", &[SCRATCH + 0x300, 64, SCRATCH + 0x200, tmp]).r0;
+        assert_eq!(n, 23);
+        assert_eq!(e.get_str(SCRATCH + 0x300), "2021-03-04 05:06:07 UTC");
+        // Exactly fitting and too small buffers.
+        assert_eq!(e.call("strftime", &[SCRATCH + 0x300, 24, SCRATCH + 0x200, tmp]).r0, 23);
+        assert_eq!(e.call("strftime", &[SCRATCH + 0x300, 23, SCRATCH + 0x200, tmp]).r0, 0);
+        assert_eq!(e.call("strftime", &[SCRATCH + 0x300, 0, SCRATCH + 0x200, tmp]).r0, 0);
+        // A tm without a zone name.
+        e.mem().write_u32(tmp + crate::layout::tm::ZONE, 0).unwrap();
+        e.put_str(SCRATCH + 0x200, "[%Z]");
+        e.call("strftime", &[SCRATCH + 0x300, 64, SCRATCH + 0x200, tmp]);
+        assert_eq!(e.get_str(SCRATCH + 0x300), "[]");
+        // Faults.
+        assert!(matches!(e.try_call("strftime", &[0x10, 64, SCRATCH + 0x200, tmp]), Err(bhpc_cpu::Stop::Fault(_))));
+        assert!(matches!(e.try_call("strftime", &[SCRATCH + 0x300, 64, 0x10, tmp]), Err(bhpc_cpu::Stop::Fault(_))));
+        assert!(matches!(
+            e.try_call("strftime", &[SCRATCH + 0x300, 64, SCRATCH + 0x200, 0x10]),
+            Err(bhpc_cpu::Stop::Fault(_))
+        ));
+        e.mem().write_u32(tmp + crate::layout::tm::ZONE, 0x10).unwrap();
+        assert!(matches!(
+            e.try_call("strftime", &[SCRATCH + 0x300, 64, SCRATCH + 0x200, tmp]),
+            Err(bhpc_cpu::Stop::Fault(_))
+        ));
     }
 }

@@ -107,7 +107,7 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testenv::Env;
+    use crate::tests_env::Env;
 
     #[test]
     fn table_shape_and_samples() {

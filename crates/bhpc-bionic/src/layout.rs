@@ -37,6 +37,9 @@ pub mod file {
     pub const SRD: u16 = 0x0004;
     /// `__SWR`: open for writing.
     pub const SWR: u16 = 0x0008;
+    pub const SRW: u16 = 0x0010;
+    pub const SEOF: u16 = 0x0020;
+    pub const SERR: u16 = 0x0040;
 }
 
 /// `struct tm` (44 bytes: nine ints, `tm_gmtoff`, `tm_zone`).
@@ -120,6 +123,14 @@ pub const PAGE_SIZE: u32 = 4096;
 pub mod errno {
     pub const EPERM: u32 = 1;
     pub const ENOENT: u32 = 2;
+    pub const EINTR: u32 = 4;
+    pub const ECHILD: u32 = 10;
+    pub const EACCES: u32 = 13;
+    pub const ENODEV: u32 = 19;
+    pub const ENOTTY: u32 = 25;
+    pub const ESPIPE: u32 = 29;
+    pub const ENOSYS: u32 = 38;
+    pub const EAFNOSUPPORT: u32 = 97;
     pub const ESRCH: u32 = 3;
     pub const EBADF: u32 = 9;
     pub const EAGAIN: u32 = 11;

@@ -1,25 +1,24 @@
-//! `<pthread.h>` for a single guest thread. Bionic's mutex, condition variable, once control and
+//! `<pthread.h>` on top of the cooperative scheduler in [`crate::sched`]. Bionic's mutex, condition variable, once control and
 //! attribute objects are one 32-bit word each (`pthread_rwlock_t` is 40 bytes), so the host keeps
 //! the real state in side tables keyed by the object's guest address and only maintains the word
 //! the static initialisers produce (the mutex type lives in bits 14..15).
 //!
-//! With one thread, any call that would block forever stops the guest with a clear message instead.
+//! A call that would block forever (every guest thread blocked) stops the guest with a clear message
+//! instead of hanging the host.
 
 use crate::guest::{rd32, wr, wr32};
 use crate::layout::{attr, errno, sync, SIGSET_SIZE};
+use crate::sched::{self, block, ctx, notify, WaitEnd};
 use crate::state::{MutexState, RwState};
 use crate::{builtin, lock, Impl, Shared};
 use bhpc_cpu::{Cpu, Stop};
+use std::time::{Duration, Instant};
 
 macro_rules! args {
     ($c:expr; $($n:ident),+) => {
         let mut a = $c.args();
         $(let $n = a.u32($c);)+
     };
-}
-
-fn deadlock(c: &mut Cpu, what: &str) {
-    c.request_stop(Stop::Host(format!("{what} would block forever (single guest thread)")));
 }
 
 // ---------- once ----------
@@ -31,7 +30,7 @@ fn once_return(c: &mut Cpu, st: &Shared) -> u32 {
         return known;
     }
     let f = builtin("__pthread_once_return", st).expect("built-in");
-    let addr = c.register_thunk("__pthread_once_return", f).expect("thunk page has room");
+    let addr = c.register_shared_thunk("__pthread_once_return", f).expect("thunk page has room");
     lock(st).once_return = addr;
     addr
 }
@@ -82,19 +81,27 @@ fn key_create(c: &mut Cpu, st: &Shared) {
 
 fn key_delete(c: &mut Cpu, st: &Shared) {
     let k = c.args().u32(c);
-    let known = lock(st).keys.remove(&k).is_some();
+    let mut s = lock(st);
+    let known = s.keys.remove(&k).is_some();
+    s.tls.retain(|(_, key), _| *key != k);
+    drop(s);
     c.ret_u32(if known { 0 } else { errno::EINVAL });
 }
 
 fn getspecific(c: &mut Cpu, st: &Shared) {
     let k = c.args().u32(c);
-    let v = lock(st).keys.get(&k).map_or(0, |e| e.0);
+    let v = lock(st).tls.get(&(ctx().tid, k)).copied().unwrap_or(0);
     c.ret_u32(v);
 }
 
 fn setspecific(c: &mut Cpu, st: &Shared) {
     args!(c; k, v);
-    let ok = lock(st).keys.get_mut(&k).map(|e| e.0 = v).is_some();
+    let mut s = lock(st);
+    let ok = s.keys.contains_key(&k);
+    if ok {
+        s.tls.insert((ctx().tid, k), v);
+    }
+    drop(s);
     c.ret_u32(if ok { 0 } else { errno::EINVAL });
 }
 
@@ -105,7 +112,7 @@ fn mutex_entry(c: &mut Cpu, st: &Shared, m: u32) -> Option<MutexState> {
         return Some(*e);
     }
     let word = rd32(c, m)?;
-    let e = MutexState { kind: (word >> sync::MUTEX_TYPE_SHIFT) & 3, count: 0 };
+    let e = MutexState { kind: (word >> sync::MUTEX_TYPE_SHIFT) & 3, count: 0, owner: 0 };
     lock(st).mutexes.insert(m, e);
     Some(e)
 }
@@ -121,7 +128,7 @@ fn mutex_init(c: &mut Cpu, st: &Shared) {
         }
     };
     if wr32(c, m, kind << sync::MUTEX_TYPE_SHIFT) {
-        lock(st).mutexes.insert(m, MutexState { kind, count: 0 });
+        lock(st).mutexes.insert(m, MutexState { kind, count: 0, owner: 0 });
         c.ret_u32(0);
     }
 }
@@ -132,30 +139,39 @@ fn mutex_destroy(c: &mut Cpu, st: &Shared) {
     c.ret_u32(0);
 }
 
+/// Take the mutex for the calling thread, blocking while another thread (or, for a normal mutex, the
+/// caller itself) holds it. `None` when the guest was stopped (deadlock).
+fn acquire_mutex(c: &mut Cpu, st: &Shared, m: u32, count: u32) -> Option<u32> {
+    let me = ctx().tid;
+    loop {
+        let e = mutex_entry(c, st, m)?;
+        let mine = e.count > 0 && e.owner == me;
+        if e.count == 0 || (mine && e.kind == sync::MUTEX_RECURSIVE) {
+            lock(st).mutexes.insert(m, MutexState { count: e.count + count, owner: me, ..e });
+            return Some(0);
+        }
+        if mine && e.kind == sync::MUTEX_ERRORCHECK {
+            return Some(errno::EDEADLK);
+        }
+        block(c, st, None, "pthread_mutex_lock")?;
+    }
+}
+
 fn mutex_lock(c: &mut Cpu, st: &Shared) {
     let m = c.args().u32(c);
-    let Some(e) = mutex_entry(c, st, m) else { return };
-    let r = match (e.kind, e.count) {
-        (sync::MUTEX_RECURSIVE, _) | (_, 0) => {
-            lock(st).mutexes.insert(m, MutexState { count: e.count + 1, ..e });
-            0
-        }
-        (sync::MUTEX_ERRORCHECK, _) => errno::EDEADLK,
-        _ => {
-            deadlock(c, "pthread_mutex_lock on a locked mutex");
-            errno::EDEADLK
-        }
-    };
-    c.ret_u32(r);
+    if let Some(r) = acquire_mutex(c, st, m, 1) {
+        c.ret_u32(r);
+    }
 }
 
 fn mutex_trylock(c: &mut Cpu, st: &Shared) {
     let m = c.args().u32(c);
     let Some(e) = mutex_entry(c, st, m) else { return };
-    if e.count > 0 && e.kind != sync::MUTEX_RECURSIVE {
+    let me = ctx().tid;
+    if e.count > 0 && !(e.kind == sync::MUTEX_RECURSIVE && e.owner == me) {
         return c.ret_u32(errno::EBUSY);
     }
-    lock(st).mutexes.insert(m, MutexState { count: e.count + 1, ..e });
+    lock(st).mutexes.insert(m, MutexState { count: e.count + 1, owner: me, ..e });
     c.ret_u32(0);
 }
 
@@ -166,8 +182,14 @@ fn mutex_unlock(c: &mut Cpu, st: &Shared) {
         // Unlocking an unlocked normal mutex is tolerated; the checking kinds report it.
         return c.ret_u32(if e.kind == sync::MUTEX_NORMAL { 0 } else { errno::EPERM });
     }
+    if e.kind != sync::MUTEX_NORMAL && e.owner != ctx().tid {
+        return c.ret_u32(errno::EPERM);
+    }
     let count = if e.kind == sync::MUTEX_RECURSIVE { e.count - 1 } else { 0 };
     lock(st).mutexes.insert(m, MutexState { count, ..e });
+    if count == 0 {
+        notify(st);
+    }
     c.ret_u32(0);
 }
 
@@ -209,14 +231,104 @@ fn cond_init(c: &mut Cpu, _: &Shared) {
     }
 }
 
-fn cond_wait(c: &mut Cpu, _: &Shared) {
-    deadlock(c, "pthread_cond_wait");
-    c.ret_u32(errno::EDEADLK);
+/// Wait on `cv`, releasing `m` meanwhile. Returns the result code, or `None` if the guest was stopped.
+fn cond_wait_common(c: &mut Cpu, st: &Shared, cv: u32, m: u32, deadline: Option<Instant>) -> Option<u32> {
+    let e = mutex_entry(c, st, m)?;
+    let ticket = {
+        let mut s = lock(st);
+        let t = s.next_wait;
+        s.next_wait += 1;
+        s.cond_q.entry(cv).or_default().push_back(t);
+        s.mutexes.insert(m, MutexState { count: 0, ..e });
+        t
+    };
+    notify(st);
+    let result = loop {
+        if lock(st).woken.remove(&ticket) {
+            break 0;
+        }
+        if block(c, st, deadline, "pthread_cond_wait")? == WaitEnd::TimedOut {
+            let mut s = lock(st);
+            s.cond_q.entry(cv).or_default().retain(|t| *t != ticket);
+            // A signal that raced with the timeout still counts as a wake-up.
+            break if s.woken.remove(&ticket) { 0 } else { errno::ETIMEDOUT };
+        }
+    };
+    acquire_mutex(c, st, m, e.count.max(1))?;
+    Some(result)
 }
 
-/// Timed waits time out immediately: nobody can signal the condition.
-fn cond_timedwait(c: &mut Cpu, _: &Shared) {
-    c.ret_u32(errno::ETIMEDOUT);
+fn cond_wait(c: &mut Cpu, st: &Shared) {
+    args!(c; cv, m);
+    if let Some(r) = cond_wait_common(c, st, cv, m, None) {
+        c.ret_u32(r);
+    }
+}
+
+/// Which clock a timed wait's timespec is relative to.
+#[derive(Clone, Copy)]
+enum Timeout {
+    /// Absolute `CLOCK_REALTIME`.
+    Realtime,
+    /// Absolute `CLOCK_MONOTONIC`.
+    Monotonic,
+    /// Relative to now.
+    Relative,
+}
+
+fn cond_timedwait_with(c: &mut Cpu, st: &Shared, kind: Timeout) {
+    args!(c; cv, m, ts);
+    let (Some(sec), Some(nsec)) = (rd32(c, ts), rd32(c, ts + 4)) else { return };
+    if nsec >= 1_000_000_000 {
+        return c.ret_u32(errno::EINVAL);
+    }
+    let want = u64::from(sec) * 1_000_000_000 + u64::from(nsec);
+    let remaining = match kind {
+        Timeout::Relative => want,
+        Timeout::Realtime | Timeout::Monotonic => {
+            let mut s = lock(st);
+            let (now_s, now_ns) =
+                if matches!(kind, Timeout::Realtime) { s.clock.realtime() } else { s.clock.monotonic() };
+            want.saturating_sub((now_s.max(0) as u64) * 1_000_000_000 + u64::from(now_ns))
+        }
+    };
+    let deadline = Instant::now() + Duration::from_nanos(remaining);
+    if let Some(r) = cond_wait_common(c, st, cv, m, Some(deadline)) {
+        c.ret_u32(r);
+    }
+}
+
+fn cond_timedwait(c: &mut Cpu, st: &Shared) {
+    cond_timedwait_with(c, st, Timeout::Realtime);
+}
+fn cond_timedwait_monotonic(c: &mut Cpu, st: &Shared) {
+    cond_timedwait_with(c, st, Timeout::Monotonic);
+}
+fn cond_timedwait_relative(c: &mut Cpu, st: &Shared) {
+    cond_timedwait_with(c, st, Timeout::Relative);
+}
+
+/// Wake `n` waiters of `cv` (`usize::MAX` = all).
+fn wake(st: &Shared, cv: u32, n: usize) {
+    let mut s = lock(st);
+    for _ in 0..n {
+        let Some(t) = s.cond_q.get_mut(&cv).and_then(std::collections::VecDeque::pop_front) else { break };
+        s.woken.insert(t);
+    }
+    drop(s);
+    notify(st);
+}
+
+fn cond_signal(c: &mut Cpu, st: &Shared) {
+    let cv = c.args().u32(c);
+    wake(st, cv, 1);
+    c.ret_u32(0);
+}
+
+fn cond_broadcast(c: &mut Cpu, st: &Shared) {
+    let cv = c.args().u32(c);
+    wake(st, cv, usize::MAX);
+    c.ret_u32(0);
 }
 
 // ---------- read/write locks ----------
@@ -245,13 +357,16 @@ fn rw_set(st: &Shared, l: u32, v: RwState) {
 
 fn rwlock_rdlock(c: &mut Cpu, st: &Shared) {
     let l = c.args().u32(c);
-    let s = rw_state(st, l);
-    if s.writer {
-        deadlock(c, "pthread_rwlock_rdlock");
-        return c.ret_u32(errno::EDEADLK);
+    loop {
+        let s = rw_state(st, l);
+        if !s.writer {
+            rw_set(st, l, RwState { readers: s.readers + 1, ..s });
+            return c.ret_u32(0);
+        }
+        if block(c, st, None, "pthread_rwlock_rdlock").is_none() {
+            return;
+        }
     }
-    rw_set(st, l, RwState { readers: s.readers + 1, ..s });
-    c.ret_u32(0);
 }
 
 fn rwlock_tryrdlock(c: &mut Cpu, st: &Shared) {
@@ -266,13 +381,16 @@ fn rwlock_tryrdlock(c: &mut Cpu, st: &Shared) {
 
 fn rwlock_wrlock(c: &mut Cpu, st: &Shared) {
     let l = c.args().u32(c);
-    let s = rw_state(st, l);
-    if s.writer || s.readers > 0 {
-        deadlock(c, "pthread_rwlock_wrlock");
-        return c.ret_u32(errno::EDEADLK);
+    loop {
+        let s = rw_state(st, l);
+        if !s.writer && s.readers == 0 {
+            rw_set(st, l, RwState { readers: 0, writer: true });
+            return c.ret_u32(0);
+        }
+        if block(c, st, None, "pthread_rwlock_wrlock").is_none() {
+            return;
+        }
     }
-    rw_set(st, l, RwState { readers: 0, writer: true });
-    c.ret_u32(0);
 }
 
 fn rwlock_trywrlock(c: &mut Cpu, st: &Shared) {
@@ -295,13 +413,14 @@ fn rwlock_unlock(c: &mut Cpu, st: &Shared) {
     } else {
         return c.ret_u32(errno::EPERM);
     }
+    notify(st);
     c.ret_u32(0);
 }
 
 // ---------- thread identity ----------
 
 fn pthread_self(c: &mut Cpu, st: &Shared) {
-    let t = lock(st).main_thread;
+    let t = sched::self_handle(st);
     c.ret_u32(t);
 }
 
@@ -310,9 +429,95 @@ fn pthread_equal(c: &mut Cpu, _: &Shared) {
     c.ret_u32((a == b) as u32);
 }
 
-/// Joining or detaching anything but ourselves finds no such thread.
-fn no_such_thread(c: &mut Cpu, _: &Shared) {
-    c.ret_u32(errno::ESRCH);
+/// `pthread_create(&t, attr, start, arg)`: a new guest thread on its own CPU, scheduled cooperatively.
+fn pthread_create(c: &mut Cpu, st: &Shared) {
+    args!(c; out, attr_ptr, start, arg);
+    if start == 0 {
+        return c.ret_u32(errno::EINVAL);
+    }
+    let (stack, detached) = if attr_ptr == 0 {
+        (attr::DEFAULT_STACK_SIZE, false)
+    } else {
+        let (Some(flags), Some(size)) = (rd32(c, attr_ptr + attr::FLAGS), rd32(c, attr_ptr + attr::STACK_SIZE)) else {
+            return;
+        };
+        (size, flags & attr::CREATE_DETACHED != 0)
+    };
+    match sched::spawn(c, st, start, arg, stack, detached) {
+        Ok(handle) => {
+            if wr32(c, out, handle) {
+                c.ret_u32(0);
+            }
+        }
+        Err(e) => c.ret_u32(e),
+    }
+}
+
+/// `pthread_join`: wait for the thread to finish and collect its return value.
+fn pthread_join(c: &mut Cpu, st: &Shared) {
+    args!(c; t, ret);
+    if t == sched::self_handle(st) {
+        return c.ret_u32(errno::EDEADLK);
+    }
+    loop {
+        let rec = lock(st).threads.get(&t).cloned();
+        let Some(rec) = rec else { return c.ret_u32(errno::ESRCH) };
+        if rec.detached {
+            return c.ret_u32(errno::EINVAL);
+        }
+        if rec.finished {
+            if ret != 0 && !wr32(c, ret, rec.retval) {
+                return;
+            }
+            let mut s = lock(st);
+            s.threads.remove(&t);
+            s.heap.free(t);
+            drop(s);
+            return c.ret_u32(0);
+        }
+        if block(c, st, None, "pthread_join").is_none() {
+            return;
+        }
+    }
+}
+
+/// `pthread_detach`: nobody will join; a finished thread is reaped at once.
+fn pthread_detach(c: &mut Cpu, st: &Shared) {
+    let t = c.args().u32(c);
+    let mut s = lock(st);
+    let r = match s.threads.get_mut(&t) {
+        None => errno::ESRCH,
+        Some(rec) if rec.detached => errno::EINVAL,
+        Some(rec) => {
+            rec.detached = true;
+            if rec.finished {
+                s.threads.remove(&t);
+                s.heap.free(t);
+            }
+            0
+        }
+    };
+    drop(s);
+    c.ret_u32(r);
+}
+
+/// `pthread_exit(value)`: end the calling thread.
+fn pthread_exit(c: &mut Cpu, st: &Shared) {
+    let value = c.args().u32(c);
+    let handle = ctx().handle;
+    if handle == 0 {
+        return c.request_stop(Stop::Host("the main thread called pthread_exit".into()));
+    }
+    if let Some(t) = lock(st).threads.get_mut(&handle) {
+        t.retval = value;
+    }
+    c.request_stop(Stop::Host(sched::EXIT_MARK.into()));
+}
+
+fn sched_yield(c: &mut Cpu, st: &Shared) {
+    let sched = lock(st).sched.clone();
+    sched.yield_now();
+    c.ret_u32(0);
 }
 
 fn pthread_sigmask(c: &mut Cpu, _: &Shared) {
@@ -460,12 +665,12 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("pthread_mutexattr_setpshared", ok_zero),
     ("pthread_cond_init", cond_init),
     ("pthread_cond_destroy", ok_zero),
-    ("pthread_cond_signal", ok_zero),
-    ("pthread_cond_broadcast", ok_zero),
+    ("pthread_cond_signal", cond_signal),
+    ("pthread_cond_broadcast", cond_broadcast),
     ("pthread_cond_wait", cond_wait),
     ("pthread_cond_timedwait", cond_timedwait),
-    ("pthread_cond_timedwait_relative_np", cond_timedwait),
-    ("pthread_cond_timedwait_monotonic", cond_timedwait),
+    ("pthread_cond_timedwait_relative_np", cond_timedwait_relative),
+    ("pthread_cond_timedwait_monotonic", cond_timedwait_monotonic),
     ("pthread_condattr_init", mutexattr_init),
     ("pthread_condattr_destroy", ok_zero),
     ("pthread_condattr_setpshared", ok_zero),
@@ -478,11 +683,13 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("pthread_rwlock_unlock", rwlock_unlock),
     ("pthread_self", pthread_self),
     ("pthread_equal", pthread_equal),
-    ("pthread_join", no_such_thread),
-    ("pthread_detach", no_such_thread),
+    ("pthread_join", pthread_join),
+    ("pthread_create", pthread_create),
+    ("pthread_exit", pthread_exit),
+    ("pthread_detach", pthread_detach),
     ("pthread_kill", ok_zero),
     ("pthread_sigmask", pthread_sigmask),
-    ("sched_yield", ok_zero),
+    ("sched_yield", sched_yield),
     ("pthread_attr_init", attr_init),
     ("pthread_attr_destroy", ok_zero),
     ("pthread_attr_getdetachstate", attr_getdetachstate),
@@ -505,7 +712,7 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
 #[cfg(test)]
 mod tests {
     use crate::layout::attr;
-    use crate::testenv::{Env, SCRATCH};
+    use crate::tests_env::{Env, SCRATCH};
     use bhpc_cpu::Stop;
 
     const M: u32 = SCRATCH + 0x100;
@@ -583,7 +790,7 @@ mod tests {
         assert_eq!(e.call("pthread_mutex_unlock", &[M]).r0, 0, "unlocking an unlocked normal mutex is tolerated");
         assert_eq!(e.call("pthread_mutex_lock", &[M]).r0, 0);
         let r = e.try_call("pthread_mutex_lock", &[M]);
-        assert!(matches!(r, Err(Stop::Host(ref m)) if m.contains("block forever")), "{r:?}");
+        assert!(matches!(r, Err(Stop::Host(ref m)) if m.contains("deadlock")), "{r:?}");
         assert_eq!(e.call("pthread_mutex_destroy", &[M]).r0, 0);
         assert_eq!(e.call("pthread_mutex_lock", &[M]).r0, 0, "destroy forgets the lock state");
         for f in ["pthread_mutex_lock", "pthread_mutex_trylock", "pthread_mutex_unlock"] {
@@ -698,7 +905,7 @@ mod tests {
         assert_eq!(e.mem().read_bytes(me, 256).unwrap().len(), 256, "the handle points at readable memory");
         assert_eq!(e.call("pthread_equal", &[me, me]).r0, 1);
         assert_eq!(e.call("pthread_equal", &[me, 5]).r0, 0);
-        assert_eq!(e.call("pthread_join", &[me, 0]).r0, 3);
+        assert_eq!(e.call("pthread_join", &[me, 0]).r0, 35, "joining yourself would deadlock");
         assert_eq!(e.call("pthread_detach", &[me]).r0, 3);
         assert_eq!(e.call("pthread_kill", &[me, 0]).r0, 0);
         assert_eq!(e.call("sched_yield", &[]).r0, 0);

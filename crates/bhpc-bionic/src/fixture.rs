@@ -51,7 +51,7 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
 #[cfg(test)]
 mod tests {
     use crate::state::ExidxRange;
-    use crate::testenv::{Env, SCRATCH};
+    use crate::tests_env::{Env, SCRATCH};
 
     #[test]
     fn check_hypot_mix_and_nop() {

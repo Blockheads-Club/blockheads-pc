@@ -18,20 +18,25 @@ pub mod fmt;
 pub mod guest;
 pub mod heap;
 pub mod layout;
+pub mod libm;
 pub mod misc;
 pub mod pthread;
+pub mod sched;
 pub mod state;
 pub mod stdio;
+pub mod strftime;
 pub mod string;
+pub mod sys;
 pub mod timefns;
+pub mod vfs;
 
 #[cfg(test)]
-pub(crate) mod testenv;
+pub(crate) mod tests_env;
 
 pub use state::{new_state, AtExit, Config, ExidxRange, LogRecord, Shared, State};
 pub use timefns::{HostClock, SystemClock};
 
-use bhpc_cpu::{Cpu, Stop, ThunkFn};
+use bhpc_cpu::{Cpu, SharedThunkFn, Stop};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, MutexGuard, OnceLock, PoisonError};
@@ -44,8 +49,8 @@ pub fn lock(st: &Shared) -> MutexGuard<'_, State> {
     st.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn tables() -> [&'static [(&'static str, Impl)]; 8] {
-    [
+fn tables() -> Vec<&'static [(&'static str, Impl)]> {
+    let mut v = vec![
         string::TABLE,
         heap::TABLE,
         stdio::TABLE,
@@ -54,7 +59,10 @@ fn tables() -> [&'static [(&'static str, Impl)]; 8] {
         misc::TABLE,
         ctype::TABLE,
         fixture::TABLE,
-    ]
+        libm::TABLE,
+    ];
+    v.extend(sys::tables());
+    v
 }
 
 fn registry() -> &'static HashMap<&'static str, Impl> {
@@ -83,21 +91,21 @@ pub const DATA_SYMBOLS: &[&str] = &[
 ];
 
 /// The built-in host function for `name`, wrapped so calls are counted in the thunk histogram.
-pub fn builtin(name: &str, st: &Shared) -> Option<ThunkFn> {
+pub fn builtin(name: &str, st: &Shared) -> Option<SharedThunkFn> {
     let f = *registry().get(name)?;
     let counter = Arc::new(AtomicU64::new(0));
     lock(st).histogram.push((name.to_string(), counter.clone()));
     let st = st.clone();
-    Some(Box::new(move |c: &mut Cpu| {
+    Some(Arc::new(move |c: &mut Cpu| {
         counter.fetch_add(1, Ordering::Relaxed);
         f(c, &st)
     }))
 }
 
 /// A thunk that records the call and stops the guest loudly: bound to every unknown import.
-fn trap(name: &str, st: &Shared) -> ThunkFn {
+fn trap(name: &str, st: &Shared) -> SharedThunkFn {
     let (name, st) = (name.to_string(), st.clone());
-    Box::new(move |c: &mut Cpu| {
+    Arc::new(move |c: &mut Cpu| {
         lock(&st).unimplemented_hits.push(name.clone());
         c.request_stop(Stop::Host(format!("unimplemented import {name}")));
     })
@@ -117,7 +125,7 @@ pub fn resolve(cpu: &mut Cpu, st: &Shared, name: &str) -> Option<u32> {
         lock(st).unimplemented_bound.push(name.to_string());
         trap(name, st)
     });
-    cpu.register_thunk(name, f).ok()
+    cpu.register_shared_thunk(name, f).ok()
 }
 
 /// Pre-bind every built-in function (useful to fill the thunk table up front). Returns the count.
@@ -144,8 +152,15 @@ impl<'a> Hle<'a> {
     }
 }
 
+/// Imports the libraries declare weak and test against NULL before use (Apportable's Java-side hook).
+/// The host leaves them unresolved so the linker binds weak references to 0.
+pub const WEAK_NULL: &[&str] = &["__load_bridge"];
+
 impl bhpc_loader::HostSymbols for Hle<'_> {
     fn resolve(&mut self, name: &str) -> Option<u32> {
+        if WEAK_NULL.contains(&name) {
+            return None;
+        }
         resolve(self.cpu, &self.st, name)
     }
 }
@@ -153,7 +168,7 @@ impl bhpc_loader::HostSymbols for Hle<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testenv::{Env, HEAP_BASE, SCRATCH};
+    use crate::tests_env::{Env, HEAP_BASE, SCRATCH};
     use bhpc_loader::HostSymbols;
 
     #[test]
@@ -183,12 +198,12 @@ mod tests {
         assert_eq!(e.cpu.thunk_count(), 0, "data symbols are not thunks");
         let m1 = e.addr("malloc");
         assert_eq!(e.addr("malloc"), m1, "thunks are created once");
-        let f = e.addr("pthread_create");
-        assert_eq!(e.cpu.call(f, &[]), Err(Stop::Host("unimplemented import pthread_create".into())));
+        let f = e.addr("no_such_libc_function");
+        assert_eq!(e.cpu.call(f, &[]), Err(Stop::Host("unimplemented import no_such_libc_function".into())));
         let _ = e.cpu.call(f, &[]);
         let s = lock(&e.st);
-        assert_eq!(s.unimplemented_bound, ["pthread_create"]);
-        assert_eq!(s.unimplemented_hits, ["pthread_create", "pthread_create"]);
+        assert_eq!(s.unimplemented_bound, ["no_such_libc_function"]);
+        assert_eq!(s.unimplemented_hits, ["no_such_libc_function", "no_such_libc_function"]);
     }
 
     #[test]
@@ -213,6 +228,7 @@ mod tests {
         let a = h.resolve("strlen").unwrap();
         assert_eq!(h.resolve("strlen"), Some(a));
         assert!(h.resolve("__sF").is_some());
+        assert_eq!(h.resolve("__load_bridge"), None, "weak hooks stay NULL");
     }
 
     #[test]
@@ -243,7 +259,7 @@ mod tests {
         // Compatibility constructor: custom stdout, everything else default.
         let mem = Arc::new(bhpc_mem::GuestMemory::new().unwrap());
         let heap = bhpc_mem::GuestHeap::new(mem.clone(), HEAP_BASE, 1 << 20).unwrap();
-        let out = crate::testenv::Buf::default();
+        let out = crate::tests_env::Buf::default();
         let st = new_state(mem.clone(), heap, Box::new(out.clone())).unwrap();
         {
             let mut s = lock(&st);
