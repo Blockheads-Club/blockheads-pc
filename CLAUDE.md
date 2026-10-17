@@ -22,3 +22,25 @@ Umbrella rules: `../AGENTS.md`.
 - `strex` needs the `MemoryWriteExclusive*` callbacks; without them every store-exclusive fails and ARM spinlock
   loops (libc++abi refcounts) hang forever.
 - Debug aids: `--trace-thunks`, `--watchdog CYCLES` (reports pc on expiry), `--trace-pc FILE` (single-step trace).
+
+## Gotchas learned in M1 bring-up
+- `bhpc-run --apk <apk> --init-only [--data-dir D] [--force] [-v] [--trace-thunks] [--trace-fs] [--trace-jni]
+  [--trace-pc FILE] [--watchdog CYCLES]` loads the 25 libs, runs every constructor and prints the thunk histogram;
+  see `docs/m1/bringup-round1.md`. The real-APK smoke test is ignored by default:
+  `BHPC_APK=... cargo test -p bhpc-run --test smoke -- --ignored --nocapture`.
+- Stop registers (`Cpu::stop_regs`) are only exact for stops at block boundaries (thunks, exceptions). For a
+  guest fault mid-block use `--trace-pc` (single-step) and read the last lines.
+- dynarmic translates a *block* per entry and rescans it for every conditional instruction: a long run of
+  conditional instructions is quadratic. The shim therefore stops a block after 256 instructions and turns an
+  all-zero instruction word (`andeq r0,r0,r0`, i.e. a jump into zeroed memory) into an undefined-instruction
+  stop. Without that, a jump into bss hangs the host in the translator instead of stopping.
+- Cycle counting makes `b .` uninterruptible by `HaltExecution` (LinkBlock only checks the cycle budget):
+  use the per-call cycle budget (`--watchdog`) as the way to stop runaway guests.
+- A panic inside a thunk cannot unwind through the JIT frames: it aborts the process ("failed to initiate
+  panic"). Thunks must not `unwrap()` on guest-controlled values; tests that need a failing worker request a stop.
+- Guest threads are real host threads but run one at a time (baton in `bhpc-bionic/src/sched.rs`); every host
+  function must be a *shared* thunk (they all are via `bhpc_bionic::builtin`). Blocking calls go through
+  `sched::block`, never through `std::sync` waits while holding the State lock.
+- The Java-side loader is emulated in `bhpc-run/src/apkrun.rs`: environment variables come from
+  `FsConfig::env`, and after each library's constructors `JNI_OnLoad(vm)` and (libv only) `libv_init` run.
+- Never `lock(st)` twice in one expression/`match` scrutinee (the fake JNI deadlocked once that way).

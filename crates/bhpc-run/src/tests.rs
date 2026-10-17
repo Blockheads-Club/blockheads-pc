@@ -93,6 +93,8 @@ fn run_error_display_and_conversions() {
         MemError::OutOfSpace.into(),
         CpuError::TooManyThunks.into(),
         LoadError::Truncated.into(),
+        bhpc_loader::apk::ApkError::NotZip.into(),
+        bhpc_jni::JniError::OutOfMemory.into(),
         RunError::NoEntry("e".into()),
         RunError::Guest(Stop::Nested),
         RunError::Watchdog { pc: 0x10, lr: 0x20 },
@@ -102,9 +104,11 @@ fn run_error_display_and_conversions() {
     assert!(text[1].contains("exhausted"));
     assert!(text[2].contains("full"));
     assert!(text[3].starts_with("load:"));
-    assert!(text[4].contains("does not export `e`"));
-    assert!(text[5].contains("guest stopped"));
-    assert!(text[6].contains("0x00000010") && text[6].contains("0x00000020"));
+    assert_eq!(text[4], "not a zip/APK file");
+    assert_eq!(text[5], "jni: guest heap exhausted");
+    assert!(text[6].contains("does not export `e`"));
+    assert!(text[7].contains("guest stopped"));
+    assert!(text[8].contains("0x00000010") && text[8].contains("0x00000020"));
     let _: &dyn std::error::Error = &all[0];
 }
 

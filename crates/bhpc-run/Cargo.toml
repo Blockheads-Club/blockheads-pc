@@ -18,6 +18,8 @@ path = "src/main.rs"
 bhpc-mem.workspace = true
 bhpc-cpu.workspace = true
 bhpc-loader.workspace = true
+bhpc-bionic.workspace = true
+bhpc-jni.workspace = true
 
 [dev-dependencies]
 bhpc-loader = { workspace = true, features = ["test-elf"] }

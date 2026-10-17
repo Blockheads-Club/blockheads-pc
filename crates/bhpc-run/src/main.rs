@@ -18,6 +18,9 @@ fn run(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn std::i
 type Measure<'a> = &'a dyn Fn(u32) -> Result<bench::ThunkTiming, bhpc_run::RunError>;
 
 fn run_with(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn std::io::Write, measure: Measure) -> u8 {
+    if args.iter().any(|a| a == "--apk") {
+        return run_apk(args, stdout, stderr);
+    }
     match args.first().map(String::as_str) {
         Some("--bench-thunk") => {
             let n = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10_000_000);
@@ -95,6 +98,48 @@ fn run_with(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn s
     }
 }
 
+fn opt<'a>(args: &'a [String], name: &str) -> Option<&'a String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1))
+}
+
+/// `--apk PATH --init-only [--force] [--trace-thunks] [--trace-pc FILE] [--watchdog CYCLES] [--keep-going] [-v]`.
+fn run_apk(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn std::io::Write) -> u8 {
+    let Some(path) = opt(args, "--apk") else {
+        let _ = writeln!(stderr, "bhpc-run: --apk needs a path");
+        return 2;
+    };
+    if !args.iter().any(|a| a == "--init-only") {
+        let _ = writeln!(stderr, "bhpc-run: only --init-only is implemented so far");
+        return 2;
+    }
+    let mut cfg = bhpc_run::apkrun::InitConfig::new(path.into());
+    cfg.force = args.iter().any(|a| a == "--force");
+    cfg.trace_thunks = args.iter().any(|a| a == "--trace-thunks");
+    cfg.trace_fs = args.iter().any(|a| a == "--trace-fs");
+    cfg.trace_jni = args.iter().any(|a| a == "--trace-jni");
+    cfg.keep_going = args.iter().any(|a| a == "--keep-going");
+    cfg.verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
+    cfg.pc_trace = opt(args, "--trace-pc").map(Into::into);
+    cfg.data_dir = opt(args, "--data-dir").map(Into::into);
+    if let Some(p) = opt(args, "--package") {
+        cfg.package = p.clone();
+    }
+    if let Some(w) = opt(args, "--watchdog").and_then(|v| v.parse().ok()) {
+        cfg.watchdog_cycles = w;
+    }
+    let top = opt(args, "--top").and_then(|v| v.parse().ok()).unwrap_or(25);
+    match bhpc_run::apkrun::init_only(&cfg, Box::new(std::io::stdout())) {
+        Ok(r) => {
+            let _ = bhpc_run::apkrun::print_report(&r, top, stdout);
+            u8::from(!r.ok())
+        }
+        Err(e) => {
+            let _ = writeln!(stderr, "bhpc-run: {e}");
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +207,77 @@ mod tests {
         // A non-ELF file fails to load.
         let (mut o2, mut e2) = (Vec::new(), Vec::new());
         assert_eq!(run(&s(&[concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")]), &mut o2, &mut e2), 1);
+    }
+
+    /// A throw-away APK with one `libApplication.so` whose `DT_INIT` is `code`.
+    fn apk_with(code: &[u32]) -> (std::path::PathBuf, std::path::PathBuf) {
+        use bhpc_loader::testelf::{build_zip, Builder};
+        let mut b = Builder { scratch: code.to_vec(), ..Default::default() };
+        let at = b.build().scratch_vaddr;
+        b.init = Some(at);
+        let lib = b.build().bytes;
+        let dir = std::env::temp_dir().join(format!("bhpc-main-{}-{}", std::process::id(), code[0]));
+        std::fs::create_dir_all(&dir).unwrap();
+        let apk = dir.join("g.apk");
+        std::fs::write(&apk, build_zip(&[("lib/armeabi-v7a/libApplication.so", &lib, false)])).unwrap();
+        (apk, dir)
+    }
+
+    #[test]
+    fn apk_mode_validates_its_arguments() {
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        assert_eq!(run(&s(&["--apk"]), &mut o, &mut e), 2);
+        assert!(String::from_utf8_lossy(&e).contains("--apk needs a path"));
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        assert_eq!(run(&s(&["--apk", "x.apk"]), &mut o, &mut e), 2);
+        assert!(String::from_utf8_lossy(&e).contains("only --init-only"));
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        assert_eq!(run(&s(&["--apk", "/nonexistent/x.apk", "--init-only"]), &mut o, &mut e), 1);
+        assert!(String::from_utf8_lossy(&e).contains("bhpc-run:"));
+    }
+
+    #[test]
+    fn apk_mode_runs_constructors_and_reports() {
+        let (apk, dir) = apk_with(&[0xE12F_FF1E]);
+        let apk = apk.to_string_lossy().to_string();
+        let trace = dir.join("pc.txt").to_string_lossy().to_string();
+        let data = dir.join("data").to_string_lossy().to_string();
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        let args = s(&[
+            "--apk",
+            &apk,
+            "--init-only",
+            "--force",
+            "--trace-thunks",
+            "--keep-going",
+            "-v",
+            "--trace-fs",
+            "--trace-jni",
+            "--trace-pc",
+            &trace,
+            "--data-dir",
+            &data,
+            "--package",
+            "org.example.g",
+            "--watchdog",
+            "1000000000",
+            "--top",
+            "3",
+        ]);
+        assert_eq!(run(&args, &mut o, &mut e), 0, "{}", String::from_utf8_lossy(&e));
+        let out = String::from_utf8(o).unwrap();
+        assert!(out.contains("constructors: 1/1 returned") && out.contains("thunk calls (top 3"), "{out}");
+        assert!(std::path::Path::new(&trace).exists());
+        // A constructor that dies gives exit code 1 and a diagnosis.
+        let (bad, dir2) = apk_with(&[0xE7F0_00F0]);
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        let args = s(&["--apk", &bad.to_string_lossy(), "--init-only", "--force"]);
+        assert_eq!(run(&args, &mut o, &mut e), 1);
+        assert!(String::from_utf8(o).unwrap().contains("FAILED libApplication.so"));
+        // Without --force the unknown build is refused.
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        assert_eq!(run(&s(&["--apk", &bad.to_string_lossy(), "--init-only"]), &mut o, &mut e), 1);
+        assert!(String::from_utf8_lossy(&e).contains("unknown Blockheads build"));
+        let _ = (std::fs::remove_dir_all(dir), std::fs::remove_dir_all(dir2));
     }
 }

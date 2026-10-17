@@ -1,7 +1,7 @@
 //! M0 runner: load one ARM32 shared object, bind its imports to host thunks, run an entry point.
 
+pub mod apkrun;
 pub mod bench;
-pub mod hle;
 
 use bhpc_cpu::{Cpu, CpuError, CpuOptions, Stop};
 use bhpc_loader::{Linker, LoadError};
@@ -26,6 +26,8 @@ pub enum RunError {
     Mem(MemError),
     Cpu(CpuError),
     Load(LoadError),
+    Apk(bhpc_loader::apk::ApkError),
+    Jni(bhpc_jni::JniError),
     /// The module does not export the requested entry symbol.
     NoEntry(String),
     /// The guest stopped abnormally.
@@ -44,6 +46,8 @@ impl fmt::Display for RunError {
             RunError::Mem(e) => write!(f, "{e}"),
             RunError::Cpu(e) => write!(f, "{e}"),
             RunError::Load(e) => write!(f, "load: {e}"),
+            RunError::Apk(e) => write!(f, "{e}"),
+            RunError::Jni(e) => write!(f, "jni: {e}"),
             RunError::NoEntry(s) => write!(f, "module does not export `{s}`"),
             RunError::Guest(s) => write!(f, "guest stopped: {s}"),
             RunError::Watchdog { pc, lr } => write!(f, "watchdog expired at pc {pc:#010x} (lr {lr:#010x})"),
@@ -68,6 +72,16 @@ impl From<CpuError> for RunError {
         RunError::Cpu(e)
     }
 }
+impl From<bhpc_loader::apk::ApkError> for RunError {
+    fn from(e: bhpc_loader::apk::ApkError) -> Self {
+        RunError::Apk(e)
+    }
+}
+impl From<bhpc_jni::JniError> for RunError {
+    fn from(e: bhpc_jni::JniError) -> Self {
+        RunError::Jni(e)
+    }
+}
 impl From<LoadError> for RunError {
     fn from(e: LoadError) -> Self {
         RunError::Load(e)
@@ -90,16 +104,25 @@ pub struct Report {
 }
 
 /// Create the standard guest environment: memory, heap, stack and a CPU.
-pub fn new_env(out: Box<dyn Write + Send>, watchdog: Option<u64>) -> Result<(Box<Cpu>, hle::Shared), RunError> {
+pub fn new_env(out: Box<dyn Write + Send>, watchdog: Option<u64>) -> Result<(Box<Cpu>, bhpc_bionic::Shared), RunError> {
+    new_env_with(bhpc_bionic::Config { stdout: out, ..bhpc_bionic::Config::default() }, watchdog)
+}
+
+/// Like [`new_env`] with a full bionic configuration (file system, log sink ...).
+pub fn new_env_with(
+    cfg: bhpc_bionic::Config,
+    watchdog: Option<u64>,
+) -> Result<(Box<Cpu>, bhpc_bionic::Shared), RunError> {
     let mem = Arc::new(GuestMemory::new()?);
     let heap = GuestHeap::new(mem.clone(), HEAP_BASE, HEAP_SIZE)?;
+    let mem_for_state = mem.clone();
     mem.map(STACK_TOP - STACK_SIZE, STACK_SIZE)?;
     let mut cpu = Cpu::with_options(mem, CpuOptions { cycle_counting: watchdog.is_some(), ..CpuOptions::default() })?;
     if let Some(t) = watchdog {
         cpu.set_ticks(t);
     }
     cpu.set_sp(STACK_TOP);
-    let st = hle::new_state(heap, out);
+    let st = bhpc_bionic::State::new(mem_for_state, heap, cfg)?;
     Ok((cpu, st))
 }
 
@@ -116,11 +139,16 @@ pub fn run_shared_object(
     cpu.set_trace_thunks(trace);
     let mut linker = Linker::new(cpu.mem().clone());
     let module = {
-        let mut hle = hle::Hle::new(&mut cpu, st.clone());
+        let mut hle = bhpc_bionic::Hle::new(&mut cpu, st.clone());
         linker.load("fixture.so", so_bytes, &mut hle)?.clone()
     };
     if let Some((table, count)) = module.exidx {
-        st.lock().unwrap().exidx.push(hle::ExidxRange { start: module.start, size: module.size, table, count });
+        bhpc_bionic::lock(&st).exidx.push(bhpc_bionic::ExidxRange {
+            start: module.start,
+            size: module.size,
+            table,
+            count,
+        });
     }
     let ctors = module.constructors();
     for c in &ctors {
@@ -135,7 +163,7 @@ pub fn run_shared_object(
         Stop::Halted(_) if watchdog.is_some() => RunError::Watchdog { pc: cpu.pc(), lr: cpu.lr() },
         other => RunError::Guest(other),
     })?;
-    let checks = std::mem::take(&mut st.lock().unwrap().checks);
+    let checks = std::mem::take(&mut bhpc_bionic::lock(&st).checks);
     Ok(Report {
         exit_code: r.r0,
         checks,

@@ -41,6 +41,11 @@ version = "0.0.0"
 [[package]]
 name = "bhpc-jni"
 version = "0.0.0"
+dependencies = [
+ "bhpc-bionic",
+ "bhpc-cpu",
+ "bhpc-mem",
+]
 
 [[package]]
 name = "bhpc-loader"
@@ -63,7 +68,9 @@ dependencies = [
 name = "bhpc-run"
 version = "0.0.0"
 dependencies = [
+ "bhpc-bionic",
  "bhpc-cpu",
+ "bhpc-jni",
  "bhpc-loader",
  "bhpc-mem",
 ]
