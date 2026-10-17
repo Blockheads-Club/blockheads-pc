@@ -1,0 +1,13 @@
+[package]
+name = "bhpc-loader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Minimal ELF32 ARM shared-object loader: maps PT_LOADs, relocates, binds imports."
+
+[dependencies]
+bhpc-mem.workspace = true
+
+[features]
+test-elf = []

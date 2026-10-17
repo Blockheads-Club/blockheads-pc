@@ -1,0 +1,10 @@
+[package]
+name = "bhpc-mem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "4 GiB guest address window backed by a host mmap, plus a guest heap."
+
+[dependencies]
+libc.workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "bhpc-run"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "M0 runner: loads one ARM32 .so and executes its entry point in the JIT."
+
+[lib]
+name = "bhpc_run"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bhpc-run"
+path = "src/main.rs"
+
+[dependencies]
+bhpc-mem.workspace = true
+bhpc-cpu.workspace = true
+bhpc-loader.workspace = true
+
+[dev-dependencies]
+bhpc-loader = { workspace = true, features = ["test-elf"] }

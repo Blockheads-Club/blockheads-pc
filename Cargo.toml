@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bhpc-mem",
+    "crates/bhpc-cpu",
+    "crates/bhpc-loader",
+    "crates/bhpc-run",
+    # Stubs for later milestones (see docs/feasibility/PLAN.md).
+    "crates/bhpc-bionic",
+    "crates/bhpc-jni",
+    "crates/bhpc-gles",
+    "crates/bhpc-audio",
+    "crates/bhpc-app",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.86"
+license = "GPL-3.0-only"
+repository = "https://github.com/Blockheads-Club/blockheads-pc"
+
+[workspace.dependencies]
+libc = "0.2"
+cmake = "0.1"
+bhpc-mem = { path = "crates/bhpc-mem" }
+bhpc-cpu = { path = "crates/bhpc-cpu" }
+bhpc-loader = { path = "crates/bhpc-loader" }
+
+[profile.release]
+debug = 1

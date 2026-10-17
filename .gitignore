@@ -1,0 +1,13 @@
+/target
+*.apk
+*.aab
+*.obb
+# Extracted game files must never be committed.
+/extracted/
+/apk-extract/
+/lib/
+/assets/
+*.dex
+*.profraw
+*.profdata
+/coverage/

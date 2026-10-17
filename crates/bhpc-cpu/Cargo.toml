@@ -1,0 +1,14 @@
+[package]
+name = "bhpc-cpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Embedded ARM32 JIT (dynarmic A32) with SVC thunk dispatch."
+build = "build.rs"
+
+[dependencies]
+bhpc-mem.workspace = true
+
+[build-dependencies]
+cmake.workspace = true
