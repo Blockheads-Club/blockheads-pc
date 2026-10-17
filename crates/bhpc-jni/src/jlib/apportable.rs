@@ -19,6 +19,14 @@ pub(crate) fn activity(vm: &Vm) -> Obj {
     })
 }
 
+/// The Java `GLSurfaceView` the game's start-up natives are called on.
+pub(crate) fn surface_view(vm: &Vm) -> Obj {
+    vm.singleton("gl-surface-view", |vm| {
+        let k = vm.find_class("com/apportable/gl/GLSurfaceView").unwrap_or(ClassId(0));
+        vm.alloc_object(k)
+    })
+}
+
 fn new_context(vm: &Vm, id: u32) -> Obj {
     let k = vm.find_class("javax/microedition/khronos/egl/EGLContext").unwrap_or(ClassId(0));
     let c = vm.alloc_object(k);
@@ -159,6 +167,11 @@ pub(crate) fn install(vm: &Vm) {
         "(Ljava/lang/String;Ljava/lang/String;)V",
         true,
     );
+    vm.define("com/apportable/gl/GLSurfaceView").native("nativeInit", "()V", false).native(
+        "nativeOnSurfaceChanged",
+        "(II)V",
+        false,
+    );
     vm.define("com/apportable/Library").native("resolveLinkages", "(Ljava/lang/String;)[Ljava/lang/String;", false);
     vm.define("com/apportable/ui/Device")
         .static_method("isAutorotationOn", "()Z", |_| boolean(false))
@@ -169,6 +182,99 @@ pub(crate) fn install(vm: &Vm) {
         .method("enable", "()V", |_| void())
         .method("disable", "()V", |_| void())
         .native("nativeOnOrientationChanged", "(II)V", false);
+    install_widgets(vm);
+}
+
+/// The UIKit widgets of `com.apportable.ui`: `create(Context, handle[, RectF])` makes a plain object, every
+/// other member is a reported stub (the game only keeps the objects around and sets properties).
+pub(crate) const WIDGETS: [&str; 20] = [
+    "View",
+    "Window",
+    "ActivityIndicatorView",
+    "AlertView",
+    "BarButtonItem",
+    "BarItem",
+    "Button",
+    "ImageView",
+    "Label",
+    "MediaPlayer",
+    "NavigationBar",
+    "PickerView",
+    "ProgressView",
+    "ScrollView",
+    "Slider",
+    "Switch",
+    "TextField",
+    "TextView",
+    "Toolbar",
+    "WebView",
+];
+
+fn install_widgets(vm: &Vm) {
+    // Views mark themselves dirty when the game changes their geometry or hierarchy; the host's layout pass
+    // (`Vm::run_layout`) then calls the native `layoutSubviews`, as Android's measure/layout pass would.
+    let dirty = |c: &mut Call| {
+        let o = c.this;
+        c.vm.mark_layout(o);
+        void()
+    };
+    let view = vm
+        .define("com/apportable/ui/View")
+        .field("mObject", "I")
+        .natives(&[
+            ("callDrawRect", "(I)V", false),
+            ("callLayoutSubviews", "(I)V", false),
+            ("getDescription", "(I)Ljava/lang/String;", false),
+            ("isDrawRectImplemented", "(I)Z", false),
+            ("nativeSetFrame", "(IIII)V", false),
+        ])
+        .method("setFrame", "(Landroid/graphics/RectF;)V", dirty)
+        .method("setBounds", "(Landroid/graphics/RectF;)V", dirty)
+        .method("setNeedsLayout", "()V", dirty)
+        .method("layoutIfNeeded", "()V", dirty)
+        .method("addSubview", "(Lcom/apportable/ui/View;)V", |c| {
+            for o in [Some(c.this), c.obj(0)].into_iter().flatten() {
+                c.vm.mark_layout(o);
+            }
+            void()
+        });
+    drop(view);
+    vm.define("com/apportable/ui/Window").method("makeKeyAndOrderFront", "()V", |c| {
+        let o = c.this;
+        c.vm.mark_layout(o);
+        c.vm.st().focus_pending = true;
+        void()
+    });
+    for w in WIDGETS {
+        let class = format!("com/apportable/ui/{w}");
+        let owner = if w == "MediaPlayer" { "Landroid/app/Activity;" } else { "Landroid/content/Context;" };
+        let mut b = vm.define(&class);
+        if w != "View" {
+            b = b.extends("com/apportable/ui/View");
+        }
+        if w == "AlertView" {
+            b = b
+                .method("setTitle", "(Ljava/lang/String;)V", |c| {
+                    c.vm.log(&format!("alert title: {:?}", c.string(0)));
+                    void()
+                })
+                .method("setMessage", "(Ljava/lang/String;)V", |c| {
+                    c.vm.log(&format!("alert message: {:?}", c.string(0)));
+                    void()
+                });
+        }
+        let make = |c: &mut Call| {
+            let o = c.vm.alloc_object(c.class);
+            c.vm.set_field(o, "mObject", Value::Int(c.int(1)));
+            c.vm.mark_layout(o);
+            object(Some(o))
+        };
+        b.static_method("create", &format!("({owner}I)L{class};"), make).static_method(
+            "create",
+            &format!("({owner}ILandroid/graphics/RectF;)L{class};"),
+            make,
+        );
+    }
 }
 
 /// `queueEvent`/`runOnThread`: run on the main looper.

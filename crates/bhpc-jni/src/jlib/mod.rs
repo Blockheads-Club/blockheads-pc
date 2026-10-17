@@ -44,5 +44,7 @@ pub(crate) fn install(vm: &Vm) {
     crate::looper::install(vm);
 }
 
-pub(crate) use apportable::activity;
+#[cfg(test)]
+pub(crate) use apportable::WIDGETS;
+pub(crate) use apportable::{activity, surface_view};
 pub(crate) use lang::thread_object;

@@ -96,6 +96,9 @@ impl Vm {
             let (imp, sig, name, sigs, mc) = (m.imp.clone(), m.sig.clone(), m.name.clone(), m.sig_str.clone(), m.class);
             (imp, sig, st.classes[mc.0 as usize].name.clone(), name, sigs)
         };
+        if self.st().trace_calls {
+            self.log(&format!("call {cname}.{name}{sigs}"));
+        }
         let imp = match imp {
             Imp::Stub => self.bind_symbol(mid, &cname, &name, &sigs).unwrap_or(Imp::Stub),
             other => other,

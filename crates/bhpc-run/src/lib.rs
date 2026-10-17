@@ -2,6 +2,11 @@
 
 pub mod apkrun;
 pub mod bench;
+pub mod dl;
+pub mod input;
+#[cfg(feature = "play")]
+pub mod play;
+pub mod png;
 
 use bhpc_cpu::{Cpu, CpuError, CpuOptions, Stop};
 use bhpc_loader::{Linker, LoadError};
@@ -13,7 +18,7 @@ use std::sync::Arc;
 /// Guest address of the host-managed heap.
 pub const HEAP_BASE: u32 = 0x4000_0000;
 /// Size of the host-managed heap.
-pub const HEAP_SIZE: u32 = 64 << 20;
+pub const HEAP_SIZE: u32 = 0x2E00_0000;
 /// Top of the main guest stack (grows down).
 pub const STACK_TOP: u32 = 0x7010_0000;
 /// Size of the main guest stack.
@@ -183,3 +188,7 @@ pub fn run_shared_object(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_dl;
+#[cfg(test)]
+mod tests_input;

@@ -100,8 +100,12 @@ dependencies = [
 name = "bhpc-run"
 version = "0.0.0"
 dependencies = [
+ "bhpc-app",
+ "bhpc-audio",
  "bhpc-bionic",
  "bhpc-cpu",
+ "bhpc-gles",
+ "bhpc-input",
  "bhpc-jni",
  "bhpc-loader",
  "bhpc-mem",

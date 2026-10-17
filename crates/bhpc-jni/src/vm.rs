@@ -176,6 +176,12 @@ pub(crate) struct State {
     pub main_looper: Option<Obj>,
     pub symbols: Option<SymbolFn>,
     pub log: Option<LogFn>,
+    /// Log every Java call (bring-up aid).
+    pub trace_calls: bool,
+    /// UIKit views whose native `layoutSubviews` is due (see `Vm::run_layout`).
+    pub dirty_views: Vec<Obj>,
+    /// `makeKeyAndOrderFront` was called: the window gains focus on the next layout pass.
+    pub focus_pending: bool,
     pub stubbed_classes: Vec<String>,
     /// Named long-lived objects of the fake library (class loader, locale, display, ...).
     pub singletons: HashMap<String, Obj>,

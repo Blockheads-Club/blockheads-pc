@@ -35,6 +35,8 @@ pub struct InitConfig {
     pub trace_fs: bool,
     /// Log every JNI call to stderr.
     pub trace_jni: bool,
+    /// Also log every call into Java (needs `trace_jni`).
+    pub trace_jni_calls: bool,
     /// Per-constructor guest cycle budget.
     pub watchdog_cycles: u64,
     /// Keep running constructors after a failed one.
@@ -43,6 +45,8 @@ pub struct InitConfig {
     pub verbose: bool,
     /// Single-step trace of every guest pc (very slow) to this file.
     pub pc_trace: Option<PathBuf>,
+    /// Screen size reported to the game (`None` keeps the platform default).
+    pub screen: Option<(i32, i32)>,
 }
 
 impl InitConfig {
@@ -55,10 +59,12 @@ impl InitConfig {
             trace_thunks: false,
             trace_fs: false,
             trace_jni: false,
+            trace_jni_calls: false,
             watchdog_cycles: 4_000_000_000,
             keep_going: false,
             verbose: false,
             pc_trace: None,
+            screen: None,
         }
     }
 }
@@ -233,12 +239,17 @@ pub struct BionicHeap(pub Shared);
 
 impl bhpc_jni::vm::GuestAlloc for BionicHeap {
     fn alloc(&mut self, size: u32) -> u32 {
-        lock(&self.0).heap.alloc(size)
+        // Zeroed: the fake VM relies on fresh blocks being clear (NUL terminators after lent strings).
+        lock(&self.0).heap.calloc(1, size)
     }
     fn free(&mut self, ptr: u32) {
         lock(&self.0).heap.free(ptr);
     }
 }
+
+/// Hook run by [`Session::open_setup`] before linking.
+pub type Setup<'a> =
+    dyn FnMut(&mut Cpu, &Shared) -> Result<Option<std::sync::Arc<dyn bhpc_jni::GfxHooks>>, RunError> + 'a;
 
 /// A loaded APK: guest memory, CPU, bionic state and the linked modules.
 pub struct Session {
@@ -249,6 +260,8 @@ pub struct Session {
     pub jni: bhpc_jni::Jni,
     pub release: Option<Release>,
     pub host_libs: Vec<String>,
+    /// What the Java side reports (paths, locale, ...).
+    pub platform: bhpc_jni::Platform,
     /// Index range of this APK's modules in `linker.modules()`.
     pub range: std::ops::Range<usize>,
 }
@@ -265,6 +278,18 @@ impl Session {
         out: Box<dyn Write + Send>,
         log: Option<bhpc_bionic::state::LogSink>,
     ) -> Result<Session, RunError> {
+        Self::open_setup(cfg, out, log, &mut |_, _| Ok(None))
+    }
+
+    /// Like [`Session::open_with`]; `setup` runs after the CPU exists and before the libraries are linked, so it
+    /// can register thunks (GL, OpenSL ES, `dlopen`) that the imports then bind to. It may return the graphics
+    /// hooks for the fake `VerdeActivity`.
+    pub fn open_setup(
+        cfg: &InitConfig,
+        out: Box<dyn Write + Send>,
+        log: Option<bhpc_bionic::state::LogSink>,
+        setup: &mut Setup<'_>,
+    ) -> Result<Session, RunError> {
         let mut apk = Apk::open(&cfg.apk)?;
         let release = apk.verify(cfg.force)?;
         let dirs = data_dirs(cfg.data_dir.as_deref(), DataDirs::platform_default());
@@ -278,17 +303,32 @@ impl Session {
         let (mut cpu, st) = new_env_with(bcfg, Some(cfg.watchdog_cycles))?;
         cpu.set_trace_thunks(cfg.trace_thunks);
         lock(&st).vfs.trace = cfg.trace_fs;
+        let gfx = setup(&mut cpu, &st)?;
         let mut linker = Linker::new(cpu.mem().clone());
         let summary = {
             let mut hle = Hle::new(&mut cpu, st.clone());
             linker.load_all(&[ROOT_LIB], &mut apk, &mut hle)?
         };
         register_exidx(&linker, &st);
-        let (mem, platform) = (cpu.mem().clone(), bhpc_jni::Platform::for_guest(&storage.guest));
-        let jcfg = bhpc_jni::VmConfig::new(platform, Box::new(storage.assets));
+        let mut platform = bhpc_jni::Platform::for_guest(&storage.guest);
+        if let Some((w, h)) = cfg.screen {
+            (platform.screen_width, platform.screen_height) = (w, h);
+        }
+        let mem = cpu.mem().clone();
+        let mut jcfg = bhpc_jni::VmConfig::new(platform.clone(), Box::new(storage.assets));
+        if let Some(g) = gfx {
+            jcfg.gfx = g;
+        }
         let jni = bhpc_jni::install(&cpu, mem, Box::new(BionicHeap(st.clone())), jcfg)?;
         jni.set_trace(cfg.trace_jni);
-        Ok(Session { cpu, st, linker, jni, release, host_libs: summary.host_libs, range: summary.range })
+        jni.set_trace_calls(cfg.trace_jni_calls);
+        // `Java_*` exports bind lazily to the fake classes (natives not announced through RegisterNatives).
+        let natives: std::collections::HashMap<String, u32> = linker.modules()[summary.range.clone()]
+            .iter()
+            .flat_map(|m| m.exports.iter().filter(|(n, _)| n.starts_with("Java_")).map(|(n, a)| (n.clone(), *a)))
+            .collect();
+        jni.vm.set_symbol_resolver(move |n| natives.get(n).copied());
+        Ok(Session { cpu, st, linker, jni, release, host_libs: summary.host_libs, platform, range: summary.range })
     }
 
     /// Run every constructor in dependency order.

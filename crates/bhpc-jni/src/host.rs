@@ -71,6 +71,11 @@ impl Jni {
         }
     }
 
+    /// Also log every call into Java (very verbose; implies [`Jni::set_trace`]).
+    pub fn set_trace_calls(&self, on: bool) {
+        self.vm.st().trace_calls = on;
+    }
+
     /// Open the local-reference frame of a host-initiated call on guest thread `pid`.
     pub fn enter(&self, pid: usize) {
         self.vm.push_frame(pid);

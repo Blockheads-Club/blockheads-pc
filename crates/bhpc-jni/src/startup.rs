@@ -6,7 +6,7 @@
 //! 2. vm.run_stage(cpu, Stage::LibraryInit)  LibraryLoader.init()
 //! 3. vm.set_native_env(cpu, &native_env(..)) LibraryLoader.setenv(k, v) for each variable
 //! 4. vm.run_stage(cpu, Stage::ActivityCreate / ActivityStart / ActivityResume / RootGeometry)
-//! 5. vm.run_stage(cpu, Stage::ContextValid) once the GL context exists
+//! 5. vm.run_stage(cpu, Stage::SurfaceInit / SurfaceChanged / ContextValid) once the GL context exists
 //! 6. vm.run_stage(cpu, Stage::MainThreadRun) runs `UIApplicationMain` and does not return
 //! ```
 
@@ -41,6 +41,9 @@ pub fn native_env(p: &Platform) -> Vec<(String, String)> {
         v("ANDROID_EXTERNAL_STORAGE", &p.external_dir),
         v("ANDROID_DATA_DIRECTORY", &p.files_dir),
         v("ANDROID_DOWNLOAD_DIRECTORY", &format!("{}/Download", p.external_dir)),
+        // Manifest meta-data booleans the Java loader exports (`apportable.opengles2` selects the ES2 renderer).
+        v("apportable.opengles2", "true"),
+        v("apportable.opengles.fast_color", "true"),
     ]
 }
 
@@ -59,6 +62,10 @@ pub enum Stage {
     ActivityLowMemory,
     /// `VerdeActivity.nativeRootGeometryChanged()` (an instance method of the activity).
     RootGeometry,
+    /// `GLSurfaceView.nativeInit()`: the Java GL view exists (an instance method of the surface view).
+    SurfaceInit,
+    /// `GLSurfaceView.nativeOnSurfaceChanged(width, height)` with the screen size.
+    SurfaceChanged,
     /// `Lifecycle.contextDidBecomeValid()`: the GL context exists.
     ContextValid,
     ContextInvalid,
@@ -77,6 +84,7 @@ impl Stage {
     pub fn target(self) -> (&'static str, &'static str, &'static str, bool) {
         const ACT: &str = "com/apportable/activity/VerdeActivity";
         const LC: &str = "com/apportable/Lifecycle";
+        const GL: &str = "com/apportable/gl/GLSurfaceView";
         match self {
             Stage::LibraryInit => ("com/apportable/LibraryLoader", "init", "()V", true),
             Stage::ActivityCreate => (ACT, "nativeOnCreate", "()V", true),
@@ -87,6 +95,8 @@ impl Stage {
             Stage::ActivityDestroy => (ACT, "nativeOnDestroy", "()V", true),
             Stage::ActivityLowMemory => (ACT, "nativeOnLowMemory", "()V", true),
             Stage::RootGeometry => (ACT, "nativeRootGeometryChanged", "()V", false),
+            Stage::SurfaceInit => (GL, "nativeInit", "()V", false),
+            Stage::SurfaceChanged => (GL, "nativeOnSurfaceChanged", "(II)V", false),
             Stage::ContextValid => (LC, "contextDidBecomeValid", "()V", true),
             Stage::ContextInvalid => (LC, "contextDidBecomeInvalid", "()V", true),
             Stage::WillEnterForeground => (LC, "applicationWillEnterForeground", "()V", true),
@@ -133,6 +143,10 @@ impl Vm {
         let (class, name, sig, is_static) = stage.target();
         if is_static {
             self.call_static(cpu, class, name, sig, &[])?;
+        } else if matches!(stage, Stage::SurfaceInit | Stage::SurfaceChanged) {
+            let (w, h) = (self.platform().screen_width, self.platform().screen_height);
+            let args = if stage == Stage::SurfaceChanged { vec![Value::Int(w), Value::Int(h)] } else { vec![] };
+            self.call_method(cpu, crate::jlib::surface_view(self), name, sig, &args)?;
         } else {
             let a = crate::jlib::activity(self);
             self.call_method(cpu, a, name, sig, &[])?;

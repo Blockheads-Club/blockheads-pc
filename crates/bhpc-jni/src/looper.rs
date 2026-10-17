@@ -396,3 +396,30 @@ fn post_runnable(c: &mut Call, delay: i64) -> JResult {
     c.vm.set_field(m, "callback", c.args[0]);
     send(c, m, c.vm.now_ms() as i64 + delay)
 }
+
+impl Vm {
+    /// Remember that `view` needs its native `layoutSubviews` called by the next [`Vm::run_layout`].
+    pub fn mark_layout(&self, view: Obj) {
+        let mut st = self.st();
+        if !st.dirty_views.contains(&view) {
+            st.dirty_views.push(view);
+        }
+    }
+
+    /// The layout pass of the fake Android UI thread: call the native `callLayoutSubviews(mObject)` of every
+    /// view marked since the last pass. Views marked while this runs wait for the next pass. Returns how many
+    /// views were laid out.
+    pub fn run_layout(&self, cpu: &mut Cpu) -> Result<usize, Throw> {
+        let views = std::mem::take(&mut self.st().dirty_views);
+        for v in &views {
+            let id = self.get_field(*v, "mObject");
+            self.call_method(cpu, *v, "callLayoutSubviews", "(I)V", &[id])?;
+        }
+        // A window that was just ordered front receives window focus once it is laid out (Android delivers
+        // `onWindowFocusChanged(true)` after attaching it).
+        if std::mem::take(&mut self.st().focus_pending) {
+            self.call_static(cpu, "com/apportable/ui/Window", "nativeOnWindowFocusChanged", "(Z)V", &[Value::Int(1)])?;
+        }
+        Ok(views.len())
+    }
+}

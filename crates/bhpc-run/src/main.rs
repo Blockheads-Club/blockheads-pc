@@ -108,15 +108,12 @@ fn run_apk(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn st
         let _ = writeln!(stderr, "bhpc-run: --apk needs a path");
         return 2;
     };
-    if !args.iter().any(|a| a == "--init-only") {
-        let _ = writeln!(stderr, "bhpc-run: only --init-only is implemented so far");
-        return 2;
-    }
     let mut cfg = bhpc_run::apkrun::InitConfig::new(path.into());
     cfg.force = args.iter().any(|a| a == "--force");
     cfg.trace_thunks = args.iter().any(|a| a == "--trace-thunks");
     cfg.trace_fs = args.iter().any(|a| a == "--trace-fs");
     cfg.trace_jni = args.iter().any(|a| a == "--trace-jni");
+    cfg.trace_jni_calls = args.iter().any(|a| a == "--trace-jni-calls");
     cfg.keep_going = args.iter().any(|a| a == "--keep-going");
     cfg.verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
     cfg.pc_trace = opt(args, "--trace-pc").map(Into::into);
@@ -128,6 +125,9 @@ fn run_apk(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn st
         cfg.watchdog_cycles = w;
     }
     let top = opt(args, "--top").and_then(|v| v.parse().ok()).unwrap_or(25);
+    if !args.iter().any(|a| a == "--init-only") {
+        return play_apk(args, cfg, stderr);
+    }
     match bhpc_run::apkrun::init_only(&cfg, Box::new(std::io::stdout())) {
         Ok(r) => {
             let _ = bhpc_run::apkrun::print_report(&r, top, stdout);
@@ -138,6 +138,59 @@ fn run_apk(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn st
             1
         }
     }
+}
+
+/// `--apk PATH [--window WxH] [--shot FILE] [--shot-at N] [--exit-after-shot] [--seconds N] [--check-gl]`.
+#[cfg(feature = "play")]
+fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dyn std::io::Write) -> u8 {
+    use bhpc_run::play::{play, PlayConfig};
+    let mut cfg = PlayConfig::new(init);
+    if let Some((w, h)) = opt(args, "--window").and_then(|v| v.split_once('x')) {
+        cfg.window = (w.parse().unwrap_or(1024), h.parse().unwrap_or(768));
+    }
+    cfg.shot = opt(args, "--shot").map(Into::into);
+    if let Some(n) = opt(args, "--shot-at").and_then(|v| v.parse().ok()) {
+        cfg.shot_at = n;
+    }
+    cfg.exit_after_shot = args.iter().any(|a| a == "--exit-after-shot");
+    cfg.seconds = opt(args, "--seconds").and_then(|v| v.parse().ok());
+    cfg.check_gl = args.iter().any(|a| a == "--check-gl");
+    cfg.jni_report = opt(args, "--jni-report").map(Into::into);
+    if let Some(list) = opt(args, "--symbolize") {
+        cfg.symbolize =
+            list.split(',').filter_map(|a| u32::from_str_radix(a.trim_start_matches("0x"), 16).ok()).collect();
+    }
+    match play(&cfg) {
+        Ok(r) => {
+            let _ = writeln!(stderr, "[play] ended: {} ({} frames presented)", r.stop, r.swaps);
+            for l in &r.backtrace {
+                let _ = writeln!(stderr, "  {l}");
+            }
+            for s in &r.java_stubs {
+                let _ = writeln!(stderr, "  java stub called: {s}");
+            }
+            for (n, c) in &r.gl_unsupported {
+                let _ = writeln!(stderr, "  unsupported GL call: {n} x{c}");
+            }
+            for n in &r.unimplemented_hits {
+                let _ = writeln!(stderr, "  unimplemented import hit: {n}");
+            }
+            for (n, c) in &r.top_thunks {
+                let _ = writeln!(stderr, "  thunk {c:>10}  {n}");
+            }
+            u8::from(r.swaps == 0)
+        }
+        Err(e) => {
+            let _ = writeln!(stderr, "bhpc-run: {e}");
+            1
+        }
+    }
+}
+
+#[cfg(not(feature = "play"))]
+fn play_apk(_args: &[String], _init: bhpc_run::apkrun::InitConfig, stderr: &mut dyn std::io::Write) -> u8 {
+    let _ = writeln!(stderr, "bhpc-run: running the game needs a build with `--features play` (or pass --init-only)");
+    2
 }
 
 #[cfg(test)]
@@ -230,7 +283,7 @@ mod tests {
         assert!(String::from_utf8_lossy(&e).contains("--apk needs a path"));
         let (mut o, mut e) = (Vec::new(), Vec::new());
         assert_eq!(run(&s(&["--apk", "x.apk"]), &mut o, &mut e), 2);
-        assert!(String::from_utf8_lossy(&e).contains("only --init-only"));
+        assert!(String::from_utf8_lossy(&e).contains("--features play"));
         let (mut o, mut e) = (Vec::new(), Vec::new());
         assert_eq!(run(&s(&["--apk", "/nonexistent/x.apk", "--init-only"]), &mut o, &mut e), 1);
         assert!(String::from_utf8_lossy(&e).contains("bhpc-run:"));

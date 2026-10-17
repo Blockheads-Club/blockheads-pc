@@ -5,7 +5,7 @@
 //! symbols of already loaded modules or to host-provided addresses (thunks).
 
 pub mod apk;
-mod dl;
+pub mod dl;
 mod elf;
 pub mod init;
 /// Tiny ELF builder for tests (also used by `bhpc-run` tests via the `test-elf` feature).

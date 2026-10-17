@@ -5,7 +5,7 @@ use crate::{install, GuestAlloc, Jni, JniError, MemAssets, Platform, Usage, VmCo
 use bhpc_cpu::{Cpu, CpuOptions};
 use bhpc_mem::{GuestHeap, GuestMemory};
 use std::io::{Cursor, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 struct Exhausted;
 impl GuestAlloc for Exhausted {
@@ -94,6 +94,17 @@ fn trace_switches_the_log_sink() {
     jni.vm.method_id(c, "loud", "()V", true).unwrap();
     jni.set_trace(false);
     jni.vm.method_id(c, "quiet", "()V", true).unwrap();
+    // Call tracing logs `call Class.method` for each invocation.
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let s2 = seen.clone();
+    jni.vm.set_log(move |m| s2.lock().unwrap().push(m.to_string()));
+    jni.set_trace_calls(true);
+    let (mut cpu, _) = (_cpu, ());
+    jni.vm.call_static(&mut cpu, "com/example/Traced", "loud", "()V", &[]).unwrap();
+    jni.set_trace_calls(false);
+    jni.vm.call_static(&mut cpu, "com/example/Traced", "loud", "()V", &[]).unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.iter().filter(|m| m.starts_with("call com/example/Traced.loud")).count(), 1, "{seen:?}");
 }
 
 #[test]

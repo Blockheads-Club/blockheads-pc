@@ -1343,3 +1343,82 @@ fn collections_without_payload_degrade_gracefully() {
     let msg = e.new_obj("android/os/Message", "()V", &[]);
     assert_eq!(e.vm.get_field(msg, "what"), Value::Int(0));
 }
+
+#[test]
+fn ui_widgets_are_created_and_alerts_are_logged() {
+    let mut e = Env::new();
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let l = log.clone();
+    e.vm.set_log(move |m| l.lock().unwrap().push(m.to_string()));
+    let ctx = Value::Ref(Some(e.vm.activity()));
+    for w in crate::jlib::WIDGETS {
+        let class = format!("com/apportable/ui/{w}");
+        let owner = if w == "MediaPlayer" { "Landroid/app/Activity;" } else { "Landroid/content/Context;" };
+        let a = obj(e.scall(&class, "create", &format!("({owner}I)L{class};"), &[ctx, Value::Int(7)]));
+        assert_eq!(e.vm.get_field(a, "mObject").as_int(), 7, "{w}");
+        let rect = Value::Ref(None);
+        let b = obj(e.scall(
+            &class,
+            "create",
+            &format!("({owner}ILandroid/graphics/RectF;)L{class};"),
+            &[ctx, Value::Int(8), rect],
+        ));
+        assert_ne!(a, b);
+    }
+    let alert = obj(e.scall(
+        "com/apportable/ui/AlertView",
+        "create",
+        "(Landroid/content/Context;I)Lcom/apportable/ui/AlertView;",
+        &[ctx, Value::Int(1)],
+    ));
+    let (t, m) = (e.string("Title"), e.string("Body"));
+    e.call(alert, "setTitle", "(Ljava/lang/String;)V", &[t]).unwrap();
+    e.call(alert, "setMessage", "(Ljava/lang/String;)V", &[m]).unwrap();
+    let log = log.lock().unwrap();
+    assert!(log.iter().any(|l| l.contains("alert title") && l.contains("Title")), "{log:?}");
+    assert!(log.iter().any(|l| l.contains("alert message") && l.contains("Body")), "{log:?}");
+}
+
+#[test]
+fn layout_pass_calls_native_layout_subviews_of_marked_views() {
+    let mut e = Env::new();
+    let ctx = Value::Ref(Some(e.vm.activity()));
+    let w = obj(e.scall(
+        "com/apportable/ui/Window",
+        "create",
+        "(Landroid/content/Context;I)Lcom/apportable/ui/Window;",
+        &[ctx, Value::Int(41)],
+    ));
+    let v = obj(e.scall(
+        "com/apportable/ui/View",
+        "create",
+        "(Landroid/content/Context;I)Lcom/apportable/ui/View;",
+        &[ctx, Value::Int(42)],
+    ));
+    // Creation marks both; the unbound native is a reported stub, so the pass only counts them.
+    assert_eq!(e.vm.run_layout(&mut e.cpu), Ok(2));
+    assert_eq!(e.vm.run_layout(&mut e.cpu), Ok(0), "clean views are skipped");
+    let rect = Value::Ref(None);
+    for (name, sig, args) in [
+        ("setFrame", "(Landroid/graphics/RectF;)V", vec![rect]),
+        ("setBounds", "(Landroid/graphics/RectF;)V", vec![rect]),
+        ("setNeedsLayout", "()V", vec![]),
+        ("layoutIfNeeded", "()V", vec![]),
+    ] {
+        e.call(v, name, sig, &args).unwrap();
+        assert_eq!(e.vm.run_layout(&mut e.cpu), Ok(1), "{name}");
+    }
+    e.call(w, "addSubview", "(Lcom/apportable/ui/View;)V", &[Value::Ref(Some(v))]).unwrap();
+    assert_eq!(e.vm.run_layout(&mut e.cpu), Ok(2));
+    e.call(w, "makeKeyAndOrderFront", "()V", &[]).unwrap();
+    assert_eq!(e.vm.run_layout(&mut e.cpu), Ok(1));
+    assert!(e.vm.report().members.iter().any(|m| m.name == "nativeOnWindowFocusChanged" && m.calls == 1));
+    assert_eq!(e.vm.run_layout(&mut e.cpu), Ok(0));
+    assert!(e.vm.report().members.iter().any(|m| m.name == "nativeOnWindowFocusChanged" && m.calls == 1), "once");
+    // A bound native receives the view's native object.
+    let view_class = e.vm.class_named("com/apportable/ui/View").unwrap();
+    let ret = e.code(&[0xE12F_FF1E]);
+    e.vm.register_native(view_class, "callLayoutSubviews", "(I)V", ret);
+    e.call(v, "setNeedsLayout", "()V", &[]).unwrap();
+    assert_eq!(e.vm.run_layout(&mut e.cpu), Ok(1));
+}

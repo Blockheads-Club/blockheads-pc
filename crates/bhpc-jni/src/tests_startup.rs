@@ -15,6 +15,8 @@ fn native_env_lists_what_the_game_reads() {
     assert_eq!(get("PACKAGE_NAME"), "com.majicjungle.blockheads");
     assert_eq!(get("SDK_INT"), "19");
     assert_eq!(get("DEBUG_BUILD"), "0");
+    assert_eq!(get("apportable.opengles2"), "true");
+    assert_eq!(get("apportable.opengles.fast_color"), "true");
     assert!(get("HOME").contains("bhpc-jni"));
     assert_eq!(get("TMPDIR"), Platform::default().cache_dir);
     assert!(get("EXTERNAL_CACHEDIR").ends_with("/sdcard/cache"));
@@ -37,6 +39,8 @@ fn stages_map_to_natives() {
         Stage::ActivityDestroy,
         Stage::ActivityLowMemory,
         Stage::RootGeometry,
+        Stage::SurfaceInit,
+        Stage::SurfaceChanged,
         Stage::ContextValid,
         Stage::ContextInvalid,
         Stage::WillEnterForeground,
@@ -79,6 +83,12 @@ fn stages_run_bound_natives_and_report_unbound_ones() {
     assert!(vm.stage_bound(Stage::RootGeometry));
     vm.run_stage(&mut e.cpu, Stage::RootGeometry).unwrap();
     assert_eq!(vm.activity(), e.activity());
+    // The surface view natives run on their own receiver; the size is the screen size.
+    let gl = vm.class_named("com/apportable/gl/GLSurfaceView").unwrap();
+    vm.register_native(gl, "nativeInit", "()V", record);
+    vm.register_native(gl, "nativeOnSurfaceChanged", "(II)V", record);
+    vm.run_stage(&mut e.cpu, Stage::SurfaceInit).unwrap();
+    vm.run_stage(&mut e.cpu, Stage::SurfaceChanged).unwrap();
     assert!(!vm.stage_bound(Stage::MainThreadRun));
     // Exports found by the symbol resolver count as bound, short or overloaded name.
     vm.set_symbol_resolver(|n| (n == "Java_com_apportable_MainThread_nativeRun").then_some(0x1000));
