@@ -4,4 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Placeholder crate for a later milestone (see docs/feasibility/PLAN.md)."
+description = "Fake JavaVM/JNIEnv for the Blockheads guest libraries: Java object model and JNI function tables as host thunks."
+
+[dependencies]
+bhpc-mem.workspace = true
+bhpc-cpu.workspace = true
+
+[dev-dependencies]
+bhpc-loader.workspace = true
+bhpc-bionic = { path = "../bhpc-bionic" }
