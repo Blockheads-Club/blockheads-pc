@@ -5,6 +5,12 @@
 //! address faults (dynarmic's fastmem path turns that into a callback; see `bhpc-cpu`).
 
 mod heap;
+#[cfg(unix)]
+#[path = "sys_unix.rs"]
+mod os;
+#[cfg(windows)]
+#[path = "sys_windows.rs"]
+mod os;
 
 pub use heap::GuestHeap;
 
@@ -262,18 +268,28 @@ cas_int!(cas_u64, u64, AtomicU64);
 impl Drop for GuestMemory {
     fn drop(&mut self) {
         // SAFETY: unmapping our own reservation exactly once.
-        unsafe { libc::munmap(self.base.cast(), WINDOW_SIZE as usize + GUARD_SIZE) };
+        unsafe { sys::release(self.base, WINDOW_SIZE as usize + GUARD_SIZE) };
     }
 }
 
-/// The two host calls that can fail. Under `cfg(test)` they can be made to fail on demand.
+/// The host calls that can fail. Under `cfg(test)` they can be made to fail on demand.
+///
+/// The OS-specific part lives in `os` (`sys_unix.rs` or `sys_windows.rs`); this wrapper adds the
+/// failure injection so both back ends share one tested surface.
 mod sys {
     #[cfg(test)]
     thread_local! {
-        /// Number of upcoming `reserve` calls / `make_accessible` calls to fail with `ENOMEM`.
+        /// Number of upcoming `reserve` calls / `make_accessible` calls to fail with `ERR_NOMEM`.
         pub static FAIL_RESERVE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         pub static FAIL_PROTECT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
+
+    use crate::os;
+
+    #[cfg(test)]
+    pub use os::ERR_NOMEM;
+    #[cfg(all(test, unix))]
+    pub use os::{host_page, ERR_INVAL};
 
     #[cfg(test)]
     fn injected(flag: &'static std::thread::LocalKey<std::cell::Cell<u32>>) -> bool {
@@ -284,32 +300,13 @@ mod sys {
         })
     }
 
-    fn errno() -> i32 {
-        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
-    }
-
     /// Reserve `len` bytes of inaccessible address space.
     pub fn reserve(len: usize) -> Result<*mut u8, i32> {
         #[cfg(test)]
         if injected(&FAIL_RESERVE) {
-            return Err(libc::ENOMEM);
+            return Err(ERR_NOMEM);
         }
-        // SAFETY: anonymous private reservation, no existing memory is touched.
-        let p = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                len,
-                libc::PROT_NONE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            )
-        };
-        if p == libc::MAP_FAILED {
-            Err(errno())
-        } else {
-            Ok(p.cast())
-        }
+        os::reserve(len)
     }
 
     /// Make `[p, p+len)` readable and writable.
@@ -319,14 +316,19 @@ mod sys {
     pub unsafe fn make_accessible(p: *mut u8, len: usize) -> Result<(), i32> {
         #[cfg(test)]
         if injected(&FAIL_PROTECT) {
-            return Err(libc::ENOMEM);
+            return Err(ERR_NOMEM);
         }
         // SAFETY: forwarded from the caller.
-        if unsafe { libc::mprotect(p.cast(), len, libc::PROT_READ | libc::PROT_WRITE) } != 0 {
-            Err(errno())
-        } else {
-            Ok(())
-        }
+        unsafe { os::make_accessible(p, len) }
+    }
+
+    /// Give a whole reservation back.
+    ///
+    /// # Safety
+    /// `p`/`len` must be exactly a reservation from [`reserve`], released once.
+    pub unsafe fn release(p: *mut u8, len: usize) {
+        // SAFETY: forwarded from the caller.
+        unsafe { os::release(p, len) }
     }
 }
 
@@ -450,18 +452,23 @@ mod tests {
     #[test]
     fn host_failures_are_reported() {
         sys::FAIL_RESERVE.with(|f| f.set(1));
-        assert_eq!(GuestMemory::new().err(), Some(MemError::Os(libc::ENOMEM)));
+        assert_eq!(GuestMemory::new().err(), Some(MemError::Os(sys::ERR_NOMEM)));
         let m = GuestMemory::new().unwrap();
         sys::FAIL_PROTECT.with(|f| f.set(1));
-        assert_eq!(m.map(0x1000, 0x1000), Err(MemError::Os(libc::ENOMEM)));
+        assert_eq!(m.map(0x1000, 0x1000), Err(MemError::Os(sys::ERR_NOMEM)));
         assert!(!m.is_mapped(0x1000, 1), "a failed map leaves no region behind");
         m.map(0x1000, 0x1000).unwrap();
         // The real host call fails too when handed an impossible range (not page aligned / outside).
-        // SAFETY: mprotect on an unaligned address is rejected by the kernel and touches nothing.
-        let e = unsafe { sys::make_accessible(m.base().add(1), 4096) };
-        assert_eq!(e, Err(libc::EINVAL));
+        // Windows rounds unaligned commits down instead of rejecting them, so this is POSIX only.
+        #[cfg(unix)]
+        {
+            // SAFETY: with 4 KiB host pages mprotect rejects the unaligned address and touches nothing;
+            // with larger host pages the range is widened to whole pages inside the reservation.
+            let e = unsafe { sys::make_accessible(m.base().add(1), 4096) };
+            assert_eq!(e == Err(sys::ERR_INVAL), sys::host_page() == 4096);
+        }
         let huge = sys::reserve(usize::MAX / 2);
-        assert_eq!(huge, Err(libc::ENOMEM));
+        assert!(huge.is_err());
     }
 
     #[test]

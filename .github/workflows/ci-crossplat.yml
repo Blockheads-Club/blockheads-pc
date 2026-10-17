@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Builds and tests the host-facing crates (bhpc-mem, bhpc-cpu) on Windows and macOS.
+# Linux is covered by the main CI. These jobs have never run before this file was added: treat the
+# first failures as expected and fix forward (see crates/bhpc-cpu/README.md, "Unverified").
+name: ci-crossplat
+
+on:
+  push:
+    branches: [dev, main, "m2/**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64-msvc, os: windows-latest }
+          - { name: macos-x86_64, os: macos-13 }
+          - { name: macos-arm64, os: macos-14 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Boost (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install boost cmake
+          echo "BHPC_BOOST_ROOT=$(brew --prefix boost)" >> "$GITHUB_ENV"
+      - name: Boost (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # The runner image ships Boost headers; BOOST_ROOT_1_xx_0 names the newest install.
+          root="$(env | grep -E '^BOOST_ROOT_[0-9_]+=' | sort | tail -n1 | cut -d= -f2-)"
+          if [ -z "$root" ]; then choco install boost-msvc-14.3 -y; root="C:/local/boost_1_87_0"; fi
+          echo "BHPC_BOOST_ROOT=${root//\\//}" >> "$GITHUB_ENV"
+      - name: Build and test
+        run: cargo test -p bhpc-mem -p bhpc-cpu --locked
+      - name: Clippy
+        run: cargo clippy -p bhpc-mem -p bhpc-cpu --all-targets --locked -- -D warnings

@@ -13,6 +13,23 @@ set(DYNARMIC_TESTS OFF CACHE BOOL "" FORCE)
 set(DYNARMIC_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
 set(DYNARMIC_USE_PRECOMPILED_HEADERS OFF CACHE BOOL "" FORCE)
 
+# CMake >= 3.30 drops the FindBoost module (CMP0167) and wants a Boost CMake package; the header-only
+# Boost on GitHub's Windows runners and in many installs only has the module-style layout.
+if (POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
+endif()
+
+if (APPLE)
+    # dynarmic's macOS fastmem handler runs `mig` and writes generated files into the (vendored,
+    # read-only) source tree. Force the generic handler; bhpc-cpu then defaults fastmem off on macOS.
+    set(MACH_EXC_DEFS_DIR "MACH_EXC_DEFS_DIR-NOTFOUND" CACHE PATH "" FORCE)
+endif()
+
+if (MSVC)
+    # Keep the shim's flags in line with the dynarmic ones (conformance, big objects, no min/max macros).
+    add_compile_options(/permissive- /Zc:__cplusplus /bigobj /DNOMINMAX)
+endif()
+
 add_subdirectory(${BHPC_DYNARMIC_DIR} dynarmic EXCLUDE_FROM_ALL)
 
 add_library(bhpc_shim STATIC ${BHPC_SHIM_DIR}/bhpc_shim.cpp)

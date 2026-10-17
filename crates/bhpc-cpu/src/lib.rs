@@ -18,6 +18,8 @@
 //! parent's stack. Use [`Cpu::tail_call`] instead when the guest function's result is the thunk's
 //! result (no extra JIT, no depth limit).
 
+#[cfg(test)]
+mod buildcfg;
 mod ffi;
 mod table;
 
@@ -166,9 +168,14 @@ pub struct CpuOptions {
     pub cycle_counting: bool,
 }
 
+/// Whether fastmem is on by default. On macOS the vendored dynarmic is built with its generic (no-op)
+/// exception handler (the Mach handler needs `mig` and writes into the source tree), so a fastmem
+/// fault would crash instead of reaching the callbacks; callbacks it is.
+const FASTMEM_DEFAULT: bool = !cfg!(target_os = "macos");
+
 impl Default for CpuOptions {
     fn default() -> Self {
-        CpuOptions { fastmem: true, code_cache_bytes: 64 << 20, cycle_counting: false }
+        CpuOptions { fastmem: FASTMEM_DEFAULT, code_cache_bytes: 64 << 20, cycle_counting: false }
     }
 }
 

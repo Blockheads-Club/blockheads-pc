@@ -869,3 +869,17 @@ fn untranslatable_instruction_requests_interpreter_fallback() {
     put(&cpu, CODE, &[0xF100_0000, BX_LR]); // cpsie-class encoding dynarmic wants interpreted
     assert_eq!(cpu.call(CODE, &[]), Err(Stop::Fallback { pc: CODE }));
 }
+
+#[test]
+fn cycle_counting_reflects_options() {
+    assert!(!setup().cycle_counting());
+    let mem = Arc::new(GuestMemory::new().unwrap());
+    let cpu =
+        Cpu::with_options(mem, CpuOptions { fastmem: false, code_cache_bytes: 8 << 20, cycle_counting: true }).unwrap();
+    assert!(cpu.cycle_counting());
+}
+
+#[test]
+fn default_fastmem_matches_platform() {
+    assert_eq!(CpuOptions::default().fastmem, !cfg!(target_os = "macos"));
+}
