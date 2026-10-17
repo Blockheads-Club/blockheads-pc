@@ -128,6 +128,15 @@ impl Gles {
         Ok(id)
     }
 
+    /// Register a host context that the embedder created itself (for example the one it made current to load the
+    /// driver's entry points) as an EGL context, and return its handle.
+    pub fn egl_adopt_context(&self, host: HostContext) -> u32 {
+        let mut s = self.lock();
+        let id = s.egl.handle();
+        s.egl.contexts.insert(id, host);
+        id
+    }
+
     /// Destroy a context. Releases it first if it is current in the calling thread.
     pub fn egl_destroy_context(&self, ctx: u32) -> Result<(), u32> {
         let host = self.lock().egl.contexts.get(&ctx).copied();

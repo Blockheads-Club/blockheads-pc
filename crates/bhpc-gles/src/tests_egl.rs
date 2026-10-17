@@ -366,6 +366,17 @@ fn rust_api_for_the_java_side() {
     assert!(e.gl.egl_swap_interval(1));
     e.gl.egl_swap_buffers(surface).unwrap();
     assert_eq!(e.win.swaps.load(Ordering::SeqCst), 1);
-    e.cpu.set_reg(0, 0);
     e.call("eglWaitGL", &[]);
+    // A context the embedder made itself becomes an ordinary EGL context.
+    let adopted = e.gl.egl_adopt_context(4242);
+    e.gl.egl_make_current(surface, surface, adopted).unwrap();
+    assert_eq!(e.win.made_current.lock().unwrap().last(), Some(&Some(4242)));
+    e.gl.egl_destroy_context(adopted).unwrap();
+    assert_eq!(*e.win.destroyed.lock().unwrap(), [4242]);
+}
+
+#[test]
+fn the_hle_can_be_shared_between_threads() {
+    fn is_send_sync<T: Send + Sync + Clone + 'static>() {}
+    is_send_sync::<Gles>();
 }
