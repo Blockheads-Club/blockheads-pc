@@ -141,6 +141,7 @@ pub mod errno {
     pub const ENOMEM: u32 = 12;
     pub const EBUSY: u32 = 16;
     pub const EINVAL: u32 = 22;
+    pub const ENOSPC: u32 = 28;
     pub const ERANGE: u32 = 34;
     pub const EDEADLK: u32 = 35;
     pub const ENOTSUP: u32 = 95;

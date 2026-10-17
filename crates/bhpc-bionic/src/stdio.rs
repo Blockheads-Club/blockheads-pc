@@ -18,9 +18,22 @@ use std::io::Write;
 
 /// Which standard stream a `FILE*` is (0 stdin, 1 stdout, 2 stderr).
 fn stream_of(st: &Shared, fp: u32) -> Option<u32> {
-    let sf = lock(st).data["__sF"];
-    let off = fp.wrapping_sub(sf);
+    let s = lock(st);
+    // A standard stream that `freopen` pointed at a file has a record and behaves like any file.
+    std_index(&s, fp).filter(|_| !s.files.contains_key(&fp))
+}
+
+/// Which standard stream `fp` is, regardless of redirection.
+fn std_index(s: &crate::State, fp: u32) -> Option<u32> {
+    let off = fp.wrapping_sub(s.data["__sF"]);
     (off < 3 * file::SIZE && off % file::SIZE == 0).then_some(off / file::SIZE)
+}
+
+/// Release the guest `FILE` block of a closed stream (the standard streams' blocks are never freed).
+fn free_file(s: &mut crate::State, fp: u32) {
+    if std_index(s, fp).is_none() {
+        s.heap.free(fp);
+    }
 }
 
 /// The descriptor behind a file opened with `fopen`.
@@ -455,7 +468,7 @@ fn fclose(c: &mut Cpu, st: &Shared) {
         let r = c.call_or_stop(func, &[cookie]);
         let mut s = lock(st);
         s.files.remove(&fp);
-        s.heap.free(fp);
+        free_file(&mut s, fp);
         drop(s);
         if let Some(r) = r {
             c.ret_u32(r.r0);
@@ -469,7 +482,7 @@ fn fclose(c: &mut Cpu, st: &Shared) {
     };
     // A `funopen` stream without a close callback has no descriptor to close.
     let r = if rec.fd < 0 { Ok(()) } else { s.vfs.close(rec.fd) };
-    s.heap.free(fp);
+    free_file(&mut s, fp);
     drop(s);
     match r {
         Ok(()) => c.ret_u32(0),
@@ -620,59 +633,256 @@ fn ungetc(c: &mut Cpu, st: &Shared) {
     c.ret_u32(ch & 0xff);
 }
 
-fn fseek(c: &mut Cpu, st: &Shared) {
-    args3(c, |c, fp, off, whence| {
-        let Some(fd) = file_fd(st, fp) else { return fail(c, st, errno::EBADF) };
-        let mut s = lock(st);
-        // A relative seek is relative to the logical position, which is behind the pushed-back bytes.
-        let pending = s.files.get(&fp).map_or(0, |f| f.unget.len() as i64);
-        let off = i64::from(off as i32) - if whence == 1 { pending } else { 0 };
-        let r = s.vfs.lseek(fd, off, whence);
-        if r.is_ok() {
-            if let Some(f) = s.files.get_mut(&fp) {
-                f.unget.clear();
-            }
-        }
-        drop(s);
-        match r {
-            Ok(_) => {
-                set_flag(c, fp, file::SEOF, false);
-                c.ret_u32(0);
-            }
-            Err(e) => fail(c, st, e),
-        }
-    });
+/// Why a seek did not happen.
+enum SeekErr {
+    /// Fail with this `errno`.
+    Errno(u32),
+    /// A guest `_seek` callback reported failure (it sets `errno` itself).
+    Callback,
+    /// The guest was stopped while running a callback.
+    Stopped,
 }
 
-fn args3(c: &mut Cpu, f: impl FnOnce(&mut Cpu, u32, u32, u32)) {
+/// Reposition the stream's underlying object (the `_seek` callback of a `funopen` stream, else the file
+/// descriptor); returns the new offset.
+fn seek_raw(c: &mut Cpu, st: &Shared, fp: u32, off: i64, whence: u32) -> Result<u64, SeekErr> {
+    if let Some((func, cookie)) = callback(c, fp, file::SEEK) {
+        return match c.call_or_stop(func, &[cookie, off as u32, whence]) {
+            None => Err(SeekErr::Stopped),
+            Some(r) if (r.r0 as i32) < 0 => Err(SeekErr::Callback),
+            Some(r) => Ok(u64::from(r.r0)),
+        };
+    }
+    match file_fd(st, fp) {
+        None => Err(SeekErr::Errno(errno::EBADF)),
+        // A `funopen` stream without a `_seek` callback cannot seek.
+        Some(fd) if fd < 0 => Err(SeekErr::Errno(errno::ESPIPE)),
+        Some(fd) => lock(st).vfs.lseek(fd, off, whence).map_err(SeekErr::Errno),
+    }
+}
+
+fn seek_failed(c: &mut Cpu, st: &Shared, e: SeekErr) {
+    match e {
+        SeekErr::Errno(e) => fail(c, st, e),
+        SeekErr::Callback => minus1(c),
+        SeekErr::Stopped => {}
+    }
+}
+
+/// Bytes pushed back with `ungetc` (the logical position is behind the physical one by this much).
+fn pending(st: &Shared, fp: u32) -> i64 {
+    lock(st).files.get(&fp).map_or(0, |f| f.unget.len() as i64)
+}
+
+/// Seek and, on success, forget pushed-back bytes and the end-of-file mark.
+fn seek_stream(c: &mut Cpu, st: &Shared, fp: u32, off: i64, whence: u32) -> Result<u64, SeekErr> {
+    // A relative seek is relative to the logical position, which is behind the pushed-back bytes.
+    let off = off - if whence == 1 { pending(st, fp) } else { 0 };
+    let pos = seek_raw(c, st, fp, off, whence)?;
+    if let Some(f) = lock(st).files.get_mut(&fp) {
+        f.unget.clear();
+    }
+    set_flag(c, fp, file::SEOF, false);
+    Ok(pos)
+}
+
+fn fseek(c: &mut Cpu, st: &Shared) {
     let mut a = c.args();
-    let (x, y, z) = (a.u32(c), a.u32(c), a.u32(c));
-    f(c, x, y, z);
+    let (fp, off, whence) = (a.u32(c), a.u32(c), a.u32(c));
+    match seek_stream(c, st, fp, i64::from(off as i32), whence) {
+        Ok(_) => c.ret_u32(0),
+        Err(e) => seek_failed(c, st, e),
+    }
 }
 
 fn ftell(c: &mut Cpu, st: &Shared) {
     let fp = c.args().u32(c);
-    let Some(fd) = file_fd(st, fp) else { return fail(c, st, errno::EBADF) };
-    let mut s = lock(st);
-    let pending = s.files.get(&fp).map_or(0, |f| f.unget.len() as u64);
-    let r = s.vfs.lseek(fd, 0, 1);
-    drop(s);
-    match r {
-        Ok(p) => c.ret_u32(p.saturating_sub(pending) as u32),
-        Err(e) => fail(c, st, e),
+    match seek_raw(c, st, fp, 0, 1) {
+        Ok(p) => c.ret_u32(p.saturating_sub(pending(st, fp) as u64) as u32),
+        Err(e) => seek_failed(c, st, e),
     }
 }
 
 fn rewind(c: &mut Cpu, st: &Shared) {
     let fp = c.args().u32(c);
-    let Some(fd) = file_fd(st, fp) else { return };
-    let mut s = lock(st);
-    let _ = s.vfs.lseek(fd, 0, 0);
-    if let Some(f) = s.files.get_mut(&fp) {
-        f.unget.clear();
+    if seek_stream(c, st, fp, 0, 0).is_ok() {
+        set_flag(c, fp, file::SERR, false);
     }
+}
+
+/// `freopen(path, mode, fp)`: close what `fp` is attached to and attach it to `path`. Works on standard
+/// streams too (redirecting them to a file). With a NULL path only the mode changes.
+fn freopen(c: &mut Cpu, st: &Shared) {
+    let mut a = c.args();
+    let (p, m, fp) = (a.u32(c), a.u32(c), a.u32(c));
+    let Some(mode) = cstr(c, m) else { return };
+    let Some((oflags, fflags)) = parse_mode(&mode) else { return fail_null(c, st, errno::EINVAL) };
+    let std = stream_of(st, fp).is_some();
+    if !std && !lock(st).files.contains_key(&fp) {
+        return fail_null(c, st, errno::EBADF);
+    }
+    if p == 0 {
+        set_flag(c, fp, file::SRD | file::SWR | file::SRW, false);
+        set_flag(c, fp, fflags, true);
+        return c.ret_u32(fp);
+    }
+    let Some(path) = cstr(c, p) else { return };
+    // Detach from the old object first (the close callback of a `funopen` stream runs here).
+    if let Some((func, cookie)) = callback(c, fp, file::CLOSE) {
+        if c.call_or_stop(func, &[cookie]).is_none() {
+            return;
+        }
+    }
+    let mut s = lock(st);
+    if let Some(old) = s.files.get(&fp).map(|f| f.fd).filter(|fd| *fd >= 0) {
+        let _ = s.vfs.close(old);
+    }
+    let opened = s.vfs.open(&String::from_utf8_lossy(&path), oflags);
+    let fd = match opened {
+        Ok(fd) => fd,
+        Err(e) => {
+            // The stream is closed either way; a standard stream falls back to its host sink.
+            s.files.remove(&fp);
+            free_file(&mut s, fp);
+            drop(s);
+            return fail_null(c, st, e);
+        }
+    };
+    s.files.insert(fp, FileRec { fd, unget: Vec::new() });
     drop(s);
-    set_flag(c, fp, file::SEOF | file::SERR, false);
+    let m = c.mem().clone();
+    // The FILE block is mapped (it is a standard stream or came from the guest heap).
+    let _ = m.write_u16(fp + file::FLAGS, fflags);
+    let _ = m.write_u16(fp + file::FILE_NO, fd as u16);
+    for off in [file::READ, file::WRITE, file::SEEK, file::CLOSE] {
+        let _ = m.write_u32(fp + off, 0);
+    }
+    let _ = m.write_u32(fp + file::COOKIE, fp);
+    c.ret_u32(fp);
+}
+
+// ---------- scanf ----------
+
+/// Where a `scanf` family call reads from.
+enum ScanSrc {
+    /// A string (`sscanf`).
+    Str { data: Vec<u8>, pos: usize },
+    /// A stream (`fscanf`), with the one byte of lookahead `peek` has read.
+    Stream { fp: u32, look: Option<u8>, peeked: bool },
+}
+
+struct GuestScan<'a> {
+    c: &'a mut Cpu,
+    st: &'a Shared,
+    src: ScanSrc,
+    regs: Option<ArgCursor>,
+    ap: u32,
+}
+
+impl crate::scan::ScanHost for GuestScan<'_> {
+    fn peek(&mut self) -> Option<u8> {
+        match &mut self.src {
+            ScanSrc::Str { data, pos } => data.get(*pos).copied(),
+            ScanSrc::Stream { fp, look, peeked } => {
+                if !*peeked {
+                    *look = read_stream(self.c, self.st, *fp, 1).and_then(|b| b.first().copied());
+                    *peeked = true;
+                }
+                *look
+            }
+        }
+    }
+    fn bump(&mut self) {
+        match &mut self.src {
+            ScanSrc::Str { pos, .. } => *pos += 1,
+            ScanSrc::Stream { look, peeked, .. } => {
+                *look = None;
+                *peeked = false;
+            }
+        }
+    }
+    fn arg_ptr(&mut self) -> u32 {
+        match self.regs.as_mut() {
+            Some(cur) => cur.u32(self.c),
+            None => {
+                let v = self.c.mem().read_u32(self.ap).unwrap_or(0);
+                self.ap = self.ap.wrapping_add(4);
+                v
+            }
+        }
+    }
+    fn store(&mut self, addr: u32, bytes: &[u8]) -> bool {
+        wr(self.c, addr, bytes)
+    }
+}
+
+/// Run a `scanf` family call: `fmt_addr` against `src`, arguments from `args`.
+fn do_scan(c: &mut Cpu, st: &Shared, src: ScanSrc, fmt_addr: u32, args: Args) {
+    let Some(fmt) = cstr(c, fmt_addr) else { return };
+    let (regs, ap) = match args {
+        Args::Regs(cur) => (Some(cur), 0),
+        Args::Va(ap) => (None, ap),
+    };
+    let mut host = GuestScan { c, st, src, regs, ap };
+    let n = crate::scan::scan(&mut host, &fmt);
+    // Give the byte the scan peeked at but did not consume back to the stream.
+    if let ScanSrc::Stream { fp, look: Some(b), peeked: true } = host.src {
+        if let Some(rec) = lock(st).files.get_mut(&fp) {
+            rec.unget.push(b);
+        }
+    }
+    c.ret_u32(n as u32);
+}
+
+fn str_src(c: &mut Cpu, addr: u32) -> Option<ScanSrc> {
+    cstr(c, addr).map(|data| ScanSrc::Str { data, pos: 0 })
+}
+
+fn stream_src(fp: u32) -> ScanSrc {
+    ScanSrc::Stream { fp, look: None, peeked: false }
+}
+
+fn sscanf(c: &mut Cpu, st: &Shared) {
+    let mut a = c.args();
+    let (s, f) = (a.u32(c), a.u32(c));
+    if let Some(src) = str_src(c, s) {
+        do_scan(c, st, src, f, Args::Regs(a));
+    }
+}
+
+fn vsscanf(c: &mut Cpu, st: &Shared) {
+    let mut a = c.args();
+    let (s, f, ap) = (a.u32(c), a.u32(c), a.u32(c));
+    if let Some(src) = str_src(c, s) {
+        do_scan(c, st, src, f, Args::Va(ap));
+    }
+}
+
+fn fscanf(c: &mut Cpu, st: &Shared) {
+    let mut a = c.args();
+    let (fp, f) = (a.u32(c), a.u32(c));
+    do_scan(c, st, stream_src(fp), f, Args::Regs(a));
+}
+
+fn vfscanf(c: &mut Cpu, st: &Shared) {
+    let mut a = c.args();
+    let (fp, f, ap) = (a.u32(c), a.u32(c), a.u32(c));
+    do_scan(c, st, stream_src(fp), f, Args::Va(ap));
+}
+
+/// `scanf`: standard input is at end of file, so this is `EOF` unless the format is empty.
+fn scanf(c: &mut Cpu, st: &Shared) {
+    let mut a = c.args();
+    let f = a.u32(c);
+    let stdin = lock(st).data["__sF"];
+    do_scan(c, st, stream_src(stdin), f, Args::Regs(a));
+}
+
+fn vscanf(c: &mut Cpu, st: &Shared) {
+    let mut a = c.args();
+    let (f, ap) = (a.u32(c), a.u32(c));
+    let stdin = lock(st).data["__sF"];
+    do_scan(c, st, stream_src(stdin), f, Args::Va(ap));
 }
 
 fn clearerr(c: &mut Cpu, _: &Shared) {
@@ -721,6 +931,13 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("setvbuf", setvbuf),
     ("setbuf", nothing),
     ("clearerr", clearerr),
+    ("freopen", freopen),
+    ("sscanf", sscanf),
+    ("vsscanf", vsscanf),
+    ("fscanf", fscanf),
+    ("vfscanf", vfscanf),
+    ("scanf", scanf),
+    ("vscanf", vscanf),
 ];
 
 #[cfg(test)]
@@ -948,6 +1165,8 @@ mod file_tests {
 
     const P: u32 = SCRATCH; // path
     const M: u32 = SCRATCH + 0x100; // mode
+    const A: u32 = SCRATCH + 0x200; // scan format
+    const B: u32 = SCRATCH + 0x800; // scan results
     const BUF: u32 = SCRATCH + 0x400;
     const BAD: u32 = 0x10;
     const NEG1: u32 = u32::MAX;
@@ -1347,5 +1566,211 @@ mod file_tests {
         assert_eq!(s.call("fputs", &[BUF, w]).r0, NEG1, "no scratch buffer for the callback");
         assert_eq!(s.call("fgetc", &[r]).r0, NEG1);
         assert_eq!(s.errno(), 12);
+    }
+
+    /// A seekable in-memory stream behind `funopen` callbacks: reads and seeks over `data`.
+    fn memory_stream(e: &mut Env, data: &[u8], with_seek: bool) -> (u32, Arc<Mutex<usize>>) {
+        let pos = Arc::new(Mutex::new(0usize));
+        let (p1, p2) = (pos.clone(), pos.clone());
+        let bytes = data.to_vec();
+        let len = bytes.len();
+        let read_cb = e
+            .cpu
+            .register_shared_thunk(
+                &format!("mread{with_seek}"),
+                Arc::new(move |c: &mut Cpu| {
+                    let mut a = c.args();
+                    let (_cookie, buf, n) = (a.u32(c), a.u32(c), a.u32(c));
+                    let mut p = p1.lock().unwrap();
+                    let k = (bytes.len() - *p).min(n as usize);
+                    c.mem().write_bytes(buf, &bytes[*p..*p + k]).unwrap();
+                    *p += k;
+                    c.ret_u32(k as u32);
+                }),
+            )
+            .unwrap();
+        let seek_cb = if with_seek {
+            e.cpu
+                .register_shared_thunk(
+                    "mseek",
+                    Arc::new(move |c: &mut Cpu| {
+                        let mut a = c.args();
+                        let (_cookie, off, whence) = (a.u32(c), a.u32(c) as i32 as i64, a.u32(c));
+                        let base = match whence {
+                            0 => 0,
+                            1 => *p2.lock().unwrap() as i64,
+                            _ => len as i64,
+                        };
+                        if base + off < 0 {
+                            return c.ret_u32(NEG1);
+                        }
+                        *p2.lock().unwrap() = (base + off) as usize;
+                        c.ret_u32((base + off) as u32);
+                    }),
+                )
+                .unwrap()
+        } else {
+            0
+        };
+        (e.call("funopen", &[0, read_cb, 0, seek_cb, 0]).r0, pos)
+    }
+
+    #[test]
+    fn seeking_and_telling_funopen_streams() {
+        let mut e = Env::new();
+        let (fp, pos) = memory_stream(&mut e, b"0123456789", true);
+        assert_eq!(e.call("ftell", &[fp]).r0, 0);
+        assert_eq!(e.call("fread", &[BUF, 1, 4, fp]).r0, 4);
+        assert_eq!(e.call("ftell", &[fp]).r0, 4);
+        assert_eq!(e.call("fseek", &[fp, 2, 0]).r0, 0);
+        assert_eq!(e.call("fgetc", &[fp]).r0, '2' as u32);
+        // Relative seeks and ftell are relative to the logical position, behind pushed-back bytes.
+        e.call("ungetc", &['x' as u32, fp]);
+        assert_eq!(e.call("ftell", &[fp]).r0, 2);
+        assert_eq!(e.call("fseek", &[fp, 1, 1]).r0, 0);
+        assert_eq!(e.call("fgetc", &[fp]).r0, '3' as u32);
+        assert_eq!(e.call("fseek", &[fp, NEG1, 2]).r0, 0);
+        assert_eq!(e.call("fgetc", &[fp]).r0, '9' as u32);
+        assert_eq!(e.call("fgetc", &[fp]).r0, NEG1);
+        assert_ne!(flags(&e, fp) & file::SEOF, 0);
+        assert_eq!(e.call("fseek", &[fp, 3, 0]).r0, 0);
+        assert_eq!(flags(&e, fp) & file::SEOF, 0, "seeking clears EOF");
+        assert_eq!(*pos.lock().unwrap(), 3);
+        // A callback failure is reported as -1 (the callback owns errno).
+        e.set_errno(0);
+        assert_eq!(e.call("fseek", &[fp, NEG1 - 10, 0]).r0, NEG1);
+        assert_eq!(e.errno(), 0);
+        assert_eq!(e.call("ftell", &[fp]).r0, 3, "a failed seek moves nothing");
+        e.call("rewind", &[fp]);
+        assert_eq!(e.call("fgetc", &[fp]).r0, '0' as u32);
+        // Without a _seek callback the stream is not seekable.
+        let (plain, _) = memory_stream(&mut e, b"abc", false);
+        for (f, args) in [("fseek", vec![plain, 0, 0]), ("ftell", vec![plain])] {
+            e.set_errno(0);
+            assert_eq!(e.call(f, &args).r0, NEG1, "{f}");
+            assert_eq!(e.errno(), 29, "{f}: ESPIPE");
+        }
+        // A callback that stops the guest ends the call.
+        let boom = e
+            .cpu
+            .register_shared_thunk("seek_boom", Arc::new(|c: &mut Cpu| c.request_stop(Stop::Host("seek".into()))))
+            .unwrap();
+        let s = e.call("funopen", &[0, boom, 0, boom, 0]).r0;
+        assert!(e.try_call("fseek", &[s, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn fscanf_reads_files_and_gives_back_its_lookahead() {
+        let (mut e, tmp) = fs_env();
+        std::fs::write(tmp.0.join("rw/n.txt"), "12 abc\n7,8").unwrap();
+        let fp = open(&mut e, "n.txt", "r");
+        e.put_str(A, "%d %s");
+        assert_eq!(e.call("fscanf", &[fp, A, B, B + 0x20]).r0, 2);
+        assert_eq!(e.mem().read_u32(B).unwrap(), 12);
+        assert_eq!(e.get_str(B + 0x20), "abc");
+        assert_eq!(e.call("fgetc", &[fp]).r0, '\n' as u32, "the byte after the scan is still there");
+        e.put_str(A, "%d,%d");
+        assert_eq!(e.call("fscanf", &[fp, A, B, B + 4]).r0, 2);
+        assert_eq!(e.mem().read_u32(B + 4).unwrap(), 8);
+        assert_eq!(e.call("fscanf", &[fp, A, B, B + 4]).r0, NEG1, "end of file");
+        // Streams that are not readable report end of input.
+        let out = e.data("__sF") + file::SIZE;
+        assert_eq!(e.call("fscanf", &[out, A, B, B + 4]).r0, NEG1);
+        // funopen streams are scanned through their read callback.
+        let (m, _) = memory_stream(&mut e, b"5 6", true);
+        e.put_str(A, "%d %d");
+        assert_eq!(e.call("fscanf", &[m, A, B, B + 4]).r0, 2);
+        assert_eq!(e.mem().read_u32(B + 4).unwrap(), 6);
+    }
+
+    #[test]
+    fn freopen_redirects_files_standard_streams_and_funopen_streams() {
+        let (mut e, tmp) = fs_env();
+        std::fs::write(tmp.0.join("rw/a.txt"), "first").unwrap();
+        std::fs::write(tmp.0.join("rw/b.txt"), "second").unwrap();
+        let reopen = |e: &mut Env, name: &str, mode: &str, fp: u32| {
+            e.put_str(P, &format!("/data/data/pkg/{name}"));
+            e.put_str(M, mode);
+            e.call("freopen", &[P, M, fp]).r0
+        };
+        // A file stream moves to another file; the FILE block stays the same.
+        let fp = open(&mut e, "a.txt", "r");
+        e.call("ungetc", &['z' as u32, fp]);
+        assert_eq!(reopen(&mut e, "b.txt", "r", fp), fp);
+        assert_eq!(e.call("fread", &[BUF, 1, 20, fp]).r0, 6, "pushed-back bytes are gone");
+        assert_eq!(e.mem().read_bytes(BUF, 6).unwrap(), b"second");
+        assert_eq!(reopen(&mut e, "c.txt", "w", fp), fp);
+        assert_eq!(flags(&e, fp) & 0x1c, file::SWR);
+        e.put_str(BUF, "new");
+        e.call("fputs", &[BUF, fp]);
+        assert_eq!(e.call("fclose", &[fp]).r0, 0);
+        assert_eq!(std::fs::read_to_string(tmp.0.join("rw/c.txt")).unwrap(), "new");
+        // Same path, only the mode changes: NULL path.
+        let fp = open(&mut e, "a.txt", "r");
+        e.put_str(M, "r+");
+        assert_eq!(e.call("freopen", &[0, M, fp]).r0, fp);
+        assert_eq!(flags(&e, fp) & 0x1c, file::SRW);
+        // Failures: bad mode, unknown FILE, missing file (the stream is closed), faults.
+        e.put_str(M, "q");
+        e.set_errno(0);
+        assert_eq!(e.call("freopen", &[0, M, fp]).r0, 0);
+        assert_eq!(e.errno(), 22);
+        assert_eq!(reopen(&mut e, "a.txt", "r", 0x1234), 0);
+        assert_eq!(e.errno(), 9);
+        assert_eq!(reopen(&mut e, "missing.txt", "r", fp), 0);
+        assert_eq!(e.errno(), 2);
+        assert_eq!(e.call("fclose", &[fp]).r0, NEG1, "freopen failure closed it");
+        e.put_str(M, "r");
+        assert!(matches!(e.try_call("freopen", &[0, BAD, fp]), Err(Stop::Fault(_))));
+        assert!(matches!(e.try_call("freopen", &[BAD, M, e.data("__sF")]), Err(Stop::Fault(_))));
+        // stdout redirected to a file, then back to the host sink after a failed reopen.
+        let stdout = e.data("__sF") + file::SIZE;
+        assert_eq!(reopen(&mut e, "log.txt", "w", stdout), stdout);
+        e.put_str(BUF, "to file");
+        e.call("puts", &[BUF]);
+        e.call("fflush", &[stdout]);
+        assert_eq!(e.out.text(), "", "nothing reached the host stdout");
+        assert_eq!(std::fs::read_to_string(tmp.0.join("rw/log.txt")).unwrap(), "to file\n");
+        assert_eq!(e.call("fclose", &[stdout]).r0, 0, "closing a redirected stream keeps its block");
+        e.call("puts", &[BUF]);
+        assert_eq!(e.out.text(), "to file\n", "after fclose the stream is the host's again");
+        assert_eq!(reopen(&mut e, "log.txt", "w", stdout), stdout);
+        assert_eq!(reopen(&mut e, "missing/dir/x", "w", stdout), 0);
+        e.call("puts", &[BUF]);
+        assert!(e.out.text().ends_with("to file\nto file\n"));
+        // stdin can be pointed at a file too.
+        let stdin = e.data("__sF");
+        assert_eq!(reopen(&mut e, "a.txt", "r", stdin), stdin);
+        e.put_str(A, "%s");
+        assert_eq!(e.call("scanf", &[A, B]).r0, 1);
+        assert_eq!(e.get_str(B), "first");
+        // A funopen stream: its close callback runs, then it is an ordinary file stream.
+        let closed = Arc::new(Mutex::new(0));
+        let c2 = closed.clone();
+        let close_cb = e
+            .cpu
+            .register_shared_thunk(
+                "freopen_close",
+                Arc::new(move |c: &mut Cpu| {
+                    *c2.lock().unwrap() += 1;
+                    c.ret_u32(0);
+                }),
+            )
+            .unwrap();
+        let (m, _) = memory_stream(&mut e, b"zzz", true);
+        e.mem().write_u32(m + file::CLOSE, close_cb).unwrap();
+        e.mem().write_u32(m + file::COOKIE, 1).unwrap();
+        assert_eq!(reopen(&mut e, "a.txt", "r", m), m);
+        assert_eq!(*closed.lock().unwrap(), 1);
+        assert_eq!(e.call("fread", &[BUF, 1, 5, m]).r0, 5);
+        assert_eq!(e.mem().read_bytes(BUF, 5).unwrap(), b"first");
+        // A close callback that stops the guest ends the call.
+        let boom = e
+            .cpu
+            .register_shared_thunk("freopen_boom", Arc::new(|c: &mut Cpu| c.request_stop(Stop::Host("boom".into()))))
+            .unwrap();
+        let (m2, _) = memory_stream(&mut e, b"zzz", true);
+        e.mem().write_u32(m2 + file::CLOSE, boom).unwrap();
+        assert!(e.try_call("freopen", &[P, M, m2]).is_err());
     }
 }

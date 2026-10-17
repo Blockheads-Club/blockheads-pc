@@ -168,6 +168,9 @@ pub struct State {
     pub(crate) main_thread: u32,
     pub(crate) tm_buf: u32,
     pub(crate) utc: u32,
+    /// `inet_ntoa`'s static text buffer and the `h_errno` cell (allocated on first use).
+    pub(crate) inet_buf: u32,
+    pub(crate) h_errno: u32,
     /// Guest copies of zone abbreviations (`tm_zone`, `tzname`).
     /// `timezone` / `tzname` have been filled in (first `localtime` or `tzset`).
     pub(crate) tz_ready: bool,
@@ -286,6 +289,8 @@ impl State {
             main_thread,
             tm_buf,
             utc,
+            inet_buf: 0,
+            h_errno: 0,
             tz_ready: false,
             zone_names: HashMap::new(),
             keys: HashMap::new(),

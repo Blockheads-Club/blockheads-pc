@@ -176,6 +176,15 @@ impl Sched {
         self.g().live += 1;
     }
 
+    /// A thread that was announced with [`Sched::thread_started`] could not be created. The caller keeps the baton.
+    pub(crate) fn thread_cancelled(&self) {
+        let mut g = self.g();
+        g.live -= 1;
+        g.epoch += 1;
+        g.blocked = 0;
+        self.cv.notify_all();
+    }
+
     /// The calling thread is done: give up the baton for good.
     pub(crate) fn thread_exit(&self, failure: Option<String>) {
         let mut g = self.g();
@@ -413,7 +422,7 @@ fn sched_undo(st: &Shared, handle: u32) {
     s.heap.free(handle);
     let sched = s.sched.clone();
     drop(s);
-    sched.thread_exit(None);
+    sched.thread_cancelled();
 }
 
 /// Call the destructors of the thread's non-null TLS values once, as `pthread_exit` does.
@@ -516,6 +525,14 @@ mod tests {
         assert_eq!(create(&mut e, 0, 0, 0), errno::EINVAL);
         assert!(matches!(e.try_call("pthread_create", &[BAD, 0, nop, 0]), Err(Stop::Fault(_))));
         assert!(matches!(e.try_call("pthread_create", &[T, BAD, nop, 0]), Err(Stop::Fault(_))));
+        // The thread created before the unwritable `pthread_t` faulted still runs to its end; let it finish.
+        for _ in 0..5000 {
+            if e.st.lock().unwrap().sched.live() == 1 {
+                break;
+            }
+            e.call("sched_yield", &[]);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         // A stack that cannot be mapped.
         e.call("pthread_attr_init", &[ATTR]);
         e.mem().write_u32(ATTR + attr::STACK_SIZE, 0xF000_0000).unwrap();

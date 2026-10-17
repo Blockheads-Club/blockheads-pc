@@ -17,15 +17,18 @@ pub mod fixture;
 pub mod fmt;
 pub mod guest;
 pub mod heap;
+pub mod inet;
 pub mod layout;
 pub mod libm;
 pub mod misc;
 pub mod pthread;
+pub(crate) mod scan;
 pub mod sched;
 pub mod state;
 pub mod stdio;
 pub mod strftime;
 pub mod string;
+pub mod strptime;
 pub mod sys;
 pub mod timefns;
 pub mod vfs;
@@ -60,6 +63,8 @@ fn tables() -> Vec<&'static [(&'static str, Impl)]> {
         ctype::TABLE,
         fixture::TABLE,
         libm::TABLE,
+        inet::TABLE,
+        strptime::TABLE,
     ];
     v.extend(sys::tables());
     v
