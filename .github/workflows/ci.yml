@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# CI for blockheads-pc: format, build, clippy (-D warnings), tests and the 100% line + function coverage gate.
+#
+# * Nothing here needs the game: tests that read an APK are `#[ignore]`d behind BHPC_APK and never run in CI,
+#   and no step downloads an APK.
+# * Linux x86_64 is the only verified platform today. The matrix, the per-OS dependency steps and the
+#   `coverage` switch are already in place for Windows and macOS (milestone M8); enable them by uncommenting
+#   the matching `include` entries.
+name: ci
+
+on:
+  push:
+    branches: [dev, main, "m*/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            coverage: true
+          # - name: macos-arm64
+          #   os: macos-latest
+          #   coverage: false
+          # - name: windows-x86_64
+          #   os: windows-latest
+          #   coverage: false
+    steps:
+      - uses: actions/checkout@v4
+
+      # dynarmic (C++20, header-only Boost use) is built by crates/bhpc-cpu/build.rs through CMake.
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ libboost-dev
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake boost
+      - name: Install build dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: vcpkg install boost-headers:x64-windows
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+
+      # Cargo registry and dependency artifacts.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      # The vendored dynarmic build (about 3.5 minutes per profile) lives in the build-script output of
+      # bhpc-cpu, which rust-cache does not keep for workspace members. Cache it on its inputs.
+      - name: Cache the dynarmic build
+        uses: actions/cache@v4
+        with:
+          path: target/*/build/bhpc-cpu-*/out
+          key: dynarmic-${{ matrix.name }}-${{ hashFiles('third_party/dynarmic/**', 'crates/bhpc-cpu/build.rs', 'crates/bhpc-cpu/cmake/**', 'crates/bhpc-cpu/shim/**') }}
+          restore-keys: dynarmic-${{ matrix.name }}-
+
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Build
+        run: cargo build --workspace --all-targets
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Install cargo-llvm-cov
+        if: matrix.coverage
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      # Fails below 100% of lines or functions of our own Rust code (see scripts/coverage.sh).
+      - name: Coverage gate
+        if: matrix.coverage
+        run: scripts/coverage.sh
