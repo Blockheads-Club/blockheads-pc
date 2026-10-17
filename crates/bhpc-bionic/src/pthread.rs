@@ -35,28 +35,49 @@ fn once_return(c: &mut Cpu, st: &Shared) -> u32 {
     addr
 }
 
+/// `pthread_once`: a state machine on the guest word (`INIT` -> `IN_PROGRESS` -> `DONE`). The baton makes the
+/// read-modify-write of the word atomic; threads that find `IN_PROGRESS` block (via the scheduler) until the
+/// running initialiser has returned.
 fn pthread_once(c: &mut Cpu, st: &Shared) {
     args!(c; once, init);
-    let Some(state) = rd32(c, once) else { return };
-    if state != 0 {
-        return c.ret_u32(0);
+    loop {
+        let Some(state) = rd32(c, once) else { return };
+        match state {
+            sync::ONCE_DONE => return c.ret_u32(0),
+            sync::ONCE_INIT => break,
+            _ => {
+                if lock(st).once_owner.get(&once) == Some(&ctx().tid) {
+                    // The initialiser re-entered its own once control: it would wait for itself forever.
+                    return c.ret_u32(errno::EDEADLK);
+                }
+                if block(c, st, None, "pthread_once").is_none() {
+                    return;
+                }
+            }
+        }
     }
-    // Run `init` as a tail call whose return lands in the continuation thunk, which pops the
-    // original return address again (a nested JIT run is not allowed).
+    // Run `init` as a tail call whose return lands in the continuation thunk, which pops the original
+    // return address and the once control again (a nested JIT run is not allowed).
     let ret = once_return(c, st);
     let sp = c.sp() - 8;
-    if !(wr32(c, once, sync::ONCE_DONE) && wr32(c, sp, c.reg(12))) {
+    if !(wr32(c, once, sync::ONCE_IN_PROGRESS) && wr32(c, sp, c.reg(12)) && wr32(c, sp + 4, once)) {
         return;
     }
+    lock(st).once_owner.insert(once, ctx().tid);
     c.set_sp(sp);
     c.set_reg(14, ret);
     c.tail_call(init);
 }
 
-fn once_return_thunk(c: &mut Cpu, _: &Shared) {
+fn once_return_thunk(c: &mut Cpu, st: &Shared) {
     let sp = c.sp();
     let orig = c.mem().read_u32(sp).unwrap_or(0);
+    let once = c.mem().read_u32(sp + 4).unwrap_or(0);
     c.set_sp(sp + 8);
+    // The control word was writable when the initialiser started.
+    let _ = c.mem().write_u32(once, sync::ONCE_DONE);
+    lock(st).once_owner.remove(&once);
+    notify(st);
     c.ret_u32(0);
     c.tail_call(orig);
 }
@@ -329,6 +350,63 @@ fn cond_broadcast(c: &mut Cpu, st: &Shared) {
     let cv = c.args().u32(c);
     wake(st, cv, usize::MAX);
     c.ret_u32(0);
+}
+
+// ---------- futex ----------
+
+/// `__futex_wait(ftx, val, timeout)`: sleep while `*ftx == val`. Returns 0 when woken, `-EAGAIN` if the word
+/// already differs and `-ETIMEDOUT` when the (relative) timeout passes, like the raw bionic wrapper.
+fn futex_wait(c: &mut Cpu, st: &Shared) {
+    args!(c; ftx, val, ts);
+    let Some(word) = rd32(c, ftx) else { return };
+    if word != val {
+        return c.ret_u32(-(errno::EAGAIN as i32) as u32);
+    }
+    let deadline = if ts == 0 {
+        None
+    } else {
+        let (Some(sec), Some(nsec)) = (rd32(c, ts), rd32(c, ts + 4)) else { return };
+        if nsec >= 1_000_000_000 {
+            return c.ret_u32(-(errno::EINVAL as i32) as u32);
+        }
+        Some(Instant::now() + Duration::from_nanos(u64::from(sec) * 1_000_000_000 + u64::from(nsec)))
+    };
+    let ticket = {
+        let mut s = lock(st);
+        let t = s.next_wait;
+        s.next_wait += 1;
+        s.futex_q.entry(ftx).or_default().push_back(t);
+        t
+    };
+    let result = loop {
+        if lock(st).woken.remove(&ticket) {
+            break 0;
+        }
+        let Some(end) = block(c, st, deadline, "__futex_wait") else { return };
+        if end == WaitEnd::TimedOut {
+            let mut s = lock(st);
+            s.futex_q.entry(ftx).or_default().retain(|t| *t != ticket);
+            // A wake that raced with the timeout still counts.
+            break if s.woken.remove(&ticket) { 0 } else { -(errno::ETIMEDOUT as i32) as u32 };
+        }
+    };
+    c.ret_u32(result);
+}
+
+/// `__futex_wake(ftx, count)`: wake up to `count` waiters of the word; returns how many were woken.
+fn futex_wake(c: &mut Cpu, st: &Shared) {
+    args!(c; ftx, count);
+    let mut woken = 0;
+    {
+        let mut s = lock(st);
+        while woken < count.min(i32::MAX as u32) {
+            let Some(t) = s.futex_q.get_mut(&ftx).and_then(std::collections::VecDeque::pop_front) else { break };
+            s.woken.insert(t);
+            woken += 1;
+        }
+    }
+    notify(st);
+    c.ret_u32(woken);
 }
 
 // ---------- read/write locks ----------
@@ -648,6 +726,8 @@ fn attr_setscope(c: &mut Cpu, _: &Shared) {
 
 pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("pthread_once", pthread_once),
+    ("__futex_wait", futex_wait),
+    ("__futex_wake", futex_wake),
     ("__pthread_once_return", once_return_thunk),
     ("pthread_key_create", key_create),
     ("pthread_key_delete", key_delete),

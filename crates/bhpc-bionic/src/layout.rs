@@ -93,7 +93,11 @@ pub mod sync {
     pub const MUTEX_NORMAL: u32 = 0;
     pub const MUTEX_RECURSIVE: u32 = 1;
     pub const MUTEX_ERRORCHECK: u32 = 2;
-    /// Value `pthread_once` stores when the initialiser has completed.
+    /// `pthread_once` control word: initialiser not started.
+    pub const ONCE_INIT: u32 = 0;
+    /// `pthread_once` control word: an initialiser is running.
+    pub const ONCE_IN_PROGRESS: u32 = 1;
+    /// `pthread_once` control word: the initialiser has completed.
     pub const ONCE_DONE: u32 = 2;
     /// `PTHREAD_KEYS_MAX`.
     pub const KEYS_MAX: u32 = 128;

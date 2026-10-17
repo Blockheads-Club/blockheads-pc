@@ -31,7 +31,10 @@ impl Buf {
     }
 }
 
+type ZoneFn = Box<dyn Fn(i64) -> crate::timefns::ZoneInfo + Send>;
+
 struct FakeTime {
+    zone: Option<ZoneFn>,
     real: (i64, u32),
     cpu: (i64, u32),
     slept: Vec<u64>,
@@ -43,13 +46,22 @@ pub struct ClockHandle(Arc<Mutex<FakeTime>>);
 
 impl ClockHandle {
     fn new() -> ClockHandle {
-        ClockHandle(Arc::new(Mutex::new(FakeTime { real: (1_600_000_000, 0), cpu: (7, 0), slept: Vec::new() })))
+        ClockHandle(Arc::new(Mutex::new(FakeTime {
+            zone: None,
+            real: (1_600_000_000, 0),
+            cpu: (7, 0),
+            slept: Vec::new(),
+        })))
     }
     pub fn set(&self, sec: i64, nsec: u32) {
         self.0.lock().unwrap().real = (sec, nsec);
     }
     pub fn set_cpu(&self, sec: i64, nsec: u32) {
         self.0.lock().unwrap().cpu = (sec, nsec);
+    }
+    /// Install a local time zone as a function of the UTC instant.
+    pub fn set_zone(&self, f: impl Fn(i64) -> crate::timefns::ZoneInfo + Send + 'static) {
+        self.0.lock().unwrap().zone = Some(Box::new(f));
     }
     pub fn slept(&self) -> Vec<u64> {
         self.0.lock().unwrap().slept.clone()
@@ -68,6 +80,12 @@ impl HostClock for ClockHandle {
     }
     fn sleep(&mut self, ns: u64) {
         self.0.lock().unwrap().slept.push(ns);
+    }
+    fn local_zone(&mut self, t: i64) -> crate::timefns::ZoneInfo {
+        match &self.0.lock().unwrap().zone {
+            Some(f) => f(t),
+            None => crate::timefns::ZoneInfo::utc(),
+        }
     }
 }
 
@@ -141,6 +159,10 @@ impl Env {
     pub fn try_call(&mut self, name: &str, args: &[u32]) -> Result<CallResult, Stop> {
         let a = self.addr(name);
         self.cpu.call(a, args)
+    }
+
+    pub fn try_call_addr(&mut self, addr: u32, args: &[u32]) -> Result<CallResult, Stop> {
+        self.cpu.call(addr, args)
     }
 
     pub fn call(&mut self, name: &str, args: &[u32]) -> CallResult {

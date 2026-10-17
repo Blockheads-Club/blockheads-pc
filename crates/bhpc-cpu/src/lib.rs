@@ -172,6 +172,16 @@ impl Default for CpuOptions {
     }
 }
 
+/// Called when a guest time slice is used up (see [`Cpu::set_slice`]); returns a [`Stop`] to end the run instead
+/// of continuing with the next slice. May block (this is where a scheduler hands over its baton).
+pub type SliceHook = Arc<dyn Fn(&mut Cpu) -> Option<Stop> + Send + Sync>;
+
+#[derive(Clone)]
+struct Slice {
+    cycles: u64,
+    hook: SliceHook,
+}
+
 /// Result of a guest call: r0 and r1 (the 32/64-bit AAPCS return registers).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallResult {
@@ -248,6 +258,10 @@ pub struct Cpu {
     trace: bool,
     /// r0..r15 at the moment the last top-level call failed (innermost nested call wins).
     stop_regs: Option<[u32; 16]>,
+    /// Time-slice policy; the JIT is only given one slice of the cycle budget at a time.
+    slice: Option<Slice>,
+    /// Cycle budget not yet handed to the JIT (always 0 without a slice policy).
+    reserve: u64,
 }
 
 // SAFETY: a Cpu is only ever driven from one thread at a time (it owns its JIT instance); the
@@ -278,6 +292,7 @@ impl Cpu {
         let pid = self.shared.alloc_pid()?;
         let mut cpu = Self::build(self.shared.clone(), self.opts, pid, true, 0);
         cpu.trace = self.trace;
+        cpu.slice = self.slice.clone();
         Ok(cpu)
     }
 
@@ -297,6 +312,8 @@ impl Cpu {
             running: false,
             trace: false,
             stop_regs: None,
+            slice: None,
+            reserve: 0,
         });
         let cb = ffi::bhpc_callbacks {
             user: (&mut *cpu as *mut Cpu).cast::<c_void>(),
@@ -357,14 +374,40 @@ impl Cpu {
     /// Set the remaining cycle budget; `run` returns [`Stop::Halted`] when it is used up.
     /// Requires `CpuOptions::cycle_counting`.
     pub fn set_ticks(&mut self, ticks: u64) {
+        let now = self.slice.as_ref().map_or(ticks, |s| ticks.min(s.cycles));
+        self.reserve = ticks - now;
         // SAFETY: valid jit.
-        unsafe { ffi::bhpc_jit_set_ticks(self.jit, ticks) };
+        unsafe { ffi::bhpc_jit_set_ticks(self.jit, now) };
     }
 
     /// Remaining cycle budget.
     pub fn ticks(&self) -> u64 {
         // SAFETY: valid jit.
-        unsafe { ffi::bhpc_jit_ticks(self.jit) }
+        unsafe { ffi::bhpc_jit_ticks(self.jit) }.saturating_add(self.reserve)
+    }
+
+    /// Run the guest in slices of `cycles` guest cycles: whenever one is used up while budget remains, `hook`
+    /// runs on the calling thread (a scheduler yields its baton there, a host watchdog checks its clock) and
+    /// execution continues with the next slice. The total budget set with [`Cpu::set_ticks`] still ends the run
+    /// with [`Stop::Halted`]. Needs `CpuOptions::cycle_counting`; CPUs made by [`Cpu::new_thread`] and nested-call
+    /// children inherit the policy.
+    pub fn set_slice(&mut self, cycles: u64, hook: SliceHook) {
+        let total = self.ticks();
+        self.slice = Some(Slice { cycles: cycles.max(1), hook });
+        self.set_ticks(total);
+    }
+
+    /// Hand the JIT the next slice and run the hook. `None`: the slice policy does not apply (no policy, the
+    /// JIT still has cycles, or the whole budget is gone), so the halt is a real one.
+    fn next_slice(&mut self) -> Option<Option<Stop>> {
+        let slice = self.slice.clone()?;
+        // SAFETY: valid jit.
+        if self.reserve == 0 || unsafe { ffi::bhpc_jit_ticks(self.jit) } != 0 {
+            return None;
+        }
+        let total = self.reserve;
+        self.set_ticks(total);
+        Some((slice.hook)(self))
     }
 
     /// Log every thunk call (name, r0-r3, lr) to stderr.
@@ -584,7 +627,11 @@ impl Cpu {
                 Some(s) => break s,
                 // A cacheflush inside a thunk only asks the JIT to re-enter with fresh code.
                 None if halt == HALT_CACHE_INVALIDATION => continue,
-                None => break Stop::Halted(halt),
+                None => match self.next_slice() {
+                    None => break Stop::Halted(halt),
+                    Some(None) => continue,
+                    Some(Some(stop)) => break stop,
+                },
             }
         };
         self.running = false;
@@ -665,6 +712,7 @@ impl Cpu {
         child.set_sp(sp);
         child.set_fpscr(fpscr);
         child.trace = trace;
+        child.slice = self.slice.clone();
         if counting {
             child.set_ticks(ticks);
         }

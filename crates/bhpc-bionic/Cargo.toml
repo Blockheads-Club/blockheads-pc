@@ -12,5 +12,8 @@ bhpc-cpu.workspace = true
 bhpc-loader.workspace = true
 bhpc-vfs.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 libc.workspace = true
