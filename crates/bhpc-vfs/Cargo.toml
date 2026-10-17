@@ -1,0 +1,15 @@
+[package]
+name = "bhpc-vfs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Virtual file system: lazy read-only APK assets, writable per-user data dir, Android path mapping, fonts."
+
+[dependencies]
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+dirs = "6"
+getrandom = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
