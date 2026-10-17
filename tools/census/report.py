@@ -111,12 +111,12 @@ for (v, l), d in by.items():
         unk[k]["encs"][e_] += 1
 with open(os.path.join(docs, "opcode-census-unsupported.csv"), "w", newline="") as f:
     w = csv.writer(f)
-    w.writerow(["version", "lib", "kind", "isa", "address", "function", "mnemonic_or_matcher", "encoding_hex"])
+    w.writerow(["version", "lib", "kind", "isa", "address", "function", "mnemonic_or_matcher"])
     for (v, l), d in sorted(by.items()):
         for isa, a, f_, bm, e_ in d["unmatched"]:
-            w.writerow([v, l, "no_dynarmic_decoder", isa, a, f_, bm, e_])
+            w.writerow([v, l, "no_dynarmic_decoder", isa, a, f_, bm])
         for a, f_, isa, e_ in d["unknown"]:
-            w.writerow([v, l, "llvm_undecodable", isa, a, f_, "<undecoded>", e_])
+            w.writerow([v, l, "llvm_undecodable", isa, a, f_, "<undecoded>"])
 
 # odd / privileged
 odd = defaultdict(lambda: {"n": {v: 0 for v in versions}, "libs": set(), "funcs": Counter(), "enc": ""})
@@ -138,10 +138,10 @@ for (v, l), d in by.items():
         o["enc"] = e_
 with open(os.path.join(docs, "opcode-census-odd.csv"), "w", newline="") as f:
     w = csv.writer(f)
-    w.writerow(["instruction"] + ["count_" + v for v in versions] + ["libs", "example_encoding", "top_functions_1.7.6"])
+    w.writerow(["instruction"] + ["count_" + v for v in versions] + ["libs", "top_functions_1.7.6"])
     for k in sorted(odd, key=lambda k: -odd[k]["n"]["1.7.6"]):
         o = odd[k]
-        w.writerow([k] + [o["n"][v] for v in versions] + [";".join(sorted(o["libs"])), o["enc"],
+        w.writerow([k] + [o["n"][v] for v in versions] + [";".join(sorted(o["libs"])),
                                                           "; ".join("%s:%s=%d" % (l, f_, c) for (l, f_), c in o["funcs"].most_common(6))])
 
 # ---------------------------------------------------------------- markdown
@@ -247,16 +247,14 @@ P("### 5.1 Encodings decoded by LLVM but matched by no dynarmic decoder entry (1
 if unm:
     rows = []
     for k, e in sorted(unm.items(), key=lambda kv: -kv[1]["n"]):
-        rows.append([k[0], k[1], e["n"], ", ".join(sorted(e["libs"])), "; ".join("%s:%s" % (l, f_) for (l, f_), _ in e["funcs"].most_common(3)),
-                     ", ".join(x for x, _ in e["encs"].most_common(3))])
-    tbl(["isa", "mnemonic", "count", "libs", "top functions", "sample encodings"], rows)
+        rows.append([k[0], k[1], e["n"], ", ".join(sorted(e["libs"])), "; ".join("%s:%s" % (l, f_) for (l, f_), _ in e["funcs"].most_common(3))])
+    tbl(["isa", "mnemonic", "count", "libs", "top functions"], rows)
 else:
     P("none\n")
 P("### 5.2 Instructions LLVM cannot decode at all (1.7.6)\n")
 if unk:
-    tbl(["isa", "count", "libs", "top functions", "sample encodings"],
-        [[k, e["n"], ", ".join(sorted(e["libs"])), "; ".join("%s:%s" % (l, f_) for (l, f_), _ in e["funcs"].most_common(4)),
-          ", ".join(x for x, _ in e["encs"].most_common(6))] for k, e in unk.items()])
+    tbl(["isa", "count", "libs", "top functions"],
+        [[k, e["n"], ", ".join(sorted(e["libs"])), "; ".join("%s:%s" % (l, f_) for (l, f_), _ in e["funcs"].most_common(4))] for k, e in unk.items()])
 else:
     P("none\n")
 P("### 5.3 Matched, but dynarmic's handler is a stub or can reach Undefined/Interpret\n")
