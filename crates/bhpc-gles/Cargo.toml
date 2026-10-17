@@ -4,4 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Placeholder crate for a later milestone (see docs/feasibility/PLAN.md)."
+description = "OpenGL ES 2.0 and EGL HLE for the Blockheads guest: guest thunks marshalled to a host GLES backend."
+
+[dependencies]
+bhpc-mem.workspace = true
+bhpc-cpu.workspace = true
+
+[dev-dependencies]
+bhpc-loader.workspace = true
