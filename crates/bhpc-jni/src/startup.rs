@@ -144,7 +144,7 @@ impl Vm {
         if is_static {
             self.call_static(cpu, class, name, sig, &[])?;
         } else if matches!(stage, Stage::SurfaceInit | Stage::SurfaceChanged) {
-            let (w, h) = (self.platform().screen_width, self.platform().screen_height);
+            let (w, h) = self.screen_size();
             let args = if stage == Stage::SurfaceChanged { vec![Value::Int(w), Value::Int(h)] } else { vec![] };
             self.call_method(cpu, crate::jlib::surface_view(self), name, sig, &args)?;
         } else {

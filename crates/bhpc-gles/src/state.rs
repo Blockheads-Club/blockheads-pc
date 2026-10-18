@@ -140,6 +140,11 @@ impl Gles {
     pub fn drawable_size(&self) -> (u32, u32) {
         self.window.drawable_size()
     }
+
+    /// Size of the surface the game renders into.
+    pub fn surface_size(&self) -> (u32, u32) {
+        self.window.surface_size()
+    }
 }
 
 /// Keep extensions that the HLE layer can honour and that the game understands. Vendor extensions

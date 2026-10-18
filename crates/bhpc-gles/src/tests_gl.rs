@@ -769,3 +769,25 @@ fn multisample_img_falls_back_to_plain_storage() {
         ("glFramebufferTexture2D".to_string(), vec![i(0x8D40), i(0x8CE0), i(0xDE1), i(3), i(0)])
     );
 }
+
+#[test]
+fn the_default_framebuffer_is_the_windows_offscreen_surface() {
+    let mut e = Env::new();
+    // Without an offscreen surface 0 stays 0.
+    e.call("glBindFramebuffer", &[0x8D40, 0]);
+    assert_eq!(e.rec.take()[0].1[..], [Arg::I(0x8D40), Arg::I(0)]);
+    // With one, the game's 0 is the window's object and other objects pass through.
+    e.win.default_fb.store(9, std::sync::atomic::Ordering::SeqCst);
+    e.call("glBindFramebuffer", &[0x8D40, 0]);
+    e.call("glBindFramebuffer", &[0x8D40, 4]);
+    let calls = e.rec.take();
+    assert_eq!(calls[0].1[..], [Arg::I(0x8D40), Arg::I(9)]);
+    assert_eq!(calls[1].1[..], [Arg::I(0x8D40), Arg::I(4)]);
+    // The binding query hides the substitution: the window's object reads back as 0, others unchanged.
+    e.put_words(S, &[9, 4]);
+    e.call("glGetIntegerv", &[GL_FRAMEBUFFER_BINDING, S]);
+    assert_eq!(e.word(S), 0);
+    e.put_words(S, &[4]);
+    e.call("glGetIntegerv", &[GL_FRAMEBUFFER_BINDING, S]);
+    assert_eq!(e.word(S), 4);
+}

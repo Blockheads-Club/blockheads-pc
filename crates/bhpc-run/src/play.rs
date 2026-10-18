@@ -19,7 +19,7 @@ use bhpc_audio::{Mixer, Sles};
 use bhpc_bionic::{lock, sched};
 use bhpc_cpu::Cpu;
 use bhpc_gles::{GlWindow, Gles, GlesConfig};
-use bhpc_input::{Config as InputConfig, HostAction, InputMapper};
+use bhpc_input::{Config as InputConfig, Geometry, HostAction, InputMapper};
 use bhpc_jni::{GfxHooks, Stage, Throw, Vm};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
@@ -42,6 +42,9 @@ pub struct PlayConfig {
     pub init: InitConfig,
     /// Window size in logical pixels.
     pub window: (u32, u32),
+    /// Size of the window's drawable in pixels (differs from `window` on high-DPI displays); `(0, 0)` until `play`
+    /// has asked the window.
+    pub drawable: (u32, u32),
     /// Write the frame (PNG) here when swap number `shot_at` happens; the first frame goes to `<stem>-first.png`.
     pub shot: Option<PathBuf>,
     pub shot_at: u64,
@@ -73,6 +76,7 @@ impl PlayConfig {
         PlayConfig {
             init,
             window: (1024, 768),
+            drawable: (0, 0),
             shot: None,
             shot_at: 120,
             exit_after_shot: false,
@@ -155,6 +159,10 @@ struct Flags {
     dump_views: AtomicBool,
     /// The fake JVM, for scripts that wait for views.
     vm: Mutex<Option<Vm>>,
+    /// Where the game's surface sits in the window (kept current by the UI thread), for scripted clicks on controls.
+    geometry: Mutex<Option<Geometry>>,
+    /// A script asked for this window size (logical pixels); the host main thread applies it.
+    resize: Mutex<Option<(u32, u32)>>,
     /// The UI thread finished the Java start-up stages that must precede `nativeRun`.
     startup_done: AtomicBool,
     /// Why the UI thread ended (set when it ends normally).
@@ -202,13 +210,19 @@ impl Hooks {
                 std::mem::transmute::<*const c_void, ReadPixels>(rp),
                 std::mem::transmute::<*const c_void, GetIntegerv>(gi),
             );
-            let mut fbo = 0;
-            gi(0x8CA6, &mut fbo);
-            if fbo != 0 {
+            // The window as the user sees it: present the game's surface (letterboxed) into the back buffer first.
+            self.window.compose();
+            let bind = self.window.proc_address("glBindFramebuffer");
+            if bind.is_null() {
                 return None;
             }
+            let bind = std::mem::transmute::<*const c_void, unsafe extern "C" fn(u32, u32)>(bind);
+            let mut fbo = 0;
+            gi(0x8CA6, &mut fbo);
+            bind(0x8D40, 0);
             let mut buf = vec![0u8; w as usize * h as usize * 4];
             rp(0, 0, w as i32, h as i32, 0x1908, 0x1401, buf.as_mut_ptr().cast());
+            bind(0x8D40, fbo as u32);
             Some((w, h, png::flip_rows(w, h, &buf)))
         }
     }
@@ -302,6 +316,7 @@ impl GfxHooks for Hooks {
 
     fn set_content_size(&self, w: f32, h: f32) {
         eprintln!("[play] content size {w}x{h}");
+        self.window.set_surface_size(w.round().max(1.0) as u32, h.round().max(1.0) as u32);
     }
 
     fn context_lost(&self) {
@@ -310,15 +325,19 @@ impl GfxHooks for Hooks {
 }
 
 /// Backend wrapper that turns the shared "done" flag into a `Quit` event, so the event loop ends when the guest does.
-struct Watched<B: Backend> {
-    inner: B,
+struct Watched {
+    inner: SdlBackend,
     flags: Arc<Flags>,
 }
 
-impl<B: Backend> Backend for Watched<B> {
+impl Backend for Watched {
     fn poll_event(&mut self, timeout: Duration) -> Option<Event> {
         if self.flags.done.load(Ordering::SeqCst) {
             return Some(Event::Quit);
+        }
+        // A scripted `resize`: the window system answers with a `Resized` event like it does for a drag.
+        if let Some((w, h)) = self.flags.resize.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            eprintln!("[play] resizing the window to {w}x{h}: {}", self.inner.set_size(w, h));
         }
         self.inner.poll_event(timeout)
     }
@@ -343,7 +362,12 @@ impl<B: Backend> Backend for Watched<B> {
 pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
     let (mut backend, gl) =
         SdlBackend::new(&WindowConfig { size: cfg.window, ..WindowConfig::default() }).map_err(other)?;
-    eprintln!("[play] video driver {}", backend.driver());
+    let m0 = backend.metrics();
+    eprintln!("[play] video driver {}, window {:?}, drawable {:?}", backend.driver(), m0.logical, m0.drawable);
+    // What the window system really gave us is what the game sees (a compositor may ignore the requested size).
+    let mut cfg = cfg.clone();
+    (cfg.window, cfg.drawable) = (m0.logical, m0.drawable);
+    let cfg = &cfg;
     let flags = Arc::new(Flags::default());
     let mixer = Mixer::new(44100);
     let m = mixer.clone();
@@ -424,6 +448,7 @@ fn run_script(script: &[Step], tx: &std::sync::mpsc::Sender<Event>, flags: &Flag
                 }
                 shift = (begun.elapsed().as_millis() as u64).saturating_sub(*at);
             }
+            Action::Resize(w, h) => *flags.resize.lock().unwrap_or_else(PoisonError::into_inner) = Some((*w, *h)),
             Action::DumpViews => flags.dump_views.store(true, Ordering::SeqCst),
             Action::Quit => flags.script_quit.store(true, Ordering::SeqCst),
         }
@@ -447,7 +472,18 @@ fn wait_text(flags: &Flags, text: &str) -> bool {
 }
 
 fn click_text(flags: &Flags, tx: &std::sync::mpsc::Sender<Event>, text: &str) {
-    let Some((x, y)) = vm_of(flags).and_then(|vm| vm.control_screen_pos(text)) else {
+    let vm = vm_of(flags);
+    let geometry = flags
+        .geometry
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .unwrap_or(Geometry { content: None, window: (0, 0) });
+    let Some((x, y)) = vm
+        .as_ref()
+        .and_then(|vm| vm.control_screen_pos(text))
+        .zip(vm.as_ref())
+        .map(|((x, y), vm)| crate::input::screen_to_window(&geometry, vm.content_scale(), x, y))
+    else {
         eprintln!("[script] no control shows {text:?}");
         return;
     };
@@ -489,7 +525,9 @@ fn boot(
     let blocks: BlockLog = Arc::default();
     let mut icfg = cfg.init.clone();
     icfg.watchdog_cycles = FOREVER;
-    icfg.screen = Some((cfg.window.0 as i32, cfg.window.1 as i32));
+    // The game's display is the drawable (physical pixels); it picks its own content size from that.
+    let screen = if cfg.drawable.0 > 0 && cfg.drawable.1 > 0 { cfg.drawable } else { cfg.window };
+    icfg.screen = Some((screen.0 as i32, screen.1 as i32));
     let hooks_flags = flags.clone();
     let (shot, shot_at, check_gl) = (cfg.shot.clone(), cfg.shot_at, cfg.check_gl);
     let mut sess = Session::open_setup(&icfg, Box::new(std::io::stdout()), None, &mut |cpu, st| {
@@ -754,7 +792,12 @@ impl UiThread {
                 return format!("a guest thread failed: {f}");
             }
             sched::sleep(c, st, 4_000_000);
-            let now = begun.elapsed().as_millis() as i64;
+            // Touch times are `SystemClock.uptimeMillis`; UIKit compares them with `systemUptime`, the guest's
+            // monotonic clock, to expire taps.
+            let now = {
+                let (secs, nanos) = lock(st).clock.monotonic();
+                secs * 1000 + i64::from(nanos / 1_000_000)
+            };
             // Runnables other threads posted to the Android main looper (`performSelectorOnMainThread` and friends).
             c.set_ticks(FOREVER);
             match vm.pump(c, vm.main_looper(), vm.now_ms()) {
@@ -808,13 +851,23 @@ impl UiThread {
             }
             let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
             let mut escape = false;
+            // The game announced (or changed) its content size: touches map into it.
+            if let Some((w, h)) = vm.content_size().filter(|s| Some(*s) != mapper.geometry().content) {
+                mapper.set_content(w, h);
+            }
             while let Some(ev) = rx.and_then(|r| r.try_recv().ok()) {
                 escape |= matches!(&ev, Event::Key { key, pressed: true, .. } if *key == bhpc_app::Key::ESCAPE);
+                if let Event::Resized(m) = &ev {
+                    // The display of the game follows the window; `SurfaceChanged` below tells the game.
+                    vm.set_screen_size(m.drawable.0 as i32, m.drawable.1 as i32);
+                    eprintln!("[play] window {:?}, drawable {:?}", m.logical, m.drawable);
+                }
                 if let Some(h) = host_event(&ev) {
                     mapper.handle(h, now, &mut sink);
                 }
             }
             mapper.tick(now, &mut sink);
+            *flags.geometry.lock().unwrap_or_else(PoisonError::into_inner) = Some(mapper.geometry());
             for e in sink.errors.drain(..) {
                 eprintln!("[play] input delivery: {e}");
             }

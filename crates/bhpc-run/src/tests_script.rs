@@ -115,3 +115,17 @@ fn build_merges_file_and_click_shortcuts() {
     assert!(build(None, &[]).unwrap().is_empty());
     assert!(build(Some("bogus"), &[]).is_err());
 }
+
+#[test]
+fn window_commands() {
+    use bhpc_app::Event;
+    let s = parse("0 focus off\n+10 focus on\n+10 minimize\n+10 restore\n+10 resize 1600 900\n+10 key f11\n").unwrap();
+    assert_eq!(s[0].1, Action::Event(Event::Focus(false)));
+    assert_eq!(s[1].1, Action::Event(Event::Focus(true)));
+    assert_eq!(s[2].1, Action::Event(Event::Visible(false)));
+    assert_eq!(s[3].1, Action::Event(Event::Visible(true)));
+    assert_eq!(s[4].1, Action::Resize(1600, 900));
+    assert!(matches!(&s[5].1, Action::Event(Event::Key { key, pressed: true, .. }) if key.0 == 68));
+    assert!(parse("0 focus maybe").unwrap_err().contains("line 1"));
+    assert!(parse("0 resize 5").is_err());
+}

@@ -72,10 +72,13 @@ pub enum HostEvent {
     FocusLost,
     Minimized,
     Restored,
-    /// New window size in pixels (also fullscreen switches).
+    /// New window size (also fullscreen switches): the drawable in pixels (the size of the surface the guest
+    /// sees) and the window in logical pixels (the unit of mouse coordinates; differs on high-DPI displays).
     Resized {
         width: u32,
         height: u32,
+        logical_width: u32,
+        logical_height: u32,
     },
     Quit,
 }
@@ -181,6 +184,33 @@ pub enum GuestEvent {
     TextShouldReturn {
         field: i32,
     },
+}
+
+impl GuestEvent {
+    /// The same event with every touch position passed through `f` (other events are returned unchanged).
+    pub fn map_points(&self, f: &dyn Fn(f32, f32) -> (f32, f32)) -> GuestEvent {
+        let each =
+            |xs: &[f32], ys: &[f32]| -> (Vec<f32>, Vec<f32>) { xs.iter().zip(ys).map(|(x, y)| f(*x, *y)).unzip() };
+        match self {
+            GuestEvent::TouchBegin { id, x, y, time_ms } => {
+                let (x, y) = f(*x, *y);
+                GuestEvent::TouchBegin { id: *id, x, y, time_ms: *time_ms }
+            }
+            GuestEvent::TouchEnd { id, x, y, time_ms } => {
+                let (x, y) = f(*x, *y);
+                GuestEvent::TouchEnd { id: *id, x, y, time_ms: *time_ms }
+            }
+            GuestEvent::TouchMove { ids, xs, ys, time_ms } => {
+                let (xs, ys) = each(xs, ys);
+                GuestEvent::TouchMove { ids: ids.clone(), xs, ys, time_ms: *time_ms }
+            }
+            GuestEvent::TouchCancel { ids, xs, ys, time_ms } => {
+                let (xs, ys) = each(xs, ys);
+                GuestEvent::TouchCancel { ids: ids.clone(), xs, ys, time_ms: *time_ms }
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 /// Java target of a [`GuestEvent`]: class (JNI form), method name and JNI signature.

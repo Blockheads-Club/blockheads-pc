@@ -398,6 +398,13 @@ fn get_shader_precision_format(c: &mut Cpu, g: &Gles) {
 
 // ---------- state queries ----------
 
+/// `glBindFramebuffer`: the game's default framebuffer (0) is the window's offscreen surface, if it has one.
+fn bind_framebuffer(c: &mut Cpu, g: &Gles) {
+    args!(c; target, framebuffer);
+    let framebuffer = if framebuffer == 0 { g.window.default_framebuffer() } else { framebuffer };
+    g.lock().api.glBindFramebuffer(target, framebuffer);
+}
+
 fn get_integerv(c: &mut Cpu, g: &Gles) {
     args!(c; pname, out);
     let mut s = g.lock();
@@ -420,6 +427,17 @@ fn get_integerv(c: &mut Cpu, g: &Gles) {
     };
     let p = ptr!(c, out, n * 4, true);
     s.api.glGetIntegerv(pname, p);
+    if pname == GL_FRAMEBUFFER_BINDING {
+        // The game knows its default framebuffer as 0.
+        drop(s);
+        let df = g.window.default_framebuffer();
+        // SAFETY: `p` was checked above for one writable i32.
+        unsafe {
+            if df != 0 && *p.cast::<u32>() == df {
+                *p.cast::<u32>() = 0;
+            }
+        }
+    }
 }
 
 fn get_floatv(c: &mut Cpu, g: &Gles) {
@@ -600,6 +618,7 @@ attrib_v!(
 /// Pointer-argument GL functions: `(guest symbol, thunk)`.
 pub const TABLE: &[(&str, Handler)] = &[
     ("glGetError", get_error),
+    ("glBindFramebuffer", bind_framebuffer),
     ("glBindBuffer", bind_buffer),
     ("glBufferData", buffer_data),
     ("glBufferSubData", buffer_sub_data),

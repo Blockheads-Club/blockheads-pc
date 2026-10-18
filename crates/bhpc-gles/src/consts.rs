@@ -48,6 +48,7 @@ pub const GL_EXTENSIONS: u32 = 0x1F03;
 pub const GL_SHADING_LANGUAGE_VERSION: u32 = 0x8B8C;
 
 pub const GL_VIEWPORT: u32 = 0x0BA2;
+pub const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
 pub const GL_SCISSOR_BOX: u32 = 0x0C10;
 pub const GL_COLOR_CLEAR_VALUE: u32 = 0x0C22;
 pub const GL_COLOR_WRITEMASK: u32 = 0x0C23;

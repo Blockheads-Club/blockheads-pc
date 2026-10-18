@@ -10,6 +10,7 @@ use crate::value::{parse_field_ty, parse_sig, ClassId, Obj, Sig, Ty, Value};
 use bhpc_cpu::{Cpu, Stop};
 use bhpc_mem::GuestMemory;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// Why a Java call did not produce a value.
@@ -257,6 +258,10 @@ pub(crate) struct Inner {
     pub gfx: Arc<dyn GfxHooks>,
     pub audio: Arc<dyn AudioHooks>,
     pub layout: OnceLock<crate::jni::Layout>,
+    /// The display size the game sees (`getScreenWidth/Height`, display metrics); follows the host window.
+    screen: [AtomicI32; 2],
+    /// `VerdeActivity.setContentSize` as `f32` bits (0 = not announced yet).
+    content: [AtomicU32; 2],
 }
 
 /// The fake JVM. Clone freely: it is a handle.
@@ -279,7 +284,12 @@ impl Vm {
             gfx: cfg.gfx,
             audio: cfg.audio,
             layout: OnceLock::new(),
+            screen: [AtomicI32::new(0), AtomicI32::new(0)],
+            content: [AtomicU32::new(0), AtomicU32::new(0)],
         };
+        let (w, h) = (inner.platform.screen_width, inner.platform.screen_height);
+        inner.screen[0].store(w, Ordering::SeqCst);
+        inner.screen[1].store(h, Ordering::SeqCst);
         let vm = Vm(Arc::new(inner));
         // Slot 0 of every table is reserved so that ids are never 0.
         {
@@ -314,6 +324,43 @@ impl Vm {
 
     pub fn platform(&self) -> &Platform {
         &self.0.platform
+    }
+
+    /// The display size in pixels the game sees (starts as `Platform::screen_*`).
+    pub fn screen_size(&self) -> (i32, i32) {
+        (self.0.screen[0].load(Ordering::SeqCst), self.0.screen[1].load(Ordering::SeqCst))
+    }
+
+    /// The host window changed size: later `getScreenWidth/Height` and display metrics calls see the new size.
+    pub fn set_screen_size(&self, width: i32, height: i32) {
+        self.0.screen[0].store(width, Ordering::SeqCst);
+        self.0.screen[1].store(height, Ordering::SeqCst);
+    }
+
+    /// The content size the game announced with `setContentSize`, if it did.
+    pub fn content_size(&self) -> Option<(f32, f32)> {
+        let (w, h) = (self.0.content[0].load(Ordering::SeqCst), self.0.content[1].load(Ordering::SeqCst));
+        (w != 0 && h != 0).then(|| (f32::from_bits(w), f32::from_bits(h)))
+    }
+
+    pub(crate) fn set_content_size(&self, w: f32, h: f32) {
+        self.0.content[0].store(w.to_bits(), Ordering::SeqCst);
+        self.0.content[1].store(h.to_bits(), Ordering::SeqCst);
+    }
+
+    /// `getContentWidth/Height`: the announced content size, else the screen size.
+    pub fn content_pixels(&self) -> (i32, i32) {
+        self.content_size().map_or_else(|| self.screen_size(), |(w, h)| (w.round() as i32, h.round() as i32))
+    }
+
+    /// Screen pixels per content pixel on each axis (the Java views are laid out in screen pixels, the game
+    /// draws and receives touches in content pixels); `(1, 1)` until the content size is known.
+    pub fn content_scale(&self) -> (f32, f32) {
+        let (sw, sh) = self.screen_size();
+        match self.content_size() {
+            Some((cw, ch)) if cw > 0.0 && ch > 0.0 => (sw as f32 / cw, sh as f32 / ch),
+            _ => (1.0, 1.0),
+        }
     }
 
     pub fn assets(&self) -> &dyn Assets {

@@ -3,7 +3,7 @@
 
 use bhpc_app::{Event, Key, MouseButton as AppButton};
 use bhpc_cpu::Cpu;
-use bhpc_input::{EventSink, GuestEvent, HostAction, HostEvent, HostKey, Mods, MouseButton};
+use bhpc_input::{EventSink, Geometry, GuestEvent, HostAction, HostEvent, HostKey, Mods, MouseButton};
 use bhpc_jni::{Data, TouchPhase, Ty, Value, Vm};
 
 /// Translate a window-system event. Touch events are not forwarded (the mapper emulates touches from the mouse).
@@ -11,9 +11,16 @@ pub fn host_event(ev: &Event) -> Option<HostEvent> {
     let mods = |m: &bhpc_app::Mods| Mods { ctrl: m.ctrl, shift: m.shift, alt: m.alt };
     Some(match ev {
         Event::Quit => HostEvent::Quit,
-        Event::Resized(m) => HostEvent::Resized { width: m.drawable.0, height: m.drawable.1 },
+        Event::Resized(m) => HostEvent::Resized {
+            width: m.drawable.0,
+            height: m.drawable.1,
+            logical_width: m.logical.0,
+            logical_height: m.logical.1,
+        },
         Event::Focus(true) => HostEvent::FocusGained,
         Event::Focus(false) => HostEvent::FocusLost,
+        Event::Visible(false) => HostEvent::Minimized,
+        Event::Visible(true) => HostEvent::Restored,
         Event::Fullscreen(_) | Event::Touch { .. } => return None,
         Event::MouseMove { x, y } => HostEvent::MouseMove { x: *x, y: *y },
         Event::MouseButton { button, pressed, x, y } => {
@@ -54,6 +61,18 @@ pub fn host_key(k: Key) -> HostKey {
         82 => HostKey::Up,
         _ => HostKey::Other,
     }
+}
+
+/// A position in content pixels (what touches carry) as a position in the screen pixels the Java views are laid out
+/// in; `scale` is `Vm::content_scale`.
+pub fn content_to_screen(scale: (f32, f32), x: f32, y: f32) -> (f32, f32) {
+    (x * scale.0, y * scale.1)
+}
+
+/// Where a point of the Java view layer (screen pixels, `scale` as above) is on the window, in the unit of mouse
+/// events: through the content surface and its letterboxed place in the window.
+pub fn screen_to_window(geometry: &Geometry, scale: (f32, f32), x: f32, y: f32) -> (f32, f32) {
+    geometry.to_window(x / scale.0, y / scale.1)
 }
 
 /// Delivers guest events by calling the game's natives through the fake JVM.
@@ -122,12 +141,18 @@ pub fn control_touch(ev: &GuestEvent) -> Option<(TouchPhase, f32, f32)> {
 impl EventSink for JniSink<'_> {
     fn deliver(&mut self, ev: &GuestEvent) -> bool {
         if let Some((phase, x, y)) = control_touch(ev) {
+            // The touch is in content pixels, the Java views are laid out in screen pixels.
+            let (x, y) = content_to_screen(self.vm.content_scale(), x, y);
             match self.vm.ui_touch(self.cpu, phase, x, y) {
                 Ok(true) => return true,
                 Ok(false) => {}
                 Err(e) => self.errors.push(format!("ui touch: {e:?}")),
             }
         }
+        // The game's own views take screen pixels, landscape like the window (the Java views, hit-tested by
+        // `ui_touch`, are the ones laid out in a turned space), so only the content-to-screen scale applies.
+        let mapped = ev.map_points(&|x, y| content_to_screen(self.vm.content_scale(), x, y));
+        let ev = &mapped;
         let mut result = true;
         let text_target = ev.text_field().is_some();
         let focus = self.vm.text_focus();

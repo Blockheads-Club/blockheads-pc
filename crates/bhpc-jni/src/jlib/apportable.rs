@@ -52,12 +52,12 @@ pub(crate) fn install(vm: &Vm) {
             void()
         })
         .method("canSendEmail", "()Z", |_| boolean(false))
-        .method("getContentWidth", "()I", |c| int(c.vm.platform().screen_width))
-        .method("getContentHeight", "()I", |c| int(c.vm.platform().screen_height))
-        .method("getScreenWidth", "()I", |c| int(c.vm.platform().screen_width))
-        .method("getScreenHeight", "()I", |c| int(c.vm.platform().screen_height))
-        .method("getSplashScreenWidth", "()I", |c| int(c.vm.platform().screen_width))
-        .method("getSplashScreenHeight", "()I", |c| int(c.vm.platform().screen_height))
+        .method("getContentWidth", "()I", |c| int(c.vm.content_pixels().0))
+        .method("getContentHeight", "()I", |c| int(c.vm.content_pixels().1))
+        .method("getScreenWidth", "()I", |c| int(c.vm.screen_size().0))
+        .method("getScreenHeight", "()I", |c| int(c.vm.screen_size().1))
+        .method("getSplashScreenWidth", "()I", |c| int(c.vm.screen_size().0))
+        .method("getSplashScreenHeight", "()I", |c| int(c.vm.screen_size().1))
         .method("hasActivityForAction", "(Ljava/lang/String;)Z", |_| boolean(false))
         .method("hasSystemFeature", "(Ljava/lang/String;)I", |c| int(feature_flag(&c.string(0).unwrap_or_default())))
         .method("hasWindowFocus", "()Z", |_| boolean(true))
@@ -91,7 +91,9 @@ pub(crate) fn install(vm: &Vm) {
         })
         .method("swapBuffers", "()Z", |c| boolean(c.vm.0.gfx.swap_buffers()))
         .method("setContentSize", "(FF)V", |c| {
-            c.vm.0.gfx.set_content_size(c.float(0), c.float(1));
+            let (w, h) = (c.float(0), c.float(1));
+            c.vm.set_content_size(w, h);
+            c.vm.0.gfx.set_content_size(w, h);
             void()
         })
         .method("rektEGLContext", "()V", |c| {

@@ -424,7 +424,7 @@ fn query_surface(c: &mut Cpu, g: &Gles) {
         g.egl_fail(EGL_BAD_SURFACE);
         return c.ret_u32(0);
     }
-    let (w, h) = g.drawable_size();
+    let (w, h) = g.surface_size();
     let v = match attr {
         EGL_WIDTH => w,
         EGL_HEIGHT => h,

@@ -379,10 +379,11 @@ fn install_res(vm: &Vm) {
         .method("getConfiguration", "()Landroid/content/res/Configuration;", |c| {
             let cfg = new_obj(c.vm, "android/content/res/Configuration");
             let p = c.vm.platform().clone();
+            let (sw, sh) = c.vm.screen_size();
             let d = p.density();
-            c.vm.set_field(cfg, "orientation", Value::Int(if p.screen_width > p.screen_height { 2 } else { 1 }));
-            c.vm.set_field(cfg, "screenWidthDp", Value::Int((p.screen_width as f32 / d) as i32));
-            c.vm.set_field(cfg, "screenHeightDp", Value::Int((p.screen_height as f32 / d) as i32));
+            c.vm.set_field(cfg, "orientation", Value::Int(if sw > sh { 2 } else { 1 }));
+            c.vm.set_field(cfg, "screenWidthDp", Value::Int((sw as f32 / d) as i32));
+            c.vm.set_field(cfg, "screenHeightDp", Value::Int((sh as f32 / d) as i32));
             c.vm.set_field(cfg, "densityDpi", Value::Int(p.density_dpi));
             c.vm.set_field(cfg, "fontScale", Value::Float(1.0));
             c.vm.set_field(cfg, "touchscreen", Value::Int(3));
@@ -432,8 +433,9 @@ fn display_metrics(vm: &Vm) -> Obj {
 fn fill_metrics(vm: &Vm, m: Obj) {
     let p = vm.platform();
     let d = p.density();
-    vm.set_field(m, "widthPixels", Value::Int(p.screen_width));
-    vm.set_field(m, "heightPixels", Value::Int(p.screen_height));
+    let (sw, sh) = vm.screen_size();
+    vm.set_field(m, "widthPixels", Value::Int(sw));
+    vm.set_field(m, "heightPixels", Value::Int(sh));
     vm.set_field(m, "density", Value::Float(d));
     vm.set_field(m, "scaledDensity", Value::Float(d));
     vm.set_field(m, "densityDpi", Value::Int(p.density_dpi));
@@ -453,8 +455,8 @@ fn install_view(vm: &Vm) {
         .method("<init>", "()V", |_| void());
     vm.define("android/graphics/Point").field("x", "I").field("y", "I").method("<init>", "()V", |_| void());
     vm.define("android/view/Display")
-        .method("getWidth", "()I", |c| int(c.vm.platform().screen_width))
-        .method("getHeight", "()I", |c| int(c.vm.platform().screen_height))
+        .method("getWidth", "()I", |c| int(c.vm.screen_size().0))
+        .method("getHeight", "()I", |c| int(c.vm.screen_size().1))
         .method("getRotation", "()I", |_| int(0))
         .method("getOrientation", "()I", |_| int(0))
         .method("getDisplayId", "()I", |_| int(0))
@@ -481,8 +483,9 @@ fn metrics_into(c: &mut Call) -> JResult {
 fn size_into(c: &mut Call) -> JResult {
     match c.obj(0) {
         Some(p) => {
-            c.vm.set_field(p, "x", Value::Int(c.vm.platform().screen_width));
-            c.vm.set_field(p, "y", Value::Int(c.vm.platform().screen_height));
+            let (w, h) = c.vm.screen_size();
+            c.vm.set_field(p, "x", Value::Int(w));
+            c.vm.set_field(p, "y", Value::Int(h));
             void()
         }
         None => Err(c.vm.throw_new("java/lang/NullPointerException", "point")),

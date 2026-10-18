@@ -194,9 +194,9 @@ impl Vm {
     /// views out in a portrait space (768x1024 on the 1024x768 window) that the game's own renderer turns by a quarter
     /// turn: the top of the portrait space is the right edge of the landscape window. A portrait window needs no turn.
     pub fn screen_to_ui(&self, x: f32, y: f32) -> (f32, f32) {
-        let p = self.platform();
-        if p.screen_width > p.screen_height {
-            (p.screen_height as f32 - y, x)
+        let (w, h) = self.screen_size();
+        if w > h {
+            (h as f32 - y, x)
         } else {
             (x, y)
         }
@@ -204,9 +204,9 @@ impl Vm {
 
     /// Inverse of [`Vm::screen_to_ui`].
     pub fn ui_to_screen(&self, x: f32, y: f32) -> (f32, f32) {
-        let p = self.platform();
-        if p.screen_width > p.screen_height {
-            (y, p.screen_height as f32 - x)
+        let (w, h) = self.screen_size();
+        if w > h {
+            (y, h as f32 - x)
         } else {
             (x, y)
         }

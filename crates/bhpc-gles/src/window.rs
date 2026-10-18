@@ -22,4 +22,23 @@ pub trait GlWindow: Send + Sync {
     fn drawable_size(&self) -> (u32, u32);
     /// Address of a GL function of the current context (null if unknown).
     fn proc_address(&self, name: &str) -> *const c_void;
+
+    // The game renders into a surface of its own size (`VerdeActivity.setContentSize`), like an Android
+    // `SurfaceHolder.setFixedSize`; the window scales it to the drawable. A window that supports this keeps an
+    // offscreen target of that size and presents it letterboxed. The defaults render straight into the window.
+
+    /// The game's surface size changed (called without a current context; applied lazily).
+    fn set_surface_size(&self, _width: u32, _height: u32) {}
+    /// Size of the surface the game renders into (what `eglQuerySurface` reports).
+    fn surface_size(&self) -> (u32, u32) {
+        self.drawable_size()
+    }
+    /// The host framebuffer object that stands for the game's default framebuffer in the current context
+    /// (0 when the window itself is the target).
+    fn default_framebuffer(&self) -> u32 {
+        0
+    }
+    /// Draw the game's surface into the window's back buffer (letterboxed), without swapping. Needs the game's
+    /// context to be current and leaves its GL state untouched.
+    fn compose(&self) {}
 }

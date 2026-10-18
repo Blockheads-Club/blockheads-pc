@@ -1573,3 +1573,26 @@ fn alerts_collect_buttons_and_click_through_the_natives() {
     let calls = |n: &str| report.members.iter().find(|m| m.name == n).map(|m| m.calls);
     assert_eq!((calls("nativeOnClick"), calls("nativeOnDismiss")), (Some(1), Some(1)));
 }
+
+#[test]
+fn screen_follows_the_host_and_content_size_is_remembered() {
+    let mut e = Env::new();
+    let a = e.activity();
+    // Before the game announces a content size the content is the screen.
+    assert_eq!(e.vm.screen_size(), (800, 480));
+    assert_eq!(e.vm.content_size(), None);
+    assert_eq!(e.vm.content_scale(), (1.0, 1.0));
+    assert_eq!(e.call(a, "getContentWidth", "()I", &[]), Ok(Value::Int(800)));
+    // The window grew: the game's next queries see it, the content size stays what the game chose.
+    e.vm.set_screen_size(1280, 960);
+    e.call(a, "setContentSize", "(FF)V", &[Value::Float(1024.0), Value::Float(768.0)]).unwrap();
+    assert_eq!(e.call(a, "getScreenWidth", "()I", &[]), Ok(Value::Int(1280)));
+    assert_eq!(e.call(a, "getScreenHeight", "()I", &[]), Ok(Value::Int(960)));
+    assert_eq!(e.call(a, "getContentWidth", "()I", &[]), Ok(Value::Int(1024)));
+    assert_eq!(e.call(a, "getContentHeight", "()I", &[]), Ok(Value::Int(768)));
+    assert_eq!(e.vm.content_size(), Some((1024.0, 768.0)));
+    assert_eq!(e.vm.content_scale(), (1.25, 1.25));
+    // A degenerate announcement is ignored for scaling.
+    e.call(a, "setContentSize", "(FF)V", &[Value::Float(0.0), Value::Float(0.0)]).unwrap();
+    assert_eq!(e.vm.content_scale(), (1.0, 1.0));
+}

@@ -15,6 +15,9 @@
 //! +100  mark world              # start a frame-time segment (p50/p99 are reported per segment)
 //! +100  waittext Welcome         # wait (up to 3 minutes) until a view shows this text; later times shift
 //! +100  clicktext OK            # wait for the text, then click the button that shows it
+//! +100  focus off              # window focus lost / gained (`focus on`); no lifecycle is sent
+//! +100  minimize               # minimised / `restore`d: the game goes to the background and back
+//! +100  resize 1600 900        # resize the window (logical pixels); `key f11` toggles fullscreen
 //! +100  dumpviews               # print the view tree (kind, window rectangle, text) to stderr
 //! +100  wait                   # no-op, only moves the clock
 //! 60000 quit
@@ -35,6 +38,8 @@ pub enum Action {
     ClickText(String),
     /// Print the UIKit view tree (geometry, text) to stderr.
     DumpViews,
+    /// Resize the window to this many logical pixels.
+    Resize(u32, u32),
     Quit,
 }
 
@@ -65,6 +70,7 @@ pub fn key_code(name: &str) -> Option<Key> {
         "tab" => 43,
         "space" => 44,
         "delete" => 76,
+        "f11" => 68,
         "right" => 79,
         "left" => 80,
         "down" => 81,
@@ -164,6 +170,23 @@ fn command(t: u64, words: &[&str], rest: &str) -> Result<(Vec<Step>, u64), Strin
         }
         "dumpviews" => {
             out.push((t, Action::DumpViews));
+            t
+        }
+        "focus" => {
+            let on = match words.get(1).copied() {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err("focus needs on or off".into()),
+            };
+            out.push((t, Action::Event(Event::Focus(on))));
+            t
+        }
+        "resize" => {
+            out.push((t, Action::Resize(num(words, 1, "width")?, num(words, 2, "height")?)));
+            t
+        }
+        "minimize" | "restore" => {
+            out.push((t, Action::Event(Event::Visible(words[0] == "restore"))));
             t
         }
         "wait" => t,

@@ -45,6 +45,8 @@ pub enum Event {
     /// Size or DPI scale changed.
     Resized(Metrics),
     Focus(bool),
+    /// The window was minimised (`false`) or restored (`true`).
+    Visible(bool),
     /// Fullscreen state changed (after a toggle).
     Fullscreen(bool),
     MouseMove {

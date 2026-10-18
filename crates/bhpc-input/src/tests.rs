@@ -1,6 +1,6 @@
 use crate::event::*;
 use crate::keymap;
-use crate::mapper::{Config, InputMapper};
+use crate::mapper::{Config, Geometry, InputMapper};
 use crate::text::TextModel;
 
 fn cfg() -> Config {
@@ -80,8 +80,33 @@ fn coordinates_scale_to_content_size() {
     // A zero-sized window falls back to pixels instead of dividing by zero.
     let mut z = InputMapper::new(Config { window: (0, 0), ..Config::default() });
     assert_eq!(z.to_content(3.0, 4.0), (3.0, 4.0));
-    z.handle(HostEvent::Resized { width: 2048, height: 1536 }, 0, &mut Recorder::new());
+    let resized = HostEvent::Resized { width: 2048, height: 1536, logical_width: 2048, logical_height: 1536 };
+    z.handle(resized, 0, &mut Recorder::new());
     assert_eq!(z.to_content(2048.0, 1536.0), (1024.0, 768.0));
+}
+
+#[test]
+fn content_is_letterboxed_into_the_window() {
+    // A 1000x1000 logical window shows a 1024x768 content at scale 1000/1024, centred vertically.
+    let mut m = InputMapper::new(Config { content: Some((1024.0, 768.0)), window: (1000, 1000), ..Config::default() });
+    let s = 1000.0 / 1024.0;
+    let top = (1000.0 - 768.0 * s) / 2.0;
+    assert_eq!(m.to_content(0.0, top), (0.0, 0.0));
+    assert_eq!(m.to_content(1000.0, 1000.0 - top), (1024.0, 768.0));
+    // Above the viewport: negative content y.
+    assert!(m.to_content(500.0, 0.0).1 < 0.0);
+    let g = m.geometry();
+    let (wx, wy) = g.to_window(512.0, 384.0);
+    assert!((wx - 500.0).abs() < 1e-3 && (wy - 500.0).abs() < 1e-3);
+    // The game picks another content size; a high-DPI window reports logical and drawable sizes apart.
+    m.set_content(1334.0, 750.0);
+    m.handle(
+        HostEvent::Resized { width: 2668, height: 1500, logical_width: 1334, logical_height: 750 },
+        0,
+        &mut Recorder::new(),
+    );
+    assert_eq!(m.to_content(667.0, 375.0), (667.0, 375.0));
+    assert_eq!(Geometry { content: None, window: (5, 5) }.to_window(1.0, 2.0), (1.0, 2.0));
 }
 
 #[test]
@@ -295,7 +320,7 @@ fn window_events_map_to_lifecycle_and_surface() {
             (HostEvent::Minimized, 2),
             (HostEvent::Restored, 3),
             (HostEvent::FocusGained, 4),
-            (HostEvent::Resized { width: 640, height: 480 }, 5),
+            (HostEvent::Resized { width: 640, height: 480, logical_width: 320, logical_height: 240 }, 5),
         ],
     );
     assert_eq!(
@@ -304,11 +329,10 @@ fn window_events_map_to_lifecycle_and_surface() {
             begin(0, 60.0, 100.0, 0),
             begin(1, 140.0, 100.0, 0),
             GuestEvent::TouchCancel { ids: vec![0, 1], xs: vec![60.0, 140.0], ys: vec![100.0, 100.0], time_ms: 1 },
-            GuestEvent::WindowFocus(false),
+            // focus loss and gain send no lifecycle; minimise and restore do
             GuestEvent::Lifecycle(Lifecycle::WillResignActive),
             GuestEvent::Lifecycle(Lifecycle::DidEnterBackground),
             GuestEvent::Lifecycle(Lifecycle::WillEnterForeground),
-            GuestEvent::WindowFocus(true),
             GuestEvent::Lifecycle(Lifecycle::DidBecomeActive),
             GuestEvent::SurfaceChanged { width: 640, height: 480 },
         ]
@@ -462,4 +486,18 @@ fn guest_events_know_their_java_targets() {
     let s = GuestEvent::SurfaceChanged { width: 1, height: 2 }.targets();
     assert_eq!(s.len(), 2);
     assert_eq!(s[1].method, "nativeRootGeometryChanged");
+}
+
+#[test]
+fn touch_positions_can_be_mapped_and_other_events_pass_through() {
+    let f = |x: f32, y: f32| (x * 2.0, y + 1.0);
+    assert_eq!(begin(0, 1.0, 2.0, 7).map_points(&f), begin(0, 2.0, 3.0, 7));
+    assert_eq!(end(1, 1.0, 2.0, 7).map_points(&f), end(1, 2.0, 3.0, 7));
+    assert_eq!(moved(&[0, 1], &[1.0, 2.0], &[3.0, 4.0], 5).map_points(&f), moved(&[0, 1], &[2.0, 4.0], &[4.0, 5.0], 5));
+    let cancel = GuestEvent::TouchCancel { ids: vec![0], xs: vec![1.0], ys: vec![1.0], time_ms: 3 };
+    assert_eq!(
+        cancel.map_points(&f),
+        GuestEvent::TouchCancel { ids: vec![0], xs: vec![2.0], ys: vec![2.0], time_ms: 3 }
+    );
+    assert_eq!(GuestEvent::WindowFocus(true).map_points(&f), GuestEvent::WindowFocus(true));
 }

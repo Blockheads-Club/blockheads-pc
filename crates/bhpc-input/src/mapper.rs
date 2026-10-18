@@ -4,13 +4,52 @@ use crate::event::{EventSink, GuestEvent, HostAction, HostEvent, HostKey, Lifecy
 use crate::keymap;
 use crate::text::TextModel;
 
+/// How the game's content surface sits in the window: scaled uniformly to fit and centred (letterboxed).
+/// The window is in the unit mouse events use (logical window pixels), the content in game pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Geometry {
+    /// Size of the coordinate space the guest sees. `None` passes window pixels through unscaled.
+    pub content: Option<(f32, f32)>,
+    pub window: (u32, u32),
+}
+
+impl Geometry {
+    /// Scale (window units per content pixel) and top-left offset of the letterboxed viewport; `None` without a
+    /// content size or with an empty window or content.
+    pub fn viewport(&self) -> Option<(f32, (f32, f32))> {
+        let (cw, ch) = self.content?;
+        let (ww, wh) = (self.window.0 as f32, self.window.1 as f32);
+        if ww <= 0.0 || wh <= 0.0 || cw <= 0.0 || ch <= 0.0 {
+            return None;
+        }
+        let s = (ww / cw).min(wh / ch);
+        Some((s, ((ww - cw * s) / 2.0, (wh - ch * s) / 2.0)))
+    }
+
+    /// Window position to content pixels (outside the viewport the result lies outside the content).
+    pub fn to_content(&self, x: f32, y: f32) -> Pt {
+        match self.viewport() {
+            Some((s, (ox, oy))) => ((x - ox) / s, (y - oy) / s),
+            None => (x, y),
+        }
+    }
+
+    /// Content pixels to window position (inverse of [`Geometry::to_content`]).
+    pub fn to_window(&self, x: f32, y: f32) -> Pt {
+        match self.viewport() {
+            Some((s, (ox, oy))) => (x * s + ox, y * s + oy),
+            None => (x, y),
+        }
+    }
+}
+
 /// Tunables of the mapping. Distances are in content units (see `content`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    /// Size of the coordinate space the guest sees. `None` passes window pixels through unscaled.
-    /// The PLAN default is a 1024x768 surface.
+    /// Size of the coordinate space the guest sees (the game's content size). `None` passes window pixels through
+    /// unscaled. The default is a 1024x768 surface; the game announces its real size (`InputMapper::set_content`).
     pub content: Option<(f32, f32)>,
-    /// Initial window size in pixels (updated by `Resized`).
+    /// Window size in logical pixels, the unit of mouse coordinates (updated by `Resized`).
     pub window: (u32, u32),
     /// Distance between the two fingers of a right-drag pan.
     pub pan_spacing: f32,
@@ -84,14 +123,19 @@ impl InputMapper {
         self.gesture != Gesture::None
     }
 
-    /// Window pixels to content units.
+    /// Where the content sits in the window right now.
+    pub fn geometry(&self) -> Geometry {
+        Geometry { content: self.cfg.content, window: self.cfg.window }
+    }
+
+    /// Window pixels to content units (through the letterboxed viewport).
     pub fn to_content(&self, x: f32, y: f32) -> Pt {
-        match self.cfg.content {
-            Some((cw, ch)) if self.cfg.window.0 > 0 && self.cfg.window.1 > 0 => {
-                (x * cw / self.cfg.window.0 as f32, y * ch / self.cfg.window.1 as f32)
-            }
-            _ => (x, y),
-        }
+        self.geometry().to_content(x, y)
+    }
+
+    /// The game announced a new content size (`VerdeActivity.setContentSize`).
+    pub fn set_content(&mut self, width: f32, height: f32) {
+        self.cfg.content = Some((width, height));
     }
 
     /// Contents of the focused text field as the host tracks it, if one has focus.
@@ -140,24 +184,22 @@ impl InputMapper {
             HostEvent::Wheel { dy, x, y } => self.wheel(dy, self.to_content(x, y), now_ms, sink),
             HostEvent::Key { key, pressed, repeat, mods } => self.key(key, pressed, repeat, mods, now_ms, sink),
             HostEvent::TextInput(s) => self.insert_text(&s, sink),
-            HostEvent::FocusGained => {
-                sink.deliver(&GuestEvent::WindowFocus(true));
-                sink.deliver(&GuestEvent::Lifecycle(Lifecycle::DidBecomeActive));
-            }
-            HostEvent::FocusLost => {
-                self.cancel_gesture(now_ms, sink);
-                sink.deliver(&GuestEvent::WindowFocus(false));
-                sink.deliver(&GuestEvent::Lifecycle(Lifecycle::WillResignActive));
-            }
+            // A desktop game keeps running unfocused. Android's resign-active would pause the game (it shows its pause
+            // menu), and the focus flips of a compositor around every click would trigger that, so focus changes
+            // only drop a touch in progress. Only a minimised window goes to the background.
+            HostEvent::FocusGained => {}
+            HostEvent::FocusLost => self.cancel_gesture(now_ms, sink),
             HostEvent::Minimized => {
                 self.cancel_gesture(now_ms, sink);
+                sink.deliver(&GuestEvent::Lifecycle(Lifecycle::WillResignActive));
                 sink.deliver(&GuestEvent::Lifecycle(Lifecycle::DidEnterBackground));
             }
             HostEvent::Restored => {
                 sink.deliver(&GuestEvent::Lifecycle(Lifecycle::WillEnterForeground));
+                sink.deliver(&GuestEvent::Lifecycle(Lifecycle::DidBecomeActive));
             }
-            HostEvent::Resized { width, height } => {
-                self.cfg.window = (width, height);
+            HostEvent::Resized { width, height, logical_width, logical_height } => {
+                self.cfg.window = (logical_width, logical_height);
                 sink.deliver(&GuestEvent::SurfaceChanged { width, height });
             }
             HostEvent::Quit => sink.host_action(HostAction::Quit),

@@ -120,7 +120,6 @@ macro_rules! gl_list {
         $cb! {
             direct fn glActiveTexture(texture: u32);
             direct fn glAttachShader(program: u32, shader: u32);
-            direct fn glBindFramebuffer(target: u32, framebuffer: u32);
             direct fn glBindRenderbuffer(target: u32, renderbuffer: u32);
             direct fn glBindTexture(target: u32, texture: u32);
             direct fn glBlendColor(r: f32, g: f32, b: f32, a: f32);
@@ -252,6 +251,7 @@ macro_rules! gl_list {
             host fn glUniform1iv(loc: i32, count: i32, v: P);
             host fn glUniform2iv(loc: i32, count: i32, v: P);
             host fn glUniform3iv(loc: i32, count: i32, v: P);
+            host fn glBindFramebuffer(target: u32, framebuffer: u32);
             host fn glUniform4iv(loc: i32, count: i32, v: P);
             host fn glUniformMatrix2fv(loc: i32, count: i32, transpose: u8, v: P);
             host fn glUniformMatrix3fv(loc: i32, count: i32, transpose: u8, v: P);

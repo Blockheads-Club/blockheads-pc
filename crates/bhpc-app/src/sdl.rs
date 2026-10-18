@@ -26,6 +26,8 @@ pub fn translate(ev: Sdl, metrics: Metrics) -> Option<Event> {
             WindowEvent::SizeChanged(..) | WindowEvent::Resized(..) => Event::Resized(metrics),
             WindowEvent::FocusGained => Event::Focus(true),
             WindowEvent::FocusLost => Event::Focus(false),
+            WindowEvent::Minimized => Event::Visible(false),
+            WindowEvent::Restored => Event::Visible(true),
             _ => return None,
         },
         Sdl::MouseMotion { x, y, .. } => Event::MouseMove { x: x as f32, y: y as f32 },
@@ -107,6 +109,7 @@ impl sdl2::audio::AudioCallback for AudioOut {
 pub struct SdlGl {
     window: *mut sys::SDL_Window,
     alive: Arc<AtomicBool>,
+    surface: crate::vsurface::VirtualSurface,
 }
 
 // SAFETY: only SDL_GL_* functions are called through the pointer, which SDL permits from any thread.
@@ -140,7 +143,11 @@ impl SdlBackend {
         let pump = sdl.event_pump()?;
         video.text_input().start();
         let alive = Arc::new(AtomicBool::new(true));
-        let gl = Arc::new(SdlGl { window: window.raw(), alive: alive.clone() });
+        let gl = Arc::new(SdlGl {
+            window: window.raw(),
+            alive: alive.clone(),
+            surface: crate::vsurface::VirtualSurface::new(),
+        });
         Ok((SdlBackend { _sdl: sdl, audio: None, video, window, pump, alive }, gl))
     }
 
@@ -152,6 +159,11 @@ impl SdlBackend {
         dev.resume();
         self.audio = Some(dev);
         Ok(())
+    }
+
+    /// Resize the window (logical pixels); the window system answers with a `Resized` event.
+    pub fn set_size(&mut self, width: u32, height: u32) -> bool {
+        self.window.set_size(width, height).is_ok()
     }
 
     /// Name of the active video driver (for logs).
@@ -194,6 +206,10 @@ impl Backend for SdlBackend {
     fn set_title(&mut self, title: &str) {
         let _ = self.window.set_title(title);
     }
+}
+
+fn ctx_nonzero(ctx: usize) -> Option<usize> {
+    (ctx != 0).then_some(ctx)
 }
 
 impl SdlGl {
@@ -245,8 +261,37 @@ impl GlWindow for SdlGl {
 
     fn swap_buffers(&self) {
         if self.live() {
+            self.compose();
             // SAFETY: live window.
             unsafe { sys::SDL_GL_SwapWindow(self.window) }
+        }
+    }
+
+    fn set_surface_size(&self, width: u32, height: u32) {
+        self.surface.set_size(width, height);
+    }
+
+    fn surface_size(&self) -> (u32, u32) {
+        self.surface.size().unwrap_or_else(|| self.drawable_size())
+    }
+
+    fn default_framebuffer(&self) -> u32 {
+        if !self.live() {
+            return 0;
+        }
+        // SAFETY: plain SDL query.
+        let ctx = unsafe { sys::SDL_GL_GetCurrentContext() } as usize;
+        ctx_nonzero(ctx).map_or(0, |ctx| self.surface.framebuffer(ctx, &|n| self.proc_address(n)))
+    }
+
+    fn compose(&self) {
+        if !self.live() {
+            return;
+        }
+        // SAFETY: plain SDL query.
+        let ctx = unsafe { sys::SDL_GL_GetCurrentContext() } as usize;
+        if let Some(ctx) = ctx_nonzero(ctx) {
+            self.surface.compose(ctx, self.drawable_size(), &|n| self.proc_address(n));
         }
     }
 
@@ -292,6 +337,8 @@ mod tests {
         assert_eq!(ev(win(WindowEvent::Resized(1, 1))), Some(Event::Resized(M)));
         assert_eq!(ev(win(WindowEvent::FocusGained)), Some(Event::Focus(true)));
         assert_eq!(ev(win(WindowEvent::FocusLost)), Some(Event::Focus(false)));
+        assert_eq!(ev(win(WindowEvent::Minimized)), Some(Event::Visible(false)));
+        assert_eq!(ev(win(WindowEvent::Restored)), Some(Event::Visible(true)));
         assert_eq!(ev(win(WindowEvent::Enter)), None);
         let ms = MouseState::from_sdl_state(0);
         assert_eq!(

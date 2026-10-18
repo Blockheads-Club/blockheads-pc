@@ -14,7 +14,8 @@
 //! | Esc | `Window.nativeKeyDown/Up` with `KEYCODE_BACK` |
 //! | other keys | `Window.nativeKeyDown/Up` with Android key codes, unless a text field has focus |
 //! | text while a field has focus | `TextField.shouldChangeCharactersInRange`, `textDidChange`, `shouldReturn` |
-//! | focus / minimise / restore | `nativeOnWindowFocusChanged` and the `Lifecycle` natives |
+//! | focus lost | cancels a touch in progress (no lifecycle: the game keeps running unfocused) |
+//! | minimise / restore | the `Lifecycle` natives (resign active + background / foreground + become active) |
 //! | resize | `SurfaceChanged` (`nativeOnSurfaceChanged` + `nativeRootGeometryChanged`) |
 //! | F11 / window close | [`HostAction::ToggleFullscreen`] / [`HostAction::Quit`] |
 //!
@@ -28,7 +29,7 @@ pub mod text;
 pub use event::{
     EventSink, GuestEvent, HostAction, HostEvent, HostKey, Lifecycle, Mods, MouseButton, Recorder, Target, KEYCODE_BACK,
 };
-pub use mapper::{Config, InputMapper};
+pub use mapper::{Config, Geometry, InputMapper};
 
 #[cfg(test)]
 mod tests;

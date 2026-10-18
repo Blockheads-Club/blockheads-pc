@@ -62,6 +62,10 @@ pub struct FakeWindow {
     pub fail_interval: AtomicBool,
     pub shared_with: Mutex<Vec<Option<HostContext>>>,
     pub size: Mutex<(u32, u32)>,
+    /// Surface size the game announced (`None`: the window itself is the surface).
+    pub surface: Mutex<Option<(u32, u32)>>,
+    pub default_fb: AtomicU32,
+    pub composed: AtomicU32,
 }
 
 impl FakeWindow {
@@ -77,6 +81,9 @@ impl FakeWindow {
             fail_interval: AtomicBool::new(false),
             shared_with: Mutex::new(Vec::new()),
             size: Mutex::new((800, 480)),
+            surface: Mutex::new(None),
+            default_fb: AtomicU32::new(0),
+            composed: AtomicU32::new(0),
         })
     }
 }
@@ -111,6 +118,18 @@ impl GlWindow for FakeWindow {
     }
     fn proc_address(&self, name: &str) -> *const c_void {
         crate::api::dummy_driver::lookup(name)
+    }
+    fn set_surface_size(&self, width: u32, height: u32) {
+        *self.surface.lock().unwrap() = Some((width, height));
+    }
+    fn surface_size(&self) -> (u32, u32) {
+        self.surface.lock().unwrap().unwrap_or_else(|| self.drawable_size())
+    }
+    fn default_framebuffer(&self) -> u32 {
+        self.default_fb.load(Ordering::SeqCst)
+    }
+    fn compose(&self) {
+        self.composed.fetch_add(1, Ordering::SeqCst);
     }
 }
 

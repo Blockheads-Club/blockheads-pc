@@ -9,9 +9,14 @@ use std::sync::Arc;
 fn window_events_are_translated() {
     let m = Metrics::new((800, 600), (1600, 1200));
     assert_eq!(host_event(&Event::Quit), Some(HostEvent::Quit));
-    assert_eq!(host_event(&Event::Resized(m)), Some(HostEvent::Resized { width: 1600, height: 1200 }));
+    assert_eq!(
+        host_event(&Event::Resized(m)),
+        Some(HostEvent::Resized { width: 1600, height: 1200, logical_width: 800, logical_height: 600 })
+    );
     assert_eq!(host_event(&Event::Focus(true)), Some(HostEvent::FocusGained));
     assert_eq!(host_event(&Event::Focus(false)), Some(HostEvent::FocusLost));
+    assert_eq!(host_event(&Event::Visible(false)), Some(HostEvent::Minimized));
+    assert_eq!(host_event(&Event::Visible(true)), Some(HostEvent::Restored));
     assert_eq!(host_event(&Event::Fullscreen(true)), None);
     assert_eq!(host_event(&Event::Touch { id: 1, phase: TouchPhase::Down, x: 1.0, y: 2.0 }), None);
     assert_eq!(host_event(&Event::MouseMove { x: 1.0, y: 2.0 }), Some(HostEvent::MouseMove { x: 1.0, y: 2.0 }));
@@ -200,4 +205,18 @@ fn controls_take_touches_and_text_goes_to_the_focused_field() {
     assert!(!sink.returned);
     sink.deliver(&GuestEvent::TextShouldReturn { field: 0 });
     assert!(sink.returned);
+}
+
+#[test]
+fn control_touches_and_clicks_cross_the_content_surface() {
+    use crate::input::{content_to_screen, screen_to_window};
+    use bhpc_input::Geometry;
+    // The game picked 1024x768 content for a 1280x960 screen: views are 1.25 times the content.
+    assert_eq!(content_to_screen((1.25, 1.25), 100.0, 200.0), (125.0, 250.0));
+    // The window is the same size as the screen: a view position is a window position.
+    let g = Geometry { content: Some((1024.0, 768.0)), window: (1280, 960) };
+    assert_eq!(screen_to_window(&g, (1.25, 1.25), 625.0, 500.0), (625.0, 500.0));
+    // A wider window letterboxes: the content centre stays the window centre.
+    let wide = Geometry { content: Some((1024.0, 768.0)), window: (1920, 960) };
+    assert_eq!(screen_to_window(&wide, (1.25, 1.25), 640.0, 480.0), (960.0, 480.0));
 }

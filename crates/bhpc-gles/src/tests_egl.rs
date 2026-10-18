@@ -1,7 +1,7 @@
 use crate::consts::*;
 use crate::egl::*;
 use crate::tests_support::*;
-use crate::{Gles, GlesConfig};
+use crate::{GlWindow, Gles, GlesConfig};
 use bhpc_cpu::Stop;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -173,6 +173,12 @@ fn surfaces() {
         assert_eq!(e.call("eglQuerySurface", &[EGL_DISPLAY, surf, attr, S]), 1);
         assert_eq!(e.word(S), want);
     }
+    // The game's own surface size wins over the drawable.
+    GlWindow::set_surface_size(&*e.win, 1024, 768);
+    assert_eq!(e.call("eglQuerySurface", &[EGL_DISPLAY, surf, EGL_WIDTH, S]), 1);
+    assert_eq!(e.word(S), 1024);
+    assert_eq!(e.gl.surface_size(), (1024, 768));
+    *e.win.surface.lock().unwrap() = None;
     assert_eq!(e.call("eglQuerySurface", &[EGL_DISPLAY, surf, 0x9999, S]), 0);
     assert_eq!(egl_err(&mut e), EGL_BAD_ATTRIBUTE);
     assert_eq!(e.call("eglQuerySurface", &[EGL_DISPLAY, 77, EGL_WIDTH, S]), 0);
@@ -379,4 +385,34 @@ fn rust_api_for_the_java_side() {
 fn the_hle_can_be_shared_between_threads() {
     fn is_send_sync<T: Send + Sync + Clone + 'static>() {}
     is_send_sync::<Gles>();
+}
+
+#[test]
+fn a_window_without_an_offscreen_surface_renders_straight_into_itself() {
+    use crate::HostContext;
+    struct Bare;
+    impl GlWindow for Bare {
+        fn create_context(&self, _: Option<HostContext>) -> Option<HostContext> {
+            None
+        }
+        fn destroy_context(&self, _: HostContext) {}
+        fn make_current(&self, _: Option<HostContext>) -> bool {
+            false
+        }
+        fn swap_buffers(&self) {}
+        fn set_swap_interval(&self, _: i32) -> bool {
+            false
+        }
+        fn drawable_size(&self) -> (u32, u32) {
+            (640, 480)
+        }
+        fn proc_address(&self, _: &str) -> *const std::ffi::c_void {
+            std::ptr::null()
+        }
+    }
+    let w = Bare;
+    w.set_surface_size(1024, 768);
+    assert_eq!(w.surface_size(), (640, 480), "the surface is the drawable");
+    assert_eq!(w.default_framebuffer(), 0);
+    w.compose();
 }

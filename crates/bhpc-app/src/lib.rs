@@ -15,6 +15,9 @@ pub mod metrics;
 pub mod pacer;
 #[cfg(feature = "sdl")]
 pub mod sdl;
+pub mod surface;
+#[cfg(feature = "sdl")]
+mod vsurface;
 
 #[cfg(test)]
 mod tests_app;
