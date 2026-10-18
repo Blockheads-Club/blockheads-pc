@@ -1,0 +1,11 @@
+node_modules/
+.svelte-kit/
+build/
+coverage/
+test-results/
+playwright-report/
+src-tauri/target/
+src-tauri/gen/
+# The sidecar is built per target triple by scripts/build-sidecar.sh; it is a build product, not source.
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep

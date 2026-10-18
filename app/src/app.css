@@ -1,0 +1,221 @@
+/* "Sunlit Blocks" design tokens and base styles. Components read these semantic tokens only. */
+:root {
+  --f-display: 'Bricolage Grotesque Variable', ui-rounded, 'Segoe UI', system-ui, sans-serif;
+  --f-body: 'Atkinson Hyperlegible Next', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --f-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+
+  --bg: #fbf8f4;
+  --surface: #ffffff;
+  --surface-2: #f5efe8;
+  --surface-3: #ece4da;
+  --line: #e6dcd0;
+  --line-strong: #cfc1b1;
+  --text: #1f1a17;
+  --text-2: #574c45;
+  --text-3: #6e625a;
+  --primary: #c2410c;
+  --primary-hover: #a93a0b;
+  --primary-edge: #7a2a08;
+  --on-primary: #ffffff;
+  --primary-soft: #fdebdf;
+  --primary-ink: #9a3412;
+  --sun: #ffd27a;
+  --sun-soft: #fff3d6;
+  --sun-ink: #6b4300;
+  --ok: #1e7a4c;
+  --ok-soft: #dff3e7;
+  --warn: #8a5800;
+  --warn-soft: #fff0c7;
+  --bad: #b42318;
+  --bad-soft: #fde6e2;
+  --on-bad: #ffffff;
+  --info: #1d5fb8;
+  --info-soft: #e2edfb;
+  --focus: #1d5fb8;
+  --code-bg: #231d19;
+  --code-text: #f5ede5;
+  --code-dim: #b9aa9c;
+  --scrim: rgba(31, 26, 23, 0.45);
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --r-xl: 24px;
+  --edge: 0 3px 0 var(--line-strong);
+  --lift: 0 1px 2px rgba(31, 26, 23, 0.06), 0 12px 32px rgba(31, 26, 23, 0.1);
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+  --sp-9: 96px;
+
+  --dur-press: 90ms;
+  --dur-fast: 160ms;
+  --dur-move: 240ms;
+  --ease-block: cubic-bezier(0.2, 0.9, 0.3, 1.2);
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #14110f;
+  --surface: #1d1815;
+  --surface-2: #26201c;
+  --surface-3: #312924;
+  --line: #3a312b;
+  --line-strong: #54483f;
+  --text: #f5ede5;
+  --text-2: #cbbeb2;
+  --text-3: #ae9f92;
+  --primary: #ff7a45;
+  --primary-hover: #ff9466;
+  --primary-edge: #9c3a12;
+  --on-primary: #1c0d06;
+  --primary-soft: #3b2117;
+  --primary-ink: #ffb08c;
+  --sun-soft: #3a2f17;
+  --sun-ink: #ffd98f;
+  --ok: #56c990;
+  --ok-soft: #163a29;
+  --warn: #f2c14e;
+  --warn-soft: #3a2f12;
+  --bad: #ff8f80;
+  --bad-soft: #401d19;
+  --on-bad: #1c0d06;
+  --info: #86b9ff;
+  --info-soft: #172b45;
+  --focus: #86b9ff;
+  --code-bg: #0e0b09;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --edge: 0 3px 0 #0a0807;
+  --lift: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+
+/* No data-theme attribute = follow the OS. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not([data-theme='dark']) {
+    --bg: #14110f;
+    --surface: #1d1815;
+    --surface-2: #26201c;
+    --surface-3: #312924;
+    --line: #3a312b;
+    --line-strong: #54483f;
+    --text: #f5ede5;
+    --text-2: #cbbeb2;
+    --text-3: #ae9f92;
+    --primary: #ff7a45;
+    --primary-hover: #ff9466;
+    --primary-edge: #9c3a12;
+    --on-primary: #1c0d06;
+    --primary-soft: #3b2117;
+    --primary-ink: #ffb08c;
+    --sun-soft: #3a2f17;
+    --sun-ink: #ffd98f;
+    --ok: #56c990;
+    --ok-soft: #163a29;
+    --warn: #f2c14e;
+    --warn-soft: #3a2f12;
+    --bad: #ff8f80;
+    --bad-soft: #401d19;
+    --on-bad: #1c0d06;
+    --info: #86b9ff;
+    --info-soft: #172b45;
+    --focus: #86b9ff;
+    --code-bg: #0e0b09;
+    --scrim: rgba(0, 0, 0, 0.6);
+    --edge: 0 3px 0 #0a0807;
+    --lift: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-press: 0ms;
+    --dur-fast: 0ms;
+    --dur-move: 0ms;
+  }
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.55 var(--f-body);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+h1, h2, h3, h4 {
+  font-family: var(--f-display);
+  margin: 0;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
+  text-wrap: balance;
+  font-weight: 750;
+}
+p { margin: 0; text-wrap: pretty; }
+a { color: var(--primary-ink); text-underline-offset: 3px; }
+a:hover { color: var(--primary); }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+code, pre, .mono { font-family: var(--f-mono); }
+.mono { font-size: 0.92em; }
+.muted { color: var(--text-2); }
+.hint { font-size: 13.5px; line-height: 1.45; color: var(--text-3); }
+.sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+  white-space: nowrap; margin: -1px; padding: 0; border: 0;
+}
+.kbd {
+  font: 600 12.5px/1 var(--f-mono); padding: 3px 6px; border-radius: 6px;
+  border: 1.5px solid var(--line-strong); box-shadow: 0 2px 0 var(--line-strong); background: var(--surface);
+}
+.skip {
+  position: absolute; left: 8px; top: -64px; z-index: 100; background: var(--surface); color: var(--text);
+  padding: 10px 14px; border-radius: var(--r-md); border: 2px solid var(--focus); font-weight: 700;
+}
+.skip:focus { top: 8px; }
+
+/* Blockheads PC additions: the dark "stage" (play area, setup rail) is dark in both themes. */
+:root {
+  --stage: #1f1a17;
+  --ray: rgba(255, 122, 69, 0.12);
+  --stage-text: #f5ede5;
+  --stage-text-2: #cbbeb2;
+  --stage-text-3: #ae9f92;
+  --play-bg: #ffd27a;
+  --play-edge: #c98a2e;
+  --play-ink: #1f1a17;
+  --play-disabled: #3a312b;
+  --stage-danger: #ff8f80;
+  --stage-ok: #7fe0ae;
+  --stage-ok-bg: #163a29;
+  --stage-warn: #f2c14e;
+  --stage-warn-bg: #3a2f12;
+  --stage-bad-bg: #401d19;
+  --stage-neutral-bg: #312924;
+  --titlebar-h: 40px;
+}
+:root[data-theme='dark'] {
+  --stage: #0e0b09;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not([data-theme='dark']) {
+    --stage: #0e0b09;
+  }
+}
+html, body { height: 100%; overflow: hidden; }
+.sunburst {
+  background-color: var(--stage);
+  background-image: repeating-conic-gradient(from -3deg at 50% 125%, var(--ray) 0deg 7deg, transparent 7deg 22deg);
+}
