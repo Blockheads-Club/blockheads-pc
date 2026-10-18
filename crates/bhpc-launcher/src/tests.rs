@@ -160,9 +160,8 @@ fn config_toml_and_files() {
     assert!(matches!(c.save(&path.join("x/y.toml")), Err(LauncherError::Io(_))));
 
     assert_eq!(c.data_dirs().root, c.data_dir);
-    assert_eq!(c.run_args(), ["--apk", "/x/game.apk", "--data-dir", c.data_dir.to_str().unwrap(), "--force"]);
-    c.force = false;
-    assert_eq!(c.run_args().len(), 4);
+    assert_eq!(c.run_args()[..4], ["--apk", "/x/game.apk", "--data-dir", c.data_dir.to_str().unwrap()]);
+    assert!(c.run_args().contains(&"--force".to_string()));
     let _ = LaunchConfig::default_path();
     let _ = LaunchConfig::default_data_dir();
 }

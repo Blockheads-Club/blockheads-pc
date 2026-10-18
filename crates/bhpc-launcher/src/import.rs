@@ -67,6 +67,44 @@ pub struct Report {
     pub ignored: usize,
 }
 
+/// One imported item for the results list: the first two path parts below the data root's `home/` or `appdata/`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ImportItem {
+    pub name: String,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// What the UI shows after an import.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ImportSummary {
+    pub written: usize,
+    pub skipped_existing: usize,
+    pub ignored: usize,
+    pub items: Vec<ImportItem>,
+}
+
+impl Report {
+    /// Groups the written files into items (sorted by name) for display.
+    pub fn summary(&self, dirs: &DataDirs) -> ImportSummary {
+        let mut groups: std::collections::BTreeMap<String, (usize, u64)> = std::collections::BTreeMap::new();
+        for p in &self.written {
+            let rel = p.strip_prefix(&dirs.root).unwrap_or(p);
+            let parts: Vec<String> =
+                rel.components().skip(1).take(2).map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            let g = groups.entry(parts.join("/")).or_default();
+            g.0 += 1;
+            g.1 += std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        }
+        ImportSummary {
+            written: self.written.len(),
+            skipped_existing: self.skipped_existing,
+            ignored: self.ignored,
+            items: groups.into_iter().map(|(name, (files, bytes))| ImportItem { name, files, bytes }).collect(),
+        }
+    }
+}
+
 /// Where the Android-relative `path` goes below `dirs`, `None` when it is not imported.
 pub fn map_path(dirs: &DataDirs, path: &str) -> Option<PathBuf> {
     let mut parts: Vec<&str> = Vec::new();

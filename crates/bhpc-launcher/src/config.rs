@@ -116,17 +116,40 @@ impl LaunchConfig {
         crate::apk::validate(&self.apk, self.force).map_err(LauncherError::Apk)
     }
 
-    /// Command line for `bhpc-run` (`--apk`, `--data-dir`, `--force`) until it takes a `LaunchConfig` directly.
+    /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--force`, `--window WxH`, `--fullscreen`, `--no-vsync`.
+    ///
+    /// `bhpc-run` applies the first four today; fullscreen and vsync are accepted and ignored until the play
+    /// loop reads them (see `docs/launcher.md`).
     pub fn run_args(&self) -> Vec<String> {
         let mut a = vec![
             "--apk".to_string(),
             self.apk.display().to_string(),
             "--data-dir".to_string(),
             self.data_dir.display().to_string(),
+            "--window".to_string(),
+            format!("{}x{}", self.window.width, self.window.height),
         ];
-        if self.force {
-            a.push("--force".to_string());
+        for (on, flag) in
+            [(self.force, "--force"), (self.window.fullscreen, "--fullscreen"), (!self.window.vsync, "--no-vsync")]
+        {
+            if on {
+                a.push(flag.to_string());
+            }
         }
         a
     }
+}
+
+/// Replaces `--config FILE` in a command line by the flags the file stands for. Arguments given next to it come
+/// first, so they win over the file (`bhpc-run` reads the first occurrence of an option).
+pub fn expand_args(args: &[String]) -> Result<Vec<String>, LauncherError> {
+    let Some(i) = args.iter().position(|a| a == "--config") else {
+        return Ok(args.to_vec());
+    };
+    let path = args.get(i + 1).ok_or_else(|| LauncherError::Io("--config needs a file".to_string()))?;
+    let cfg = LaunchConfig::load(Path::new(path))?
+        .ok_or_else(|| LauncherError::Io(format!("config file {path} does not exist")))?;
+    let mut out: Vec<String> = args[..i].iter().chain(&args[i + 2..]).cloned().collect();
+    out.extend(cfg.run_args());
+    Ok(out)
 }

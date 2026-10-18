@@ -1,0 +1,252 @@
+//! Spawning and supervising one `bhpc-run` process: state for the Home screen, a bounded log, crash detection.
+
+use serde::Serialize;
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+/// How long a freshly spawned game counts as "starting" (the game has no readiness signal yet).
+pub const LAUNCH_GRACE: Duration = Duration::from_millis(2500);
+/// Log lines kept in memory.
+pub const MAX_LINES: usize = 5000;
+
+/// Where the `bhpc-run` sidecar sits next to the launcher executable.
+pub fn sidecar_path(exe_dir: &Path) -> PathBuf {
+    exe_dir.join(if cfg!(windows) { "bhpc-run.exe" } else { "bhpc-run" })
+}
+
+/// What the Home screen shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GameState {
+    Ready,
+    Launching,
+    Running,
+    Stopped,
+    Crashed,
+    /// Nothing is running and the game file is gone.
+    Missing,
+}
+
+/// Why a session could not start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionError {
+    AlreadyRunning,
+    Spawn(String),
+}
+
+impl std::fmt::Display for SessionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionError::AlreadyRunning => write!(f, "the game is already running"),
+            SessionError::Spawn(e) => write!(f, "cannot start the game: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for SessionError {}
+
+/// A bounded line buffer addressed by absolute line numbers, so a poller can ask for "everything after N".
+#[derive(Debug)]
+pub struct LogBuffer {
+    cap: usize,
+    lines: VecDeque<String>,
+    dropped: usize,
+}
+
+impl LogBuffer {
+    /// Keeps at most `cap` lines.
+    pub fn new(cap: usize) -> Self {
+        LogBuffer { cap, lines: VecDeque::new(), dropped: 0 }
+    }
+
+    /// Appends a line, dropping the oldest when full.
+    pub fn push(&mut self, line: String) {
+        if self.lines.len() == self.cap {
+            self.lines.pop_front();
+            self.dropped += 1;
+        }
+        self.lines.push_back(line);
+    }
+
+    /// Forgets everything (line numbers restart at 0).
+    pub fn clear(&mut self) {
+        self.lines.clear();
+        self.dropped = 0;
+    }
+
+    /// The lines from absolute number `since` on, and the next number to ask for.
+    pub fn since(&self, since: usize) -> (Vec<String>, usize) {
+        let start = since.saturating_sub(self.dropped).min(self.lines.len());
+        (self.lines.iter().skip(start).cloned().collect(), self.dropped + self.lines.len())
+    }
+}
+
+/// State and new log lines, as polled by the UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Snapshot {
+    pub state: GameState,
+    /// Seconds since the game started (while it runs).
+    pub running_secs: Option<u64>,
+    /// Length of the last finished session.
+    pub last_session_secs: Option<u64>,
+    /// Exit code of the last finished session.
+    pub exit_code: Option<i32>,
+    /// Signal that ended the last session (Unix).
+    pub signal: Option<i32>,
+    /// Log lines after the number the poller passed.
+    pub lines: Vec<String>,
+    /// Pass this next time.
+    pub next: usize,
+}
+
+struct Running {
+    child: Child,
+    started: Instant,
+    readers: Vec<JoinHandle<()>>,
+    stopping: bool,
+}
+
+struct Finished {
+    secs: u64,
+    code: Option<i32>,
+    signal: Option<i32>,
+    crashed: bool,
+}
+
+/// One supervised game process at a time.
+pub struct Session {
+    run: Option<Running>,
+    last: Option<Finished>,
+    log: Arc<Mutex<LogBuffer>>,
+    grace: Duration,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Session::new(LAUNCH_GRACE)
+    }
+}
+
+fn pump(source: impl Read + Send + 'static, log: Arc<Mutex<LogBuffer>>) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(source);
+        let mut buf = Vec::new();
+        while reader.read_until(b'\n', &mut buf).map(|n| n > 0).unwrap_or(false) {
+            let line = String::from_utf8_lossy(&buf).trim_end().to_string();
+            log.lock().expect("log lock").push(line);
+            buf.clear();
+        }
+    })
+}
+
+#[cfg(unix)]
+fn signal_of(s: &ExitStatus) -> Option<i32> {
+    std::os::unix::process::ExitStatusExt::signal(s)
+}
+
+#[cfg(not(unix))]
+fn signal_of(_: &ExitStatus) -> Option<i32> {
+    None
+}
+
+impl Session {
+    /// A session whose process counts as starting for `grace`.
+    pub fn new(grace: Duration) -> Self {
+        Session { run: None, last: None, log: Arc::new(Mutex::new(LogBuffer::new(MAX_LINES))), grace }
+    }
+
+    /// Spawns `program args...` with its output captured. The previous session's log is replaced.
+    pub fn start(&mut self, program: &Path, args: &[String]) -> Result<(), SessionError> {
+        self.refresh();
+        if self.run.is_some() {
+            return Err(SessionError::AlreadyRunning);
+        }
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| SessionError::Spawn(format!("{}: {e}", program.display())))?;
+        self.log.lock().expect("log lock").clear();
+        let mut readers = Vec::new();
+        readers.extend(child.stdout.take().map(|s| pump(s, self.log.clone())));
+        readers.extend(child.stderr.take().map(|s| pump(s, self.log.clone())));
+        self.run = Some(Running { child, started: Instant::now(), readers, stopping: false });
+        Ok(())
+    }
+
+    /// Kills the game if it runs; the session then counts as stopped by the user.
+    pub fn stop(&mut self) {
+        self.refresh();
+        if let Some(mut run) = self.run.take() {
+            run.stopping = true;
+            let _ = run.child.kill();
+            if let Ok(status) = run.child.wait() {
+                self.finish(run, status);
+            }
+        }
+    }
+
+    fn finish(&mut self, run: Running, status: ExitStatus) {
+        for r in run.readers {
+            let _ = r.join();
+        }
+        self.last = Some(Finished {
+            secs: run.started.elapsed().as_secs(),
+            code: status.code(),
+            signal: signal_of(&status),
+            crashed: !status.success() && !run.stopping,
+        });
+    }
+
+    /// Notices a process that ended by itself.
+    fn refresh(&mut self) {
+        let exited = self.run.as_mut().and_then(|r| r.child.try_wait().ok().flatten());
+        if let Some(status) = exited {
+            if let Some(run) = self.run.take() {
+                self.finish(run, status);
+            }
+        }
+    }
+
+    /// Current state plus the log lines after `since`. `apk_present`: the game file still exists.
+    pub fn poll(&mut self, since: usize, apk_present: bool) -> Snapshot {
+        self.refresh();
+        let state = match (&self.run, &self.last) {
+            (Some(r), _) if r.started.elapsed() < self.grace => GameState::Launching,
+            (Some(_), _) => GameState::Running,
+            (None, Some(f)) if f.crashed => GameState::Crashed,
+            (None, Some(_)) if apk_present => GameState::Stopped,
+            (None, None) if apk_present => GameState::Ready,
+            (None, _) => GameState::Missing,
+        };
+        let (lines, next) = self.log.lock().expect("log lock").since(since);
+        Snapshot {
+            state,
+            running_secs: self.run.as_ref().map(|r| r.started.elapsed().as_secs()),
+            last_session_secs: self.last.as_ref().map(|f| f.secs),
+            exit_code: self.last.as_ref().and_then(|f| f.code),
+            signal: self.last.as_ref().and_then(|f| f.signal),
+            lines,
+            next,
+        }
+    }
+
+    /// The whole log as text.
+    pub fn log_text(&self) -> String {
+        let (lines, _) = self.log.lock().expect("log lock").since(0);
+        lines.join("\n")
+    }
+
+    /// Writes the log to `path`, creating parent directories.
+    pub fn save_log(&self, path: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(path.parent().unwrap_or(Path::new("")))?;
+        std::fs::write(path, self.log_text())
+    }
+}

@@ -187,6 +187,12 @@ fn parse_key(lower: &str) -> Option<Key> {
     if let Some((_, k)) = NAMED.iter().find(|(n, _)| n.eq_ignore_ascii_case(lower)) {
         return Some(*k);
     }
+    // Browsers name the arrow keys `ArrowUp` / `ArrowDown`.
+    match lower {
+        "arrowup" => return Some(Key::Up),
+        "arrowdown" => return Some(Key::Down),
+        _ => {}
+    }
     if let Some(n) = lower.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
         return (1..=12).contains(&n).then_some(Key::F(n));
     }
