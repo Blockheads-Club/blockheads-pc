@@ -335,3 +335,21 @@ fn the_newest_window_is_hit_first() {
     assert_eq!(hit_in_new_window(&mut e, 1), Some(2));
     assert_eq!(hit_in_new_window(&mut e, 10), Some(11), "two windows cover the same spot: the newer wins");
 }
+
+#[test]
+fn only_clipping_views_confine_their_subviews() {
+    // The game's landscape root view (800x480) holds a portrait popup whose button lies below the root's bottom edge.
+    let mut e = Env::new();
+    let window = view(&mut e, "Window", 1, None);
+    let root = view(&mut e, "View", 2, Some((0.0, 0.0, 800.0, 480.0)));
+    let popup = view(&mut e, "View", 3, Some((0.0, 300.0, 480.0, 700.0)));
+    let ok = view(&mut e, "Button", 4, Some((10.0, 300.0, 200.0, 380.0)));
+    add(&mut e, window, root);
+    add(&mut e, root, popup);
+    add(&mut e, popup, ok);
+    assert_eq!(e.vm.hit_test(100.0, 640.0).map(|h| h.view), Some(ok), "drawn there, so it takes the touch");
+    assert_eq!(e.vm.hit_test(300.0, 640.0), None, "beside the button");
+    e.call(root, "setClipsToBounds", "(Z)V", &[Value::Int(1)]).unwrap();
+    assert_eq!(e.vm.hit_test(100.0, 640.0), None, "a clipping root hides and shields it");
+    assert_eq!(e.vm.hit_test(100.0, 300.0), None, "inside the root, outside the button");
+}

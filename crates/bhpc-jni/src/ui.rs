@@ -217,11 +217,13 @@ impl Vm {
 
     fn hit(views: &HashMap<Obj, View>, v: Obj, origin: (f32, f32), x: f32, y: f32) -> Option<Obj> {
         let info = views.get(&v)?;
-        if info.hidden
-            || info.alpha <= 0.01
-            || !info.interactive
-            || (info.kind != "Window" && !contains(&info.frame, origin, x, y))
-        {
+        if info.hidden || info.alpha <= 0.01 || !info.interactive {
+            return None;
+        }
+        // Like the renderer, only a clipping view confines its subviews: the game's landscape root view holds the
+        // portrait popups, whose buttons lie below its bottom edge.
+        let inside = info.kind == "Window" || contains(&info.frame, origin, x, y);
+        if !inside && info.clips {
             return None;
         }
         for c in info.children.iter().rev() {
@@ -231,7 +233,7 @@ impl Vm {
                 return Some(h);
             }
         }
-        matches!(info.kind.as_str(), "Button" | "TextField" | "TextView").then_some(v).filter(|_| info.enabled)
+        matches!(info.kind.as_str(), "Button" | "TextField" | "TextView").then_some(v).filter(|_| info.enabled && inside)
     }
 
     /// The topmost enabled control (button, text field) under window position `(x, y)`.
