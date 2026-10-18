@@ -144,6 +144,15 @@ fn pump(source: impl Read + Send + 'static, log: Arc<Mutex<LogBuffer>>) -> JoinH
     })
 }
 
+/// The game runner is a console program: do not flash a console window when the (windowed) launcher starts it.
+#[cfg(windows)]
+fn hide_console(command: &mut Command) {
+    std::os::windows::process::CommandExt::creation_flags(command, 0x0800_0000);
+}
+
+#[cfg(not(windows))]
+fn hide_console(_command: &mut Command) {}
+
 #[cfg(unix)]
 fn signal_of(s: &ExitStatus) -> Option<i32> {
     std::os::unix::process::ExitStatusExt::signal(s)
@@ -166,14 +175,15 @@ impl Session {
         if self.run.is_some() {
             return Err(SessionError::AlreadyRunning);
         }
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| SessionError::Spawn(format!("{}: {e}", program.display())))?;
+            .stderr(Stdio::piped());
+        hide_console(&mut command);
+        let mut child = command.spawn().map_err(|e| SessionError::Spawn(format!("{}: {e}", program.display())))?;
         self.log.lock().expect("log lock").clear();
         let mut readers = Vec::new();
         readers.extend(child.stdout.take().map(|s| pump(s, self.log.clone())));
