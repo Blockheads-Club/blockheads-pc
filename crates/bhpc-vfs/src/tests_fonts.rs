@@ -159,6 +159,12 @@ fn stand_ins_carry_the_names_of_the_fonts_they_replace() {
     assert!(Arc::ptr_eq(&stand_in("Roboto-Bold.ttf"), &stand_in("Roboto-Bold.ttf")));
     // anything that is not a TrueType font is refused
     assert!(rename(b"nope", &Names::for_file("A.ttf")).is_none());
+    // a font whose length is not a multiple of four is padded before the new table is appended
+    let mut odd = bundled(Style::Regular).to_vec();
+    while odd.len() % 4 != 1 {
+        odd.push(0);
+    }
+    assert!(rename(&odd, &Names::for_file("A.ttf")).is_some_and(|r| read_names(&r).is_some()));
     assert!(rename(&[0; 64], &Names::for_file("A.ttf")).is_none());
     let mut broken = bundled(Style::Regular).to_vec();
     let rec = (0..be16(&broken, 4) as usize).map(|i| 12 + 16 * i).find(|r| &broken[*r..*r + 4] == b"name").unwrap();

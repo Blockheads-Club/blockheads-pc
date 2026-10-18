@@ -318,6 +318,14 @@ fn window_events_map_to_lifecycle_and_surface() {
 
 #[test]
 fn text_field_editing_flow() {
+    for ev in [
+        GuestEvent::TextShouldChange { field: 7, location: 0, length: 0, replacement: String::new() },
+        GuestEvent::TextDidChange { field: 7 },
+        GuestEvent::TextShouldReturn { field: 7 },
+    ] {
+        assert_eq!(ev.text_field(), Some(7));
+    }
+    assert_eq!(GuestEvent::WindowFocus(true).text_field(), None);
     let mut m = InputMapper::new(cfg());
     let mut r = Recorder::new();
     assert_eq!(m.text(), None);

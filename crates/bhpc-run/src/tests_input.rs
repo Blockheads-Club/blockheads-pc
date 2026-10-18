@@ -129,3 +129,75 @@ fn delivery_calls_natives_and_collects_errors() {
     assert_eq!(sink.errors.len(), 1);
     assert!(sink.errors[0].contains("nativeOnWindowFocusChanged"), "{:?}", sink.errors);
 }
+
+#[test]
+fn single_finger_touches_reach_the_control_layer() {
+    use crate::input::control_touch;
+    let one = |ids: Vec<i32>| (ids, vec![1.0], vec![2.0]);
+    let (ids, xs, ys) = one(vec![0]);
+    assert_eq!(
+        control_touch(&GuestEvent::TouchMove { ids: ids.clone(), xs: xs.clone(), ys: ys.clone(), time_ms: 0 }),
+        Some((bhpc_jni::TouchPhase::Move, 1.0, 2.0))
+    );
+    assert_eq!(
+        control_touch(&GuestEvent::TouchCancel { ids, xs, ys, time_ms: 0 }),
+        Some((bhpc_jni::TouchPhase::Cancel, 1.0, 2.0))
+    );
+    assert_eq!(
+        control_touch(&GuestEvent::TouchEnd { id: 0, x: 3.0, y: 4.0, time_ms: 0 }),
+        Some((bhpc_jni::TouchPhase::End, 3.0, 4.0))
+    );
+    let two = GuestEvent::TouchMove { ids: vec![0, 1], xs: vec![1.0, 2.0], ys: vec![1.0, 2.0], time_ms: 0 };
+    assert_eq!(control_touch(&two), None);
+    assert_eq!(control_touch(&GuestEvent::TouchBegin { id: 1, x: 0.0, y: 0.0, time_ms: 0 }), None);
+}
+
+#[test]
+fn controls_take_touches_and_text_goes_to_the_focused_field() {
+    let (mut cpu, jni) = rig();
+    let vm = jni.vm.clone();
+    let ctx = Value::Ref(Some(vm.activity()));
+    let rect = vm
+        .new_object(
+            &mut cpu,
+            "android/graphics/RectF",
+            "(FFFF)V",
+            &[Value::Float(0.0), Value::Float(0.0), Value::Float(5000.0), Value::Float(5000.0)],
+        )
+        .unwrap();
+    let make = |cpu: &mut bhpc_cpu::Cpu, kind: &str, handle: i32| {
+        let class = format!("com/apportable/ui/{kind}");
+        let sig = format!("(Landroid/content/Context;ILandroid/graphics/RectF;)L{class};");
+        let args = [ctx, Value::Int(handle), Value::Ref(Some(rect))];
+        vm.call_static(cpu, &class, "create", &sig, &args).unwrap().as_ref().unwrap()
+    };
+    let window = make(&mut cpu, "Window", 1);
+    let button = make(&mut cpu, "Button", 2);
+    let field = make(&mut cpu, "TextField", 3);
+    for child in [field, button] {
+        vm.call_method(&mut cpu, window, "addSubview", "(Lcom/apportable/ui/View;)V", &[Value::Ref(Some(child))])
+            .unwrap();
+    }
+    let mut sink = JniSink { vm: &vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false };
+    // A press on the button is swallowed by the control layer.
+    assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
+    assert!(sink.deliver(&GuestEvent::TouchEnd { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
+    assert!(sink.errors.is_empty(), "{:?}", sink.errors);
+    // A failing control event is reported and the touch still goes on to the game.
+    vm.define("com/apportable/ui/Button")
+        .method("event", "(II)V", |_| Err(bhpc_jni::Throw::Stop(bhpc_cpu::Stop::Host("no".into()))));
+    sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 10.0, y: 10.0, time_ms: 0 });
+    assert!(sink.errors.iter().any(|e| e.starts_with("ui touch")), "{:?}", sink.errors);
+    sink.errors.clear();
+    // Text events need a focused field.
+    let change = GuestEvent::TextShouldChange { field: 0, location: 0, length: 0, replacement: "hi".into() };
+    assert!(!sink.deliver(&change), "no focus");
+    vm.set_text_focus(Some(field));
+    let t = change.targets()[0];
+    vm.define(t.class).method(t.method, t.signature, |_| Ok(Value::Int(1)));
+    assert!(sink.deliver(&change));
+    assert_eq!(vm.text_of(field), "hi");
+    assert!(!sink.returned);
+    sink.deliver(&GuestEvent::TextShouldReturn { field: 0 });
+    assert!(sink.returned);
+}

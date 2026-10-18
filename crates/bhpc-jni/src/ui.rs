@@ -111,17 +111,13 @@ impl Vm {
             return;
         }
         if let Some(old) = views.get(&child).and_then(|c| c.parent) {
-            if let Some(o) = views.get_mut(&old) {
-                o.children.retain(|c| *c != child);
-            }
+            views.entry(old).and_modify(|o| o.children.retain(|c| *c != child));
         }
-        if let Some(p) = views.get_mut(&parent) {
+        views.entry(parent).and_modify(|p| {
             let at = at.map_or(p.children.len(), |i| i.min(p.children.len()));
             p.children.insert(at, child);
-        }
-        if let Some(c) = views.get_mut(&child) {
-            c.parent = Some(parent);
-        }
+        });
+        views.entry(child).and_modify(|c| c.parent = Some(parent));
     }
 
     /// `parent.removeSubview(child)`.
@@ -129,9 +125,7 @@ impl Vm {
         let mut st = self.st();
         let views = &mut st.ui.views;
         let Some(parent) = views.get_mut(&child).and_then(|c| c.parent.take()) else { return };
-        if let Some(p) = views.get_mut(&parent) {
-            p.children.retain(|c| *c != child);
-        }
+        views.entry(parent).and_modify(|p| p.children.retain(|c| *c != child));
     }
 
     /// Window-space origin of `view` and whether it hangs below a `Window`, visible all the way.

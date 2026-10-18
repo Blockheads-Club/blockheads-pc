@@ -173,11 +173,13 @@ impl SharedMaps {
                 let before = lock(&s).vfs.lseek(fd as i32, 0, 1);
                 inner(c);
                 let wrote = c.reg(0) as i32;
-                if let (Ok(pos), true) = (before, wrote > 0) {
-                    let data = lock(&s).vfs.read_range(fd as i32, pos, wrote as usize);
-                    if let Ok(d) = data {
-                        m.refresh(c, &path, pos, &d);
-                    }
+                let wrote = usize::try_from(wrote).ok().filter(|n| *n > 0);
+                let data = before
+                    .ok()
+                    .zip(wrote)
+                    .and_then(|(pos, n)| lock(&s).vfs.read_range(fd as i32, pos, n).ok().map(|d| (pos, d)));
+                if let Some((pos, d)) = data {
+                    m.refresh(c, &path, pos, &d);
                 }
             }),
         );

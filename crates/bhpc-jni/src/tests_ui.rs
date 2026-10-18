@@ -258,3 +258,79 @@ fn touches_on_controls_are_played_as_android_would() {
     assert!(touch(&mut e, TouchPhase::End, fx, fy));
     assert_eq!(e.vm.text_focus(), Some(field));
 }
+
+#[test]
+fn views_can_be_reparented_removed_and_never_loop() {
+    let mut e = Env::new();
+    let (win, a, b) = (view(&mut e, "Window", 1, None), view(&mut e, "View", 2, None), view(&mut e, "View", 3, None));
+    let arg = |o: Obj| [Value::Ref(Some(o))];
+    add(&mut e, win, a);
+    add(&mut e, win, b);
+    // moving a view to another parent takes it out of the old one
+    add(&mut e, a, b);
+    let flat = |e: &Env| e.vm.dump_views().lines().map(|l| l.len() - l.trim_start().len()).collect::<Vec<_>>();
+    assert_eq!(flat(&e), [0, 2, 4]);
+    e.call(win, "insertSubview", "(Lcom/apportable/ui/View;I)V", &[Value::Ref(Some(b)), Value::Int(0)]).unwrap();
+    assert_eq!(flat(&e), [0, 2, 2]);
+    e.call(win, "removeSubview", "(Lcom/apportable/ui/View;)V", &arg(b)).unwrap();
+    assert_eq!(flat(&e), [0, 2, 0]);
+    e.call(win, "removeSubview", "(Lcom/apportable/ui/View;)V", &arg(b)).unwrap();
+    // a loop made by the game cannot hang the lookups
+    add(&mut e, a, win);
+    assert_eq!(e.vm.hit_test(1.0, 1.0), None);
+    assert_eq!(e.vm.view_rect(a), None);
+}
+
+#[test]
+fn text_fields_keep_their_text_and_the_focus() {
+    let mut e = Env::new();
+    let field = view(&mut e, "TextField", 11, Some((0.0, 0.0, 200.0, 40.0)));
+    let other = view(&mut e, "TextField", 12, Some((0.0, 0.0, 200.0, 40.0)));
+    let t = e.string("hello");
+    e.call(field, "setText", "(Ljava/lang/String;)V", &[t]).unwrap();
+    assert_eq!(e.vm.text_of(field), "hello");
+    let got = e.call(field, "getText", "()Ljava/lang/String;", &[]).unwrap().as_ref().unwrap();
+    assert_eq!(e.vm.string(got).as_deref(), Some("hello"));
+    e.call(field, "becomeFirstResponder", "()V", &[]).unwrap();
+    assert_eq!(e.vm.text_focus(), Some(field));
+    e.call(other, "resignFirstResponder", "()V", &[]).unwrap();
+    assert_eq!(e.vm.text_focus(), Some(field), "only the focused field can resign");
+    e.call(field, "resignFirstResponder", "()V", &[]).unwrap();
+    assert_eq!(e.vm.text_focus(), None);
+}
+
+#[test]
+fn an_alert_with_an_input_line_takes_the_focus_until_it_is_answered() {
+    let mut e = Env::new();
+    let ctx = Value::Ref(Some(e.vm.activity()));
+    let alert = e
+        .scall(
+            "com/apportable/ui/AlertView",
+            "create",
+            "(Landroid/content/Context;I)Lcom/apportable/ui/AlertView;",
+            &[ctx, Value::Int(70)],
+        )
+        .unwrap()
+        .as_ref()
+        .unwrap();
+    let field = view(&mut e, "TextField", 71, Some((0.0, 0.0, 200.0, 40.0)));
+    add(&mut e, alert, field);
+    e.call(alert, "show", "()V", &[]).unwrap();
+    assert_eq!(e.vm.text_focus(), Some(field));
+    let shown = e.vm.take_alerts();
+    e.vm.alert_click(&mut e.cpu, &shown[0], 0).unwrap();
+    assert_eq!(e.vm.text_focus(), None);
+}
+
+#[test]
+fn the_newest_window_is_hit_first() {
+    let mut e = Env::new();
+    let hit_in_new_window = |e: &mut Env, handle: i32| {
+        let win = view(e, "Window", handle, None);
+        let button = view(e, "Button", handle + 1, Some((0.0, 0.0, 100.0, 100.0)));
+        add(e, win, button);
+        e.vm.hit_test(10.0, 10.0).map(|h| h.handle)
+    };
+    assert_eq!(hit_in_new_window(&mut e, 1), Some(2));
+    assert_eq!(hit_in_new_window(&mut e, 10), Some(11), "two windows cover the same spot: the newer wins");
+}
