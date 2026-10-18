@@ -119,7 +119,10 @@ export async function mockTauri(page: Page) {
         log('[play] window 1600x900');
         log('[play] first frame presented');
         if (q.get('crash')) s.crashAt = Date.now() + 2500;
+        return { embedded: false };
       },
+      embed_layout: () => undefined,
+      embed_fullscreen: () => undefined,
       game_stop: () => {
         s.game = 'stopped';
         s.lastSecs = 125;

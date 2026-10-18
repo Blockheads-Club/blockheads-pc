@@ -5,7 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import type {
-  ApkReport, AppInfo, BootState, DisplayInfo, ImportSummary, LaunchConfig, Prefs, Snapshot, SplashState, UpdateInfo, UpdateProgress
+  ApkReport, AppInfo, BootState, DisplayInfo, ImportSummary, LaunchConfig, Prefs, Snapshot, SplashState, Started, UpdateInfo, UpdateProgress
 } from './types';
 
 /** Thin typed wrapper over the Tauri commands (see src-tauri/src/lib.rs). */
@@ -33,8 +33,11 @@ export const api = {
   dataSize: (path: string) => invoke<number>('data_size', { path }),
   moveDataDir: (to: string) => invoke<LaunchConfig>('move_data_dir', { to }),
   openPath: (path: string) => invoke<void>('open_path', { path }),
-  gameStart: () => invoke<void>('game_start'),
+  gameStart: () => invoke<Started>('game_start'),
   gameStop: () => invoke<void>('game_stop'),
+  /** The page tells the backend where the in-window game stage starts (pixels from the top; 0 none, -1 hide it). */
+  embedLayout: (top: number) => invoke<void>('embed_layout', { top }),
+  embedFullscreen: (on: boolean) => invoke<void>('embed_fullscreen', { on }),
   gamePoll: (since: number) => invoke<Snapshot>('game_poll', { since }),
   saveLog: (path: string) => invoke<void>('save_log', { path }),
   updateCheck: () => invoke<UpdateInfo | null>('update_check'),

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount, tick } from 'svelte';
+  import { api } from '../api';
   import { t } from '../i18n.svelte';
   import { store } from '../store.svelte';
   import BindingChips from '../ui/BindingChips.svelte';
@@ -7,9 +9,27 @@
 
   const minutes = $derived(Math.floor((store.game.running_secs ?? 0) / 60));
   const keys = $derived(store.config?.keys);
+
+  /** The game stage: with the game inside this window the backend draws a native view over it. */
+  let view = $state<HTMLElement>();
+  const embedded = $derived(store.embedded);
+  const hideBars = $derived(embedded && store.fullscreen);
+
+  // Tell the backend where the stage starts: 0 when the bars are hidden (fullscreen), -1 while a dialog needs the
+  // whole window (the game view steps aside).
+  $effect(() => {
+    const el = view;
+    if (!embedded || !el) return;
+    const dialog = store.dialog !== null;
+    void store.fullscreen;
+    void tick().then(() => api.embedLayout(dialog ? -1 : Math.round(el.getBoundingClientRect().top)).catch(() => {}));
+  });
+  // Leaving the screen (Home) hides the game view; it comes back with the next layout.
+  onMount(() => () => void api.embedLayout(-1).catch(() => {}));
 </script>
 
 <div class="wrap">
+  {#if !hideBars}
   <nav class="strip" aria-label={t('play.controls')}>
     <button class="sb" title={t('play.homeTitle')} onclick={() => store.go('home')}><Icon name="home" />{t('play.home')}</button>
     <StatusPill state={store.game.state} {minutes} />
@@ -18,7 +38,9 @@
     <button class="sb ic" aria-label={t('home.q.logs')} onclick={() => (store.dialog = 'logs')}><Icon name="terminal" /></button>
     <button class="sb stop" onclick={() => store.stop()}><Icon name="stop" />{t('home.stop')}</button>
   </nav>
-  <main class="view" id="main" tabindex="-1" aria-label={t('play.view')}>
+  {/if}
+  <main class="view" id="main" tabindex="-1" aria-label={t('play.view')} bind:this={view}>
+    {#if !embedded}
     <div class="game">
       <p class="t">{t('play.title')}</p>
       <p class="d">{t('play.body')}</p>
@@ -32,11 +54,12 @@
       {/if}
       <p class="d small">{t('play.focus')}</p>
     </div>
+    {/if}
   </main>
 </div>
 
 <style>
-  .wrap { min-height: 100%; display: flex; flex-direction: column; background: #0e0b09; color: var(--stage-text); }
+  .wrap { height: 100%; overflow: hidden; display: flex; flex-direction: column; background: #0e0b09; color: var(--stage-text); }
   .strip { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px; background: #1f1a17; border-bottom: 1px solid #000; flex: none; }
   .sp { flex: 1; }
   .sb { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 9px; border: 0; background: transparent; color: #f5ede5; font: 700 14px var(--f-body); cursor: pointer; white-space: nowrap; }

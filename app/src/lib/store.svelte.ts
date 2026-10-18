@@ -60,6 +60,8 @@ export class AppStore {
   display = $state<DisplayInfo | null>(null);
   dataSize = $state<number | null>(null);
   game = $state<Snapshot>({ ...IDLE });
+  /** The window is fullscreen (the title bar and strip are hidden while playing). */
+  fullscreen = $state(false);
   log = $state<string[]>([]);
   update = $state<{ stage: UpdateStage; info: UpdateInfo | null; progress: UpdateProgress | null; error: string; checked: boolean }>({
     stage: 'idle', info: null, progress: null, error: '', checked: false
@@ -80,6 +82,11 @@ export class AppStore {
 
   get state(): GameState {
     return this.game.state;
+  }
+
+  /** The running game is drawn inside this window (not in one of its own). */
+  get embedded(): boolean {
+    return this.active && this.game.embedded === true;
   }
 
   get active(): boolean {

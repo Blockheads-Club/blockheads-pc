@@ -335,7 +335,9 @@ dependencies = [
 name = "blockheads-pc-app"
 version = "0.1.0"
 dependencies = [
+ "bhpc-input",
  "bhpc-launcher",
+ "gtk",
  "serde",
  "serde_json",
  "tauri",

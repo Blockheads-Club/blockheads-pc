@@ -212,6 +212,27 @@ describe('page', () => {
     expect(frame().classList.contains('round')).toBe(false);
   });
 
+  it('hides the bars of a fullscreen in-window game, F11 toggles it, and the window is square while it is up', async () => {
+    mock.api.boot = vi.fn(async () => makeBoot());
+    mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'running', running_secs: 1, embedded: true }));
+    const { container } = render(Page);
+    await waitFor(() => expect(store.embedded).toBe(true));
+    store.screen = 'playing';
+    const frame = container.querySelector('.frame') as HTMLElement;
+    expect(frame.classList.contains('round')).toBe(false);
+    await fireEvent.keyDown(window, { key: 'F11' });
+    expect(mock.api.embedFullscreen).toHaveBeenCalledWith(true);
+    mock.win.isFullscreen = vi.fn(async () => true);
+    hooks.resize?.();
+    await waitFor(() => expect(store.fullscreen).toBe(true));
+    await waitFor(() => expect(screen.queryByLabelText('Window title bar')).toBeNull());
+    store.screen = 'home';
+    await waitFor(() => expect(screen.getByLabelText('Window title bar')).toBeVisible());
+    store.screen = 'playing';
+    await fireEvent.keyDown(window, { key: 'F11' });
+    expect(mock.api.embedFullscreen).toHaveBeenLastCalledWith(false);
+  });
+
   it('survives a window without close events and picks the OS from the user agent', async () => {
     mock.win.onCloseRequested = vi.fn(async () => { throw new Error('no window'); });
     mock.win.onResized = vi.fn(async () => { throw new Error('no window'); });

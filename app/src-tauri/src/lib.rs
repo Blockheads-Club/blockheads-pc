@@ -1,19 +1,22 @@
 //! Blockheads PC launcher: Tauri commands over `bhpc-launcher`. All logic lives in that crate (tested to 100 %);
 //! this file only converts types and talks to the window system.
 
+mod embed;
+
 use bhpc_launcher::apk::{self, ApkReport};
 use bhpc_launcher::config::LaunchConfig;
 use bhpc_launcher::import::ImportSummary;
 use bhpc_launcher::ops::{self, Boot};
 use bhpc_launcher::prefs::Prefs;
-use bhpc_launcher::session::{Session, Snapshot};
+use bhpc_launcher::session::{GameState, Session, Snapshot};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, LogicalSize, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 use tauri_plugin_opener::OpenerExt;
 
@@ -49,6 +52,9 @@ struct App {
     hold: Duration,
     /// The main window is on screen: closing the splash is no longer a request to quit.
     revealed: AtomicBool,
+    /// The running game is shown inside the main window (see `embed`).
+    embedded: AtomicBool,
+    frames: AtomicU32,
 }
 
 impl Default for App {
@@ -59,6 +65,8 @@ impl Default for App {
             started: Instant::now(),
             hold: splash_hold(std::env::var_os("BHPC_SPLASH_HOLD_MS")),
             revealed: AtomicBool::new(false),
+            embedded: AtomicBool::new(false),
+            frames: AtomicU32::new(0),
         }
     }
 }
@@ -130,6 +138,8 @@ async fn main_ready(app: AppHandle, state: State<'_, App>) -> Res<()> {
     state.revealed.store(true, Ordering::SeqCst);
     if let Some(w) = app.get_webview_window("main") {
         w.show().map_err(text)?;
+        // Frameless windows on Wayland drop the config's size hints when GTK realizes them; set them again.
+        let _ = w.set_min_size(Some(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1)));
         let _ = w.set_focus();
     }
     if let Some(w) = app.get_webview_window("splash") {
@@ -246,27 +256,123 @@ fn sidecar(plan_program: PathBuf) -> PathBuf {
     std::env::var_os("BHPC_RUN").map(PathBuf::from).unwrap_or(plan_program)
 }
 
-#[tauri::command]
-fn game_start(app: State<'_, App>) -> Res<()> {
+/// Height of the title bar plus the control strip above the game stage (CSS pixels; `--titlebar-h` and the strip).
+const CHROME_HEIGHT: f64 = 84.0;
+
+/// How the game runs: in the launcher's window or in one of its own.
+#[derive(Serialize)]
+struct Started {
+    embedded: bool,
+}
+
+fn start_game(app: &App, window: &WebviewWindow, handle: &AppHandle, allow_embed: bool) -> Res<Started> {
     let exe = std::env::current_exe().map_err(text)?;
     let dir = exe.parent().unwrap_or(Path::new("."));
     let plan = ops::launch_plan(&ops::paths().map_err(text)?, dir).map_err(text)?;
-    app.session().start(&sidecar(plan.program), &plan.args, &plan.env).map_err(text)
+    let program = sidecar(plan.program.clone());
+    // The frame file must exist before the game starts: it opens it at once.
+    let frame = (allow_embed && embed::supported())
+        .then(|| {
+            let n = app.frames.fetch_add(1, Ordering::SeqCst);
+            let dir = bhpc_launcher::embed::frame_dir();
+            bhpc_launcher::embed::clean_stale(&dir, &bhpc_launcher::embed::pid_alive);
+            let path = bhpc_launcher::embed::frame_path(&dir, n);
+            bhpc_launcher::embed::FrameReader::create(&path)
+                .map(|r| (r, path))
+                .map_err(|e| eprintln!("frame file: {e}"))
+        })
+        .and_then(Result::ok);
+    let args = plan.args_for(frame.as_ref().map(|(_, p)| p.as_path()));
+    app.session().start(&program, &args, &plan.env).map_err(text)?;
+    let Some((reader, _)) = frame else {
+        app.embedded.store(false, Ordering::SeqCst);
+        return Ok(Started { embedded: false });
+    };
+    let opened = app.session().input().ok_or_else(|| "the game has no input".to_string()).and_then(|input| {
+        embed::open(
+            window,
+            embed::Opts { frame: reader, input, fullscreen_key: plan.keys.fullscreen.trigger(), app: handle.clone() },
+        )
+    });
+    if let Err(e) = opened {
+        // No view: run the game in a window of its own instead.
+        eprintln!("in-window game view unavailable ({e}); using a separate game window");
+        app.session().stop();
+        app.session().start(&program, &plan.args_for(None), &plan.env).map_err(text)?;
+        app.embedded.store(false, Ordering::SeqCst);
+        return Ok(Started { embedded: false });
+    }
+    app.embedded.store(true, Ordering::SeqCst);
+    if !plan.window.fullscreen && !window.is_maximized().unwrap_or(false) {
+        let _ = window.set_size(tauri::LogicalSize::new(
+            f64::from(plan.window.width),
+            f64::from(plan.window.height) + CHROME_HEIGHT,
+        ));
+    }
+    if plan.window.fullscreen {
+        let _ = embed::set_fullscreen(window, handle, true);
+    }
+    Ok(Started { embedded: true })
+}
+
+/// Takes the in-window view away (the game ended) and leaves fullscreen.
+fn end_view(app: &App, window: &WebviewWindow, handle: &AppHandle) {
+    if app.embedded.swap(false, Ordering::SeqCst) {
+        let _ = embed::close(window);
+        if window.is_fullscreen().unwrap_or(false) {
+            let _ = embed::set_fullscreen(window, handle, false);
+        }
+    }
 }
 
 #[tauri::command]
-fn game_stop(app: State<'_, App>) {
+fn game_start(app: State<'_, App>, window: WebviewWindow, handle: AppHandle) -> Res<Started> {
+    start_game(&app, &window, &handle, true)
+}
+
+#[tauri::command]
+fn game_stop(app: State<'_, App>, window: WebviewWindow, handle: AppHandle) {
     app.session().stop();
+    end_view(&app, &window, &handle);
 }
 
 #[tauri::command]
-fn game_poll(app: State<'_, App>, since: usize) -> Snapshot {
+fn game_poll(app: State<'_, App>, window: WebviewWindow, handle: AppHandle, since: usize) -> Polled {
     let present = ops::paths()
         .ok()
         .and_then(|p| LaunchConfig::load(&p.config()).ok().flatten())
         .map(|c| c.apk.exists())
         .unwrap_or(true);
-    app.session().poll(since, present)
+    let mut snap = app.session().poll(since, present);
+    if app.embedded.load(Ordering::SeqCst) && !matches!(snap.state, GameState::Launching | GameState::Running) {
+        end_view(&app, &window, &handle);
+        // The runner could not render without a window: start it again with a window of its own.
+        if snap.exit_code == Some(bhpc_launcher::embed::EMBED_UNAVAILABLE_EXIT)
+            && start_game(&app, &window, &handle, false).is_ok()
+        {
+            snap = app.session().poll(0, present);
+        }
+    }
+    Polled { snapshot: snap, embedded: app.embedded.load(Ordering::SeqCst) }
+}
+
+/// The poll result plus how the game is shown.
+#[derive(Serialize)]
+struct Polled {
+    #[serde(flatten)]
+    snapshot: Snapshot,
+    embedded: bool,
+}
+
+/// The page tells where the game stage starts (see `embed::layout`).
+#[tauri::command]
+fn embed_layout(window: WebviewWindow, top: i32) -> Res<()> {
+    embed::layout(&window, top)
+}
+
+#[tauri::command]
+fn embed_fullscreen(window: WebviewWindow, handle: AppHandle, on: bool) -> Res<()> {
+    embed::set_fullscreen(&window, &handle, on)
 }
 
 #[tauri::command]
@@ -292,6 +398,9 @@ fn update_progress() -> Res<()> {
     Err("updates are not available in this build".to_string())
 }
 
+/// Smallest launcher window (logical pixels): the size it opens at, as minWidth/minHeight in tauri.conf.json.
+const MIN_SIZE: (f64, f64) = (1100.0, 760.0);
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -314,6 +423,15 @@ pub fn run() {
             let closing = window.label() == "splash" && matches!(event, WindowEvent::CloseRequested { .. });
             if closing && !window.state::<App>().revealed.load(Ordering::SeqCst) {
                 window.app_handle().exit(0);
+            }
+            // Some compositors ignore the min-size hint of a frameless window: grow it back.
+            if let (WindowEvent::Resized(size), "main") = (event, window.label()) {
+                let scale = window.scale_factor().unwrap_or(1.0);
+                let (w, h) = (size.width as f64 / scale, size.height as f64 / scale);
+                let maximized = window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false);
+                if !maximized && size.width > 0 && (w < MIN_SIZE.0 || h < MIN_SIZE.1) {
+                    let _ = window.set_size(LogicalSize::new(w.max(MIN_SIZE.0), h.max(MIN_SIZE.1)));
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -338,6 +456,8 @@ pub fn run() {
             game_start,
             game_stop,
             game_poll,
+            embed_layout,
+            embed_fullscreen,
             save_log,
             update_check,
             update_install,

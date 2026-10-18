@@ -54,6 +54,8 @@ describe('api', () => {
     await api.gameStart();
     await api.gameStop();
     await api.gamePoll(4);
+    await api.embedLayout(84);
+    await api.embedFullscreen(true);
     await api.saveLog('/x.log');
     await api.updateCheck();
     await api.updateInstall();
@@ -61,11 +63,13 @@ describe('api', () => {
     expect(invoke.mock.calls.map((x: unknown[]) => x[0])).toEqual([
       'app_info', 'splash_set', 'splash_get', 'splash_retry', 'app_quit', 'main_ready', 'boot', 'save_config', 'save_prefs', 'finish_setup', 'check_apk', 'use_apk', 'normalize_binding',
       'display_info', 'import_saves', 'data_size', 'move_data_dir', 'open_path', 'game_start', 'game_stop', 'game_poll',
-      'save_log', 'update_check', 'update_install', 'update_progress'
+      'embed_layout', 'embed_fullscreen', 'save_log', 'update_check', 'update_install', 'update_progress'
     ]);
     expect(invoke).toHaveBeenCalledWith('use_apk', { path: '/a.apk', force: false, keepCopy: true });
     expect(invoke).toHaveBeenCalledWith('import_saves', { source: '/src', overwrite: true, dataDir: '/data' });
     expect(invoke).toHaveBeenCalledWith('game_poll', { since: 4 });
+    expect(invoke).toHaveBeenCalledWith('embed_layout', { top: 84 });
+    expect(invoke).toHaveBeenCalledWith('embed_fullscreen', { on: true });
   });
 
   it('subscribes to the splash events', async () => {

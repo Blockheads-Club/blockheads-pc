@@ -68,6 +68,11 @@ export interface BootState {
   prefs: Prefs;
 }
 
+/** How a started game runs: inside the launcher window, or in a window of its own. */
+export interface Started {
+  embedded: boolean;
+}
+
 export interface Snapshot {
   state: GameState;
   running_secs: number | null;
@@ -76,6 +81,8 @@ export interface Snapshot {
   signal: number | null;
   lines: string[];
   next: number;
+  /** The game is drawn inside the launcher window. */
+  embedded?: boolean;
 }
 
 export interface ImportItem {

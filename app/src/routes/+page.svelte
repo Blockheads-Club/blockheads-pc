@@ -54,7 +54,8 @@
 
   /** Maximized or fullscreen: the window fills the screen, so no rounded corners. */
   let square = $state(false);
-  const round = $derived(os !== 'macos' && !square);
+  // The game view inside the window is a native square widget: no rounded corners while it is up.
+  const round = $derived(os !== 'macos' && !square && !store.embedded);
 
   /** The splash window mirrors the boot state; once past it the main window replaces the splash. */
   $effect(() => {
@@ -76,7 +77,10 @@
     initTheme();
     let offRetry: (() => void) | undefined;
     void api.onSplashRetry(() => void store.init()).then((u) => (offRetry = u)).catch(() => {});
-    const sync = () => void Promise.all([win.isMaximized(), win.isFullscreen()]).then(([m, f]) => (square = m || f)).catch(() => {});
+    const sync = () => void Promise.all([win.isMaximized(), win.isFullscreen()]).then(([m, f]) => {
+      square = m || f;
+      store.fullscreen = f;
+    }).catch(() => {});
     sync();
     let offResize: (() => void) | undefined;
     void win.onResized(sync).then((u) => (offResize = u)).catch(() => {});
@@ -103,6 +107,9 @@
         e.preventDefault();
         void store.play();
       }
+    } else if (e.key === 'F11' && store.embedded) {
+      e.preventDefault();
+      void api.embedFullscreen(!store.fullscreen);
     } else if ((e.ctrlKey || e.metaKey) && e.key === ',' && store.config) {
       e.preventDefault();
       store.openSettings();
@@ -127,7 +134,9 @@
 <a class="skip" href="#main">{t('common.skipContent')}</a>
 <div class={['frame', round && 'round']}>
 <div class="win">
+  {#if !(s === 'playing' && store.embedded && store.fullscreen)}
   <TitleBar {os} {ctx} {onStage} native={store.info?.native_controls ?? false} />
+  {/if}
   <div class="content">
     {#if s === 'splash'}
       <!-- Hidden window: the separate splash window shows the boot (see /splash). -->

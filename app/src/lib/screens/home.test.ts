@@ -199,6 +199,42 @@ describe('Playing', () => {
   });
 });
 
+describe('Playing inside the window', () => {
+  const top = () => mock.api.embedLayout.mock.calls.map((c: number[]) => c[0]);
+
+  it('leaves the stage to the native game view and reports where it starts', async () => {
+    store.screen = 'playing';
+    store.game = makeSnap({ state: 'running', running_secs: 5, embedded: true });
+    const { unmount } = render(Playing);
+    expect(screen.queryByText('The game runs in its own window')).toBeNull();
+    await waitFor(() => expect(top()).toEqual([0]));
+    // A dialog needs the whole window; closing it gives the stage back.
+    store.dialog = 'close';
+    await waitFor(() => expect(top().at(-1)).toBe(-1));
+    store.dialog = null;
+    await waitFor(() => expect(top().at(-1)).toBe(0));
+    // Fullscreen hides the strip.
+    expect(screen.getByRole('button', { name: 'Stop game' })).toBeVisible();
+    store.fullscreen = true;
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop game' })).toBeNull());
+    store.fullscreen = false;
+    unmount();
+    expect(top().at(-1)).toBe(-1);
+  });
+
+  it('survives a backend that cannot lay out the view', async () => {
+    mock.api.embedLayout = vi.fn(async () => {
+      throw new Error('no view');
+    });
+    store.screen = 'playing';
+    store.game = makeSnap({ state: 'running', running_secs: 5, embedded: true });
+    const { unmount } = render(Playing);
+    await waitFor(() => expect(mock.api.embedLayout).toHaveBeenCalled());
+    unmount();
+    expect(mock.api.embedLayout).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('dialogs', () => {
   it('close with Escape', async () => {
     for (const [d, C] of [['join', JoinDialog], ['logs', LogsDialog], ['close', CloseDialog], ['import', ImportDialog], ['update', UpdateDialog]] as const) {
