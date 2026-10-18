@@ -289,7 +289,6 @@ impl GfxHooks for Hooks {
     }
 
     fn make_current(&self, ctx: u32) -> bool {
-        eprintln!("TMPDBG hooks make_current {ctx} {:?}", std::thread::current().id());
         if ctx == 0 {
             return self.gles.egl_make_current(0, 0, 0).is_ok();
         }
@@ -300,7 +299,6 @@ impl GfxHooks for Hooks {
     }
 
     fn create_shared_context(&self, _version: i32) -> u32 {
-        eprintln!("TMPDBG create_shared {:?}", std::thread::current().id());
         match self.gles.egl_create_context(self.primary) {
             Ok(c) => {
                 let id = self.next_id.fetch_add(1, Ordering::SeqCst);
