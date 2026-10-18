@@ -944,3 +944,17 @@ fn threads_and_nested_calls_inherit_the_slice_policy() {
     assert_eq!(cpu.call(t, &[]), Err(Stop::Host("third".into())));
     assert!(calls.load(Ordering::Relaxed) >= 6);
 }
+
+#[test]
+fn cycle_counting_reflects_options() {
+    assert!(!setup().cycle_counting());
+    let mem = Arc::new(GuestMemory::new().unwrap());
+    let cpu =
+        Cpu::with_options(mem, CpuOptions { fastmem: false, code_cache_bytes: 8 << 20, cycle_counting: true }).unwrap();
+    assert!(cpu.cycle_counting());
+}
+
+#[test]
+fn default_fastmem_matches_platform() {
+    assert_eq!(CpuOptions::default().fastmem, !cfg!(target_os = "macos"));
+}
