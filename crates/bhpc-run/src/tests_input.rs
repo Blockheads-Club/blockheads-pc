@@ -1,5 +1,5 @@
 //! Event translation and delivery into the fake JVM.
-use crate::input::{args_for, host_event, host_key, JniSink};
+use crate::input::{args_for, coalesce_moves, host_event, host_key, JniSink};
 use bhpc_app::{Event, Key, Metrics, Mods as AppMods, MouseButton as AB, TouchPhase};
 use bhpc_input::{EventSink, GuestEvent, HostAction, HostEvent, HostKey, Lifecycle, Mods, MouseButton};
 use bhpc_jni::{Value, VmConfig};
@@ -219,4 +219,17 @@ fn control_touches_and_clicks_cross_the_content_surface() {
     // A wider window letterboxes: the content centre stays the window centre.
     let wide = Geometry { content: Some((1024.0, 768.0)), window: (1920, 960) };
     assert_eq!(screen_to_window(&wide, (1.25, 1.25), 640.0, 480.0), (960.0, 480.0));
+}
+
+#[test]
+fn coalesce_keeps_the_newest_move_of_each_burst() {
+    let mv = |x: f32| Event::MouseMove { x, y: 0.0 };
+    let btn = |pressed| Event::MouseButton { button: AB::Left, pressed, x: 0.0, y: 0.0 };
+    assert_eq!(coalesce_moves(vec![]), vec![]);
+    assert_eq!(coalesce_moves(vec![mv(1.0), mv(2.0), mv(3.0)]), vec![mv(3.0)]);
+    // Moves around a button stay on their side of it.
+    assert_eq!(
+        coalesce_moves(vec![mv(1.0), mv(2.0), btn(true), mv(3.0), mv(4.0), btn(false), mv(5.0)]),
+        vec![mv(2.0), btn(true), mv(4.0), btn(false), mv(5.0)]
+    );
 }

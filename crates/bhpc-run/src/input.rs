@@ -40,6 +40,22 @@ pub fn host_event(ev: &Event) -> Option<HostEvent> {
     })
 }
 
+/// Drop every mouse move that is directly followed by another one: only the newest position of a burst matters.
+/// The game throttles `nativeTouchesMove` to 60 Hz of wall-clock time (it ignores a move less than 1/60 s after the
+/// last one it took), and the UI loop hands over everything that arrived during an iteration at once, so without this
+/// the game would take the oldest position of each burst and be one step behind (the final one is lost until the
+/// touch ends).
+pub fn coalesce_moves(events: Vec<Event>) -> Vec<Event> {
+    let mut out: Vec<Event> = Vec::with_capacity(events.len());
+    for ev in events {
+        if matches!((&ev, out.last()), (Event::MouseMove { .. }, Some(Event::MouseMove { .. }))) {
+            out.pop();
+        }
+        out.push(ev);
+    }
+    out
+}
+
 /// HID usage id (SDL scancode) to the keys the mapper knows.
 pub fn host_key(k: Key) -> HostKey {
     match k.0 {

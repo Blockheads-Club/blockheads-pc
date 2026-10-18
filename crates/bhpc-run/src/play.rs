@@ -289,6 +289,7 @@ impl GfxHooks for Hooks {
     }
 
     fn make_current(&self, ctx: u32) -> bool {
+        eprintln!("TMPDBG hooks make_current {ctx} {:?}", std::thread::current().id());
         if ctx == 0 {
             return self.gles.egl_make_current(0, 0, 0).is_ok();
         }
@@ -299,6 +300,7 @@ impl GfxHooks for Hooks {
     }
 
     fn create_shared_context(&self, _version: i32) -> u32 {
+        eprintln!("TMPDBG create_shared {:?}", std::thread::current().id());
         match self.gles.egl_create_context(self.primary) {
             Ok(c) => {
                 let id = self.next_id.fetch_add(1, Ordering::SeqCst);
@@ -855,7 +857,8 @@ impl UiThread {
             if let Some((w, h)) = vm.content_size().filter(|s| Some(*s) != mapper.geometry().content) {
                 mapper.set_content(w, h);
             }
-            while let Some(ev) = rx.and_then(|r| r.try_recv().ok()) {
+            let pending: Vec<Event> = std::iter::from_fn(|| rx.and_then(|r| r.try_recv().ok())).collect();
+            for ev in crate::input::coalesce_moves(pending) {
                 escape |= matches!(&ev, Event::Key { key, pressed: true, .. } if *key == bhpc_app::Key::ESCAPE);
                 if let Event::Resized(m) = &ev {
                     // The display of the game follows the window; `SurfaceChanged` below tells the game.
