@@ -155,6 +155,17 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
     cfg.exit_after_shot = args.iter().any(|a| a == "--exit-after-shot");
     cfg.seconds = opt(args, "--seconds").and_then(|v| v.parse().ok());
     cfg.check_gl = args.iter().any(|a| a == "--check-gl");
+    for (i, a) in args.iter().enumerate() {
+        if a == "--click" {
+            // X,Y@MS
+            let parsed = args.get(i + 1).and_then(|v| {
+                let (xy, ms) = v.split_once('@')?;
+                let (x, y) = xy.split_once(',')?;
+                Some((x.parse().ok()?, y.parse().ok()?, ms.parse().ok()?))
+            });
+            cfg.clicks.extend(parsed);
+        }
+    }
     cfg.alert_choice = opt(args, "--alert-choice").and_then(|v| v.parse().ok());
     cfg.trace_objc = args.iter().any(|a| a == "--trace-objc");
     cfg.jni_report = opt(args, "--jni-report").map(Into::into);

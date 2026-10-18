@@ -90,8 +90,11 @@ impl Drop for SdlBackend {
     }
 }
 
-/// Audio callback: fills interleaved stereo `i16` frames.
-pub struct AudioOut(Box<dyn FnMut(&mut [i16]) + Send>);
+/// Fills interleaved stereo `i16` frames.
+pub type AudioFill = Box<dyn FnMut(&mut [i16]) + Send>;
+
+/// Audio callback of the SDL device.
+pub struct AudioOut(AudioFill);
 
 impl sdl2::audio::AudioCallback for AudioOut {
     type Channel = i16;

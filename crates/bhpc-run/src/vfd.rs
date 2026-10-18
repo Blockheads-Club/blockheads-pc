@@ -99,7 +99,12 @@ impl Table {
     }
 
     fn insert(&mut self, kind: Kind, nonblock: bool, cloexec: bool) -> Option<u32> {
-        let fd = self.alloc_fd(FD_BASE)?;
+        self.insert_from(FD_BASE, kind, nonblock, cloexec)
+    }
+
+    /// Like [`Table::insert`] with the lowest free descriptor number `>= from`.
+    fn insert_from(&mut self, from: u32, kind: Kind, nonblock: bool, cloexec: bool) -> Option<u32> {
+        let fd = self.alloc_fd(from)?;
         match &kind {
             Kind::PipeR(c) => self.chans[*c].readers += 1,
             Kind::PipeW(c) => self.chans[*c].writers += 1,
@@ -540,7 +545,7 @@ impl Vfd {
         if matches!(kind, Kind::Epoll) {
             return None;
         }
-        t.insert(kind, nb, false).filter(|n| *n >= from.max(FD_BASE))
+        t.insert_from(from, kind, nb, false)
     }
 
     fn fcntl(&self, c: &mut Cpu, st: &Shared) {

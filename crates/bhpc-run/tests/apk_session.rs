@@ -371,3 +371,30 @@ fn run_errors_describe_themselves() {
     assert_eq!(e.to_string(), "vfs: no such file or directory");
     assert_eq!(Release::V1_7_4.version(), "1.7.4");
 }
+
+#[test]
+fn a_setup_hook_can_supply_window_audio_and_screen_size() {
+    use bhpc_run::apkrun::HostHooks;
+    use std::sync::Arc;
+    let dir = Tmp::new("hooks");
+    let apk = apk_file(&dir, &[("libApplication.so", lib(&[BX_LR], |_, _| {}))]);
+    let mut cfg = InitConfig::new(apk);
+    cfg.force = true;
+    cfg.data_dir = Some(dir.0.join("data"));
+    cfg.screen = Some((640, 480));
+    cfg.trace_jni_calls = true;
+    let mut ran = false;
+    let sess = Session::open_setup(&cfg, Box::new(std::io::sink()), None, &mut |cpu, _st| {
+        // The hook runs before linking and may register thunks.
+        assert!(cpu.thunk_addr("bhpc_test_hook").is_none());
+        ran = true;
+        Ok(HostHooks { gfx: Some(Arc::new(bhpc_jni::NoGfx)), audio: Some(Arc::new(bhpc_jni::NoAudio)) })
+    })
+    .unwrap();
+    assert!(ran);
+    assert_eq!((sess.platform.screen_width, sess.platform.screen_height), (640, 480));
+    // A failing hook aborts the open.
+    let err =
+        Session::open_setup(&cfg, Box::new(std::io::sink()), None, &mut |_, _| Err(RunError::NoEntry("hook".into())));
+    assert!(matches!(err, Err(RunError::NoEntry(_))));
+}

@@ -114,14 +114,10 @@ impl DlTable {
 
     /// `dlsym`: symbol address or `None` with the error set.
     pub fn dlsym(&mut self, cpu: &mut Cpu, handle: u32, name: &str) -> Option<u32> {
+        if self.trace {
+            eprintln!("[dl] dlsym({handle:#x}, {name})");
+        }
         let found = match handle {
-            _ if self.trace && {
-                eprintln!("[dl] dlsym({handle:#x}, {name})");
-                false
-            } =>
-            {
-                None
-            }
             RTLD_DEFAULT | GLOBAL_HANDLE => {
                 self.mods.iter().find_map(|m| m.exports.get(name).copied()).or_else(|| (self.host)(cpu, name))
             }

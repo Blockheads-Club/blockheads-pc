@@ -48,3 +48,16 @@ Umbrella rules: `../AGENTS.md`.
   root (home/, cache/, sdcard/, ...); without it the per-user default is used. The fake JVM is `bhpc-jni`
   (`bhpc_jni::install`): lenient, so unknown Java classes/members are invented and counted, calls answer 0/NULL.
 - Never `lock(st)` twice in one expression/`match` scrutinee (the fake JNI deadlocked once that way).
+
+## Gotchas learned in M3 (play mode)
+- `bhpc-run --apk X` without `--init-only` needs `--features play` (SDL window); notes and flags in
+  `docs/m3/play-bringup.md`. Everything with logic lives in modules that are covered without a display (`dl`, `vfd`,
+  `mmapio`, `extras`, `tracks`, `input`, `png`); only `play.rs` (SDL, threads) is excluded by the feature.
+- The game's main thread is the guest main thread (libv records it for `pthread_main_thread_np`); the Android UI
+  thread is a guest thread. Lifecycle natives queue blocks on the main run loop, so never call them on the main thread.
+- Thunks pre-registered before linking win over bionic's (`Hle::resolve` looks at `cpu.thunk_addr` first): that is how
+  GL/EGL, OpenSL ES, `dlopen`, pipes/epoll, `pread`/`pwrite`/`mmap(MAP_SHARED)`, `getrlimit` and the `inet_*` extras
+  are provided without touching `bhpc-bionic`.
+- `sched::sleep`/`sched::block` give the baton to other guest threads; never use `std::thread::sleep` in a thunk that
+  other guest threads depend on.
+- The fake VM allocator must return zeroed memory; `BHPC_JNI_CALLS`-style tracing is `--trace-jni --trace-jni-calls`.

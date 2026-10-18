@@ -1422,3 +1422,154 @@ fn layout_pass_calls_native_layout_subviews_of_marked_views() {
     e.call(v, "setNeedsLayout", "()V", &[]).unwrap();
     assert_eq!(e.vm.run_layout(&mut e.cpu), Ok(1));
 }
+
+struct RecordingAudio(Mutex<Vec<String>>);
+
+impl crate::AudioHooks for RecordingAudio {
+    fn min_buffer_size(&self, rate: i32, ch: i32, enc: i32) -> i32 {
+        self.0.lock().unwrap().push(format!("min {rate} {ch} {enc}"));
+        4096
+    }
+    fn create(&self, rate: i32, ch: i32, enc: i32, buf: i32) -> Option<u32> {
+        self.0.lock().unwrap().push(format!("create {rate} {ch} {enc} {buf}"));
+        (rate > 0).then_some(5)
+    }
+    fn control(&self, id: u32, op: crate::TrackOp) -> i32 {
+        self.0.lock().unwrap().push(format!("{id} {op:?}"));
+        0
+    }
+    fn write(&self, _cpu: &mut bhpc_cpu::Cpu, id: u32, data: &[u8]) -> i32 {
+        self.0.lock().unwrap().push(format!("write {id} {data:?}"));
+        data.len() as i32
+    }
+    fn head_position(&self, id: u32) -> i32 {
+        id as i32 * 100
+    }
+}
+
+#[test]
+fn audio_track_delegates_to_the_audio_hooks() {
+    let rec = Arc::new(RecordingAudio(Mutex::new(Vec::new())));
+    let r2 = rec.clone();
+    let mut e = Env::with(move |c| c.audio = r2);
+    let min = e.scall(
+        "android/media/AudioTrack",
+        "getMinBufferSize",
+        "(III)I",
+        &[Value::Int(44100), Value::Int(3), Value::Int(2)],
+    );
+    assert_eq!(int(min), 4096);
+    assert_eq!(int(e.scall("android/media/AudioTrack", "getNativeOutputSampleRate", "(I)I", &[Value::Int(3)])), 44100);
+    let args = [Value::Int(3), Value::Int(44100), Value::Int(3), Value::Int(2), Value::Int(8192), Value::Int(1)];
+    let t = e.new_obj("android/media/AudioTrack", "(IIIIII)V", &args);
+    assert_eq!(int(e.call(t, "getState", "()I", &[])), 1);
+    for m in ["play", "pause", "stop", "flush"] {
+        e.call(t, m, "()V", &[]).unwrap();
+    }
+    assert_eq!(int(e.call(t, "setStereoVolume", "(FF)I", &[Value::Float(0.25), Value::Float(0.5)])), 0);
+    assert_eq!(int(e.call(t, "setVolume", "(F)I", &[Value::Float(0.75)])), 0);
+    assert_eq!(int(e.call(t, "getPlaybackHeadPosition", "()I", &[])), 500);
+    let arr = e.vm.new_byte_array(&[1, 2, 3, 4, 5, 6]);
+    let w = e.call(t, "write", "([BII)I", &[Value::Ref(Some(arr)), Value::Int(2), Value::Int(3)]);
+    assert_eq!(int(w), 3);
+    let w = e.call(t, "write", "([BII)I", &[Value::Ref(Some(arr)), Value::Int(4), Value::Int(100)]);
+    assert_eq!(int(w), 2, "clamped to the array");
+    assert_eq!(int(e.call(t, "write", "([BII)I", &[Value::Ref(None), Value::Int(0), Value::Int(1)])), -2);
+    e.call(t, "release", "()V", &[]).unwrap();
+    assert_eq!(int(e.call(t, "getState", "()I", &[])), 0, "released tracks are uninitialized");
+    let bad = e.new_obj(
+        "android/media/AudioTrack",
+        "(IIIIII)V",
+        &[Value::Int(3), Value::Int(0), Value::Int(3), Value::Int(2), Value::Int(1), Value::Int(1)],
+    );
+    assert_eq!(int(e.call(bad, "getState", "()I", &[])), 0);
+    let log = rec.0.lock().unwrap().join("|");
+    for want in [
+        "min 44100 3 2",
+        "create 44100 3 2 8192",
+        "5 Play",
+        "5 Pause",
+        "5 Stop",
+        "5 Flush",
+        "5 Volume(0.5)",
+        "5 Volume(0.75)",
+        "write 5 [3, 4, 5]",
+        "write 5 [5, 6]",
+        "5 Release",
+    ] {
+        assert!(log.contains(want), "{want} in {log}");
+    }
+}
+
+#[test]
+fn the_default_audio_back_end_paces_writes() {
+    let mut e = Env::new();
+    let t = e.new_obj(
+        "android/media/AudioTrack",
+        "(IIIIII)V",
+        &[Value::Int(3), Value::Int(44100), Value::Int(3), Value::Int(2), Value::Int(8192), Value::Int(1)],
+    );
+    assert_eq!(int(e.call(t, "getState", "()I", &[])), 1);
+    assert_eq!(
+        int(e.scall(
+            "android/media/AudioTrack",
+            "getMinBufferSize",
+            "(III)I",
+            &[Value::Int(44100), Value::Int(3), Value::Int(2)]
+        )),
+        7056
+    );
+    assert_eq!(int(e.call(t, "play", "()V", &[]).map(|_| Value::Int(0))), 0);
+    let arr = e.vm.new_byte_array(&vec![0u8; 1764]);
+    let begun = std::time::Instant::now();
+    assert_eq!(int(e.call(t, "write", "([BII)I", &[Value::Ref(Some(arr)), Value::Int(0), Value::Int(1764)])), 1764);
+    assert!(begun.elapsed() >= std::time::Duration::from_millis(9), "10 ms of audio takes 10 ms to write");
+    assert_eq!(int(e.call(t, "getPlaybackHeadPosition", "()I", &[])), 0);
+}
+
+#[test]
+fn alerts_collect_buttons_and_click_through_the_natives() {
+    let mut e = Env::new();
+    let ctx = Value::Ref(Some(e.vm.activity()));
+    let a = obj(e.scall(
+        "com/apportable/ui/AlertView",
+        "create",
+        "(Landroid/content/Context;I)Lcom/apportable/ui/AlertView;",
+        &[ctx, Value::Int(55)],
+    ));
+    let s = |e: &Env, t: &str| e.string(t);
+    let (t, m, b0, b1, c) = (s(&e, "T"), s(&e, "M"), s(&e, "Yes"), s(&e, "No"), s(&e, "Cancel"));
+    e.call(a, "setTitle", "(Ljava/lang/String;)V", &[t]).unwrap();
+    e.call(a, "setMessage", "(Ljava/lang/String;)V", &[m]).unwrap();
+    e.call(a, "addButtonWithTitle", "(Ljava/lang/String;I)V", &[b0, Value::Int(1)]).unwrap();
+    e.call(a, "addButtonWithTitle", "(Ljava/lang/String;I)V", &[b1, Value::Int(2)]).unwrap();
+    e.call(a, "setCancelButtonTitle", "(Ljava/lang/String;)V", &[c]).unwrap();
+    e.call(a, "setCancelButtonIndex", "(I)V", &[Value::Int(0)]).unwrap();
+    e.call(a, "setStyle", "(I)V", &[Value::Int(0)]).unwrap();
+    assert!(e.vm.take_alerts().is_empty(), "not shown yet");
+    e.call(a, "show", "()V", &[]).unwrap();
+    let shown = e.vm.take_alerts();
+    assert_eq!(shown.len(), 1);
+    assert_eq!((shown[0].title.as_str(), shown[0].message.as_str()), ("T", "M"));
+    assert_eq!(shown[0].buttons, [("Yes".to_string(), 1), ("No".to_string(), 2)]);
+    assert_eq!(shown[0].cancel, Some(("Cancel".to_string(), 0)));
+    assert!(e.vm.take_alerts().is_empty());
+    // Setting the cancel index first, then the title keeps both.
+    let b = obj(e.scall(
+        "com/apportable/ui/AlertView",
+        "create",
+        "(Landroid/content/Context;I)Lcom/apportable/ui/AlertView;",
+        &[ctx, Value::Int(56)],
+    ));
+    let c2 = s(&e, "Nope");
+    e.call(b, "setCancelButtonIndex", "(I)V", &[Value::Int(3)]).unwrap();
+    e.call(b, "setCancelButtonTitle", "(Ljava/lang/String;)V", &[c2]).unwrap();
+    e.call(b, "show", "()V", &[]).unwrap();
+    assert_eq!(e.vm.take_alerts()[0].cancel, Some(("Nope".to_string(), 3)));
+    e.call(b, "dismiss", "()V", &[]).unwrap();
+    // A click calls nativeOnClick(mObject, index) then nativeOnDismiss(mObject).
+    e.vm.alert_click(&mut e.cpu, &shown[0], 1).unwrap();
+    let report = e.vm.report();
+    let calls = |n: &str| report.members.iter().find(|m| m.name == n).map(|m| m.calls);
+    assert_eq!((calls("nativeOnClick"), calls("nativeOnDismiss")), (Some(1), Some(1)));
+}

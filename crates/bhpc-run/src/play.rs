@@ -57,6 +57,8 @@ pub struct PlayConfig {
     pub trace_objc: bool,
     /// Button index to press when the game shows an alert (default: the first button, else the cancel button).
     pub alert_choice: Option<i32>,
+    /// Synthetic left clicks `(x, y, after_ms)` in window pixels (automation and smoke tests).
+    pub clicks: Vec<(f32, f32, u64)>,
     /// Write the full list of Java members the guest looked up (`host`, `native`, `STUB`, call counts) here.
     pub jni_report: Option<PathBuf>,
 }
@@ -75,6 +77,7 @@ impl PlayConfig {
             jni_report: None,
             trace_objc: false,
             alert_choice: None,
+            clicks: Vec::new(),
         }
     }
 }
@@ -318,6 +321,25 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
         });
     }
     let (tx, rx) = channel();
+    if !cfg.clicks.is_empty() {
+        let (clicks, tx) = (cfg.clicks.clone(), tx.clone());
+        std::thread::spawn(move || {
+            let begun = Instant::now();
+            for (x, y, at) in clicks {
+                std::thread::sleep(Duration::from_millis(at).saturating_sub(begun.elapsed()));
+                let b = bhpc_app::MouseButton::Left;
+                let evs = [
+                    Event::MouseMove { x, y },
+                    Event::MouseButton { button: b, pressed: true, x, y },
+                    Event::MouseButton { button: b, pressed: false, x, y },
+                ];
+                for e in evs {
+                    let _ = tx.send(e);
+                    std::thread::sleep(Duration::from_millis(60));
+                }
+            }
+        });
+    }
     let (c, f, mx) = (cfg.clone(), flags.clone(), mixer);
     let guest = std::thread::Builder::new()
         .name("guest-main".into())

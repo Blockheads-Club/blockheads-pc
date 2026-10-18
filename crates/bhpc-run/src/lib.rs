@@ -198,3 +198,9 @@ mod tests_dl;
 mod tests_extras;
 #[cfg(test)]
 mod tests_input;
+#[cfg(test)]
+mod tests_mmapio;
+#[cfg(test)]
+mod tests_tracks;
+#[cfg(test)]
+mod tests_vfd;

@@ -15,12 +15,11 @@ const AF_INET6: u32 = 10;
 const EAFNOSUPPORT: u32 = 97;
 const ENOSPC: u32 = 28;
 
-/// Text of the address at `src` for `inet_ntop`/`inet_ntoa`.
-fn address_text(af: u32, bytes: &[u8]) -> Option<String> {
-    match af {
-        AF_INET => Some(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]).to_string()),
-        AF_INET6 => Some(Ipv6Addr::from(<[u8; 16]>::try_from(bytes).ok()?).to_string()),
-        _ => None,
+/// Text of an address: 4 bytes are IPv4, 16 bytes IPv6.
+fn address_text(bytes: &[u8]) -> String {
+    match <[u8; 16]>::try_from(bytes) {
+        Ok(v6) => Ipv6Addr::from(v6).to_string(),
+        Err(_) => Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]).to_string(),
     }
 }
 
@@ -60,7 +59,7 @@ fn inet_ntop(c: &mut Cpu, st: &Shared) {
         }
     };
     let Some(raw) = rd(c, src, len) else { return };
-    let text = address_text(af, &raw).expect("length matches the family");
+    let text = address_text(&raw);
     if text.len() as u32 + 1 > size {
         bhpc_bionic::misc::set_errno(c, st, ENOSPC);
         return c.ret_u32(0);
@@ -95,7 +94,7 @@ pub fn install(cpu: &Cpu, st: &Shared) {
         "inet_ntoa",
         Arc::new(move |c: &mut Cpu| {
             let addr = c.args().u32(c);
-            let text = address_text(AF_INET, &addr.to_le_bytes()).expect("IPv4");
+            let text = address_text(&addr.to_le_bytes());
             let p = buffer(&s, &slot, 20);
             if p != 0 && wr_cstr(c, p, text.as_bytes()) {
                 c.ret_u32(p);
