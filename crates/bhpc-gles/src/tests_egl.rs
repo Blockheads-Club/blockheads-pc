@@ -332,6 +332,20 @@ fn swapping_and_intervals() {
 }
 
 #[test]
+fn frame_hook_runs_before_each_swap() {
+    let mut e = Env::new();
+    let (surf, ctx) = setup(&mut e);
+    e.call("eglMakeCurrent", &[EGL_DISPLAY, surf, surf, ctx]);
+    let n = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let n2 = n.clone();
+    e.gl.set_frame_hook(Arc::new(move |_c| {
+        n2.fetch_add(1, Ordering::SeqCst);
+    }));
+    assert_eq!(e.call("eglSwapBuffers", &[EGL_DISPLAY, surf]), 1);
+    assert_eq!(n.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn get_proc_address_hands_out_thunks() {
     let mut e = Env::new();
     e.put(S, b"glClear\0");

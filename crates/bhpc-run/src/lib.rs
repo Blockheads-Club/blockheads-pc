@@ -5,6 +5,7 @@ pub mod bench;
 pub mod dl;
 pub mod framestats;
 pub mod input;
+pub mod mainq;
 pub mod mmapio;
 #[cfg(feature = "play")]
 pub mod play;

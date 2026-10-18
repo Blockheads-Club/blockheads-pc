@@ -640,7 +640,17 @@ fn boot(
     // (Java start-up stages, looper, layout, input) therefore becomes a guest thread of its own.
     let stack = sess.cpu.mem().map_anywhere(256 << 10, 4096)?;
     let _pump = sles.spawn_pump(&sess.cpu, stack + (256 << 10))?;
+    // Touch/key/text natives run on this thread, right before a frame is presented.
+    let main_q = {
+        let st = st.clone();
+        crate::mainq::MainQueue::new(move |c| sched::sleep(c, &st, 1_000_000), 2000)
+    };
+    {
+        let q = main_q.clone();
+        gles.set_frame_hook(Arc::new(move |c| q.drain(c)));
+    }
     let ui = UiThread {
+        main: Some(main_q),
         vm: vm.clone(),
         flags: flags.clone(),
         cfg: cfg.clone(),
@@ -696,6 +706,7 @@ fn boot(
 
 /// What the Android UI thread needs (moved into its start routine).
 struct UiThread {
+    main: Option<Arc<crate::mainq::MainQueue>>,
     vm: Vm,
     flags: Arc<Flags>,
     cfg: PlayConfig,
@@ -840,7 +851,14 @@ impl UiThread {
             let focus = vm.text_focus();
             if focus != focused {
                 focused = focus;
-                let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
+                let mut sink = JniSink {
+                    vm,
+                    cpu: c,
+                    actions: Vec::new(),
+                    errors: Vec::new(),
+                    returned: false,
+                    main: self.main.clone(),
+                };
                 match focus {
                     Some(f) => {
                         let (handle, text) = (vm.get_field(f, "mObject").as_int(), vm.text_of(f));
@@ -849,7 +867,14 @@ impl UiThread {
                     None => mapper.set_text_focus(None, &mut sink),
                 }
             }
-            let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
+            let mut sink = JniSink {
+                vm,
+                cpu: c,
+                actions: Vec::new(),
+                errors: Vec::new(),
+                returned: false,
+                main: self.main.clone(),
+            };
             let mut escape = false;
             // The game announced (or changed) its content size: touches map into it.
             if let Some((w, h)) = vm.content_size().filter(|s| Some(*s) != mapper.geometry().content) {
@@ -880,7 +905,14 @@ impl UiThread {
                 let pick = if returned { None } else { Some(alert.cancel.as_ref().map_or(0, |b| b.1)) };
                 eprintln!("[play] text alert answered with {:?}: {:?}", pick, alert.field.map(|f| vm.text_of(f)));
                 self.answer(c, &alert, pick);
-                let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
+                let mut sink = JniSink {
+                    vm,
+                    cpu: c,
+                    actions: Vec::new(),
+                    errors: Vec::new(),
+                    returned: false,
+                    main: self.main.clone(),
+                };
                 mapper.set_text_focus(None, &mut sink);
                 focused = None;
             }

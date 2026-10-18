@@ -26,8 +26,13 @@ pub(crate) struct EglState {
     pub surfaces: HashSet<u32>,
     pub current: HashMap<ThreadId, (u32, u32)>,
     pub swap_interval: i32,
+    /// Runs in the swapping guest thread right before every `eglSwapBuffers` of the guest.
+    pub frame_hook: Option<FrameHook>,
     next: u32,
 }
+
+/// Callback of [`Gles::set_frame_hook`].
+pub type FrameHook = std::sync::Arc<dyn Fn(&mut Cpu) + Send + Sync>;
 
 impl Default for EglState {
     fn default() -> Self {
@@ -38,6 +43,7 @@ impl Default for EglState {
             surfaces: HashSet::new(),
             current: HashMap::new(),
             swap_interval: 1,
+            frame_hook: None,
             next: FIRST_HANDLE,
         }
     }
@@ -83,6 +89,12 @@ pub fn config_matches(attribs: &[(u32, u32)]) -> bool {
 }
 
 impl Gles {
+    /// Install a callback that runs in the guest thread that calls `eglSwapBuffers`, before the frame is presented
+    /// (the embedder uses it to run work on the game's render thread).
+    pub fn set_frame_hook(&self, hook: FrameHook) {
+        self.lock().egl.frame_hook = Some(hook);
+    }
+
     fn egl_fail(&self, e: u32) -> u32 {
         self.lock().egl.error = e;
         e
@@ -537,6 +549,10 @@ fn query_context(c: &mut Cpu, g: &Gles) {
 
 fn swap_buffers(c: &mut Cpu, g: &Gles) {
     args!(c; dpy, surface);
+    let hook = g.lock().egl.frame_hook.clone();
+    if let Some(h) = hook {
+        h(c);
+    }
     let r = g.egl_check_display(dpy).map_err(|e| g.egl_fail(e)).and_then(|_| g.egl_swap_buffers(surface));
     ret_bool(c, r);
 }

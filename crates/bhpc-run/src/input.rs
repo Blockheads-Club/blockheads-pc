@@ -1,10 +1,12 @@
 //! Host input to guest Java natives: SDL events (`bhpc_app::Event`) -> `bhpc_input::HostEvent` -> the
 //! `Window` / `Lifecycle` / `TextField` natives of the game, called through the fake JVM.
 
+use crate::mainq::MainQueue;
 use bhpc_app::{Event, Key, MouseButton as AppButton};
 use bhpc_cpu::Cpu;
 use bhpc_input::{EventSink, Geometry, GuestEvent, HostAction, HostEvent, HostKey, Mods, MouseButton};
-use bhpc_jni::{Data, TouchPhase, Ty, Value, Vm};
+use bhpc_jni::{Data, Obj, TouchPhase, Ty, Value, Vm};
+use std::sync::Arc;
 
 /// Translate a window-system event. Touch events are not forwarded (the mapper emulates touches from the mouse).
 pub fn host_event(ev: &Event) -> Option<HostEvent> {
@@ -101,6 +103,38 @@ pub struct JniSink<'a> {
     pub errors: Vec<String>,
     /// The guest was told the return key was pressed in the focused text field.
     pub returned: bool,
+    /// Where touch, key and text natives run: the guest main thread (the only one with a GL context). `None`
+    /// calls them on the current thread.
+    pub main: Option<Arc<MainQueue>>,
+}
+
+/// Events whose natives the game handles on its main thread (the rest are lifecycle/surface/focus natives that
+/// must not run there).
+pub fn runs_on_main(ev: &GuestEvent) -> bool {
+    !matches!(ev, GuestEvent::WindowFocus(_) | GuestEvent::SurfaceChanged { .. } | GuestEvent::Lifecycle(_))
+}
+
+/// Call the natives of `ev`; the result is the boolean answer (true unless a native answered 0) and the errors.
+fn deliver_natives(vm: &Vm, cpu: &mut Cpu, ev: &GuestEvent, focus: Option<Obj>) -> (bool, Vec<String>) {
+    let (mut result, mut errors) = (true, Vec::new());
+    let text_target = ev.text_field().is_some();
+    for (i, t) in ev.targets().iter().enumerate() {
+        let args = args_for(vm, ev, i);
+        let r = if t.method == "nativeRootGeometryChanged" {
+            let a = vm.activity();
+            vm.call_method(cpu, a, t.method, t.signature, &args)
+        } else if let (true, Some(field)) = (text_target, focus) {
+            // The TextField natives are instance methods.
+            vm.call_method(cpu, field, t.method, t.signature, &args)
+        } else {
+            vm.call_static(cpu, t.class, t.method, t.signature, &args)
+        };
+        match r {
+            Ok(v) => result = !matches!(v, Value::Int(0)),
+            Err(e) => errors.push(format!("{}.{}: {e:?}", t.class, t.method)),
+        }
+    }
+    (result, errors)
 }
 
 fn int_array(vm: &Vm, v: &[i32]) -> Value {
@@ -169,28 +203,19 @@ impl EventSink for JniSink<'_> {
         // `ui_touch`, are the ones laid out in a turned space), so only the content-to-screen scale applies.
         let mapped = ev.map_points(&|x, y| content_to_screen(self.vm.content_scale(), x, y));
         let ev = &mapped;
-        let mut result = true;
         let text_target = ev.text_field().is_some();
         let focus = self.vm.text_focus();
         if text_target && focus.is_none() {
             return false;
         }
-        for (i, t) in ev.targets().iter().enumerate() {
-            let args = args_for(self.vm, ev, i);
-            let r = if t.method == "nativeRootGeometryChanged" {
-                let a = self.vm.activity();
-                self.vm.call_method(self.cpu, a, t.method, t.signature, &args)
-            } else if let (true, Some(field)) = (text_target, focus) {
-                // The TextField natives are instance methods.
-                self.vm.call_method(self.cpu, field, t.method, t.signature, &args)
-            } else {
-                self.vm.call_static(self.cpu, t.class, t.method, t.signature, &args)
-            };
-            match r {
-                Ok(v) => result = !matches!(v, Value::Int(0)),
-                Err(e) => self.errors.push(format!("{}.{}: {e:?}", t.class, t.method)),
+        let (result, errors) = match &self.main {
+            Some(q) if runs_on_main(ev) => {
+                let (vm, ev) = (self.vm.clone(), ev.clone());
+                q.call(self.cpu, move |c| deliver_natives(&vm, c, &ev, focus))
             }
-        }
+            _ => deliver_natives(self.vm, self.cpu, ev, focus),
+        };
+        self.errors.extend(errors);
         if let (GuestEvent::TextShouldChange { location, length, replacement, .. }, true, Some(field)) =
             (ev, result, focus)
         {

@@ -115,7 +115,8 @@ fn delivery_calls_natives_and_collects_errors() {
     let c = calls.clone();
     jni.vm.set_log(move |m| c.lock().unwrap().push(m.to_string()));
     jni.set_trace_calls(true);
-    let mut sink = JniSink { vm: &jni.vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false };
+    let mut sink =
+        JniSink { vm: &jni.vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false, main: None };
     // No guest is loaded, so the natives are reported stubs that answer 0/void.
     assert!(!sink.deliver(&GuestEvent::KeyDown { key_code: 4, unicode: 0, meta: 0, time_ms: 1 }), "boolean 0");
     assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 0.0, y: 0.0, time_ms: 1 }), "void is accepted");
@@ -183,7 +184,8 @@ fn controls_take_touches_and_text_goes_to_the_focused_field() {
         vm.call_method(&mut cpu, window, "addSubview", "(Lcom/apportable/ui/View;)V", &[Value::Ref(Some(child))])
             .unwrap();
     }
-    let mut sink = JniSink { vm: &vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false };
+    let mut sink =
+        JniSink { vm: &vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false, main: None };
     // A press on the button is swallowed by the control layer.
     assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
     assert!(sink.deliver(&GuestEvent::TouchEnd { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
@@ -232,4 +234,29 @@ fn coalesce_keeps_the_newest_move_of_each_burst() {
         coalesce_moves(vec![mv(1.0), mv(2.0), btn(true), mv(3.0), mv(4.0), btn(false), mv(5.0)]),
         vec![mv(2.0), btn(true), mv(4.0), btn(false), mv(5.0)]
     );
+}
+
+#[test]
+fn touch_key_and_text_natives_run_on_the_main_thread_queue() {
+    use crate::input::runs_on_main;
+    use crate::mainq::MainQueue;
+    use std::sync::OnceLock;
+    assert!(runs_on_main(&GuestEvent::TouchBegin { id: 0, x: 0.0, y: 0.0, time_ms: 0 }));
+    assert!(runs_on_main(&GuestEvent::KeyDown { key_code: 4, unicode: 0, meta: 0, time_ms: 0 }));
+    assert!(!runs_on_main(&GuestEvent::WindowFocus(true)));
+    assert!(!runs_on_main(&GuestEvent::SurfaceChanged { width: 1, height: 1 }));
+    assert!(!runs_on_main(&GuestEvent::Lifecycle(Lifecycle::DidBecomeActive)));
+    let (mut cpu, jni) = rig();
+    // The "main thread" is whoever waits: the poster drains the queue itself while it waits.
+    let cell: Arc<OnceLock<Arc<MainQueue>>> = Arc::new(OnceLock::new());
+    let c2 = cell.clone();
+    let q = MainQueue::new(move |c| c2.get().unwrap().drain(c), 5);
+    cell.set(q.clone()).ok();
+    let mut sink =
+        JniSink { vm: &jni.vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false, main: Some(q) };
+    assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 0.0, y: 0.0, time_ms: 1 }));
+    assert!(!sink.deliver(&GuestEvent::KeyDown { key_code: 4, unicode: 0, meta: 0, time_ms: 1 }));
+    // Surface events stay on the calling thread.
+    assert!(sink.deliver(&GuestEvent::SurfaceChanged { width: 1, height: 1 }));
+    assert!(sink.errors.is_empty(), "{:?}", sink.errors);
 }
