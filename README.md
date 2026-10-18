@@ -5,10 +5,9 @@ Run **your own copy** of the Android build of The Blockheads natively on a PC. A
 ([dynarmic](third_party/dynarmic/VENDORED.md), 0BSD) and replaces Android with host-side re-implementations of
 the system libraries (bionic, a fake JVM, GLES, audio, windowing). Licensed under GPL-3.0-only.
 
-Status: **M1 done** (G1 gate passed with fixes, see [`docs/m1/G1-decision.md`](docs/m1/G1-decision.md)); M2 (bionic
-core and threads) is in progress. With your APK, all 25 ARM libraries load, about 262,000 relocations are applied and
-every constructor (237 of 237) runs to completion on 1.7.4, 1.7.5 and 1.7.6. The game does not render or run its main
-loop yet. See [`docs/feasibility/PLAN.md`](docs/feasibility/PLAN.md) for the architecture and milestones.
+Status: play mode works. With your 1.7.4 to 1.7.6 APK the game boots to the main menu, creates and loads worlds,
+takes mouse and keyboard input, plays audio and can join a server over the network. It is a work in progress with
+known issues (see [Known issues](#known-issues)). Architecture and milestones: [`docs/feasibility/PLAN.md`](docs/feasibility/PLAN.md).
 
 ## Legal notice
 
@@ -29,7 +28,7 @@ loop yet. See [`docs/feasibility/PLAN.md`](docs/feasibility/PLAN.md) for the arc
 | `bhpc-vfs` | Lazy read-only APK assets, writable data dir, Android path mapping, system fonts (OFL font bundled) |
 | `bhpc-jni` | permissive fake `JavaVM`/`JNIEnv` |
 | `bhpc-gles`, `bhpc-audio`, `bhpc-input`, `bhpc-app` | OpenGL ES / EGL, audio, input mapping, window and main loop (later milestones) |
-| `bhpc-run` | runner: M0 fixture runner and benchmark, and `--apk ... --init-only` (M1) |
+| `bhpc-run` | runner: M0 fixture runner and benchmark, `--apk ... --init-only` (M1), and play mode with `--features play` |
 
 ## Build and run
 
@@ -54,22 +53,111 @@ cargo build --release
 ./target/release/bhpc-run fixtures/hello.so --trace-thunks --watchdog 100000000 --trace-pc /tmp/pcs.txt
 ```
 
-### Running your APK
+### How to run (Linux)
 
-You supply the APK; nothing is downloaded, extracted into the repository or cached outside the data directory.
+You supply the APK (a 1.7.4, 1.7.5 or 1.7.6 build); nothing is downloaded, extracted into the repository or cached
+outside the data directory.
+
+**Prerequisites:** the build tools from the table above, plus the SDL2 runtime and development files
+(Arch `sdl2`, Debian/Ubuntu `libsdl2-dev`, Fedora `SDL2-devel`) and a working OpenGL (ES) capable display. Audio
+goes through SDL2 as well.
+
+**Build** (needs the `play` feature, which pulls in SDL2):
 
 ```sh
-# Load the libraries, apply relocations, run every constructor, print the thunk histogram. Exit code 0 = all fine.
-./target/release/bhpc-run --apk "$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk" --init-only --data-dir /tmp/bhpc-data
-# Useful switches: -v, --trace-thunks, --trace-fs, --trace-jni, --trace-pc FILE, --watchdog CYCLES, --keep-going, --top N
+cargo build --release -p bhpc-run --features play
 ```
 
-`--init-only` is the only mode implemented so far (about 2 s in a release build). The smoke test runs the same path
-against a real APK and checks the ObjC runtime, CoreFoundation and `NSLog`; it is `#[ignore]`d and needs the APK:
+**Run with a real window:**
+
+```sh
+./target/release/bhpc-run --apk "$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk"
+```
+
+The first start takes a few seconds to load the libraries. A consent dialog ("Enable multiplayer and free
+crystals?") is answered with its first button ("Allow") automatically; `--alert-choice N` picks another one.
+The window closes the run when you close it.
+
+Useful flags (all optional):
+
+| Flag | Effect |
+|---|---|
+| `--data-dir DIR` | where saves and settings live (see below) |
+| `--window WxH` | window size, for example `--window 1280x960` |
+| `--seconds N` | quit after N seconds |
+| `--shot FILE.png` with `--shot-at N` | save a screenshot of swap N (and `FILE-first.png` of the first frame); `--exit-after-shot` quits afterwards |
+| `--script FILE` | scripted input, see below; `--click X,Y@MS` is a one-off click at a time in ms; `--shot-dir DIR` is where script `shot` steps go |
+| `--force` | run a build that is not one of the known versions |
+| `--trace-objc`, `--trace-fs`, `--trace-jni`, `--trace-jni-calls`, `--trace-fn LIST`, `--jni-report FILE` | tracing of the guest's Objective-C messages, file access and the fake JVM; `BHPC_TRACE_NET=1` in the environment logs every socket call |
+| `-v` | verbose |
+
+At the end of a run the host prints the Java members that are still stubs and were called, the hottest host
+functions and frame-time statistics.
+
+For a run on a machine without a display (or to test without any sound) use `SDL_VIDEODRIVER=offscreen` (or
+`xvfb-run`) and `SDL_AUDIODRIVER=dummy`; set `SDL_AUDIODRIVER=dummy` whenever you do not want to hear the game.
+
+**Scripted input.** A script is one command per line, a time first (`1500` = ms since the first frame, `+300` = ms after
+the previous command): `click X Y`, `drag X1 Y1 X2 Y2 MS`, `hold X Y MS`, `text ...`, `key NAME`, `keydown`/`keyup NAME`,
+`shot NAME`, `waittext TEXT`, `clicktext TEXT`, `dumpviews`, `mark NAME`, `quit`. Coordinates are window pixels.
+Full syntax in `crates/bhpc-run/src/script.rs`; a worked example (joining a server) is in
+[`docs/m7/net-bringup.md`](docs/m7/net-bringup.md).
+
+**Controls** (`bhpc-input`, the game is a touch game and the mouse is the finger):
+
+| Input | Effect |
+|---|---|
+| left button press, drag, release | one-finger touch (tap, drag, long press = hold) |
+| right button drag | two-finger pan |
+| mouse wheel | two-finger pinch (zoom) around the cursor |
+| Ctrl + left drag | pinch around the press point (right/up = spread) |
+| Esc | Android Back |
+| letters, digits, arrows, Enter, Backspace, Delete, Tab, Space, Home, End | Android key events; while a text field has focus they type into it instead |
+| F11 | toggle fullscreen |
+| close window | quit |
+
+**Join a local server.** Start a server first (for example `blockheads_server --new myworld --port 15160`), then in the
+game: Join World > Advanced... > Online IP/Port..., tap the port field and enter the server port (the field is
+pre-filled with 15151), optionally set a nickname, then Join Online World. Details and a script that does this are in
+[`docs/m7/net-bringup.md`](docs/m7/net-bringup.md).
+
+**Where saves go.** Into the data directory: `--data-dir DIR`, or by default `$XDG_DATA_HOME/blockheads-pc`
+(`~/.local/share/blockheads-pc`). Worlds and settings are under `DIR/home`, caches under `DIR/cache`, temporary
+files under `DIR/tmp`; they persist between runs. Delete the directory to start from scratch.
+
+**Launcher.** `cargo run -p bhpc-launcher --features gui` opens a small GUI that picks the APK and data directory,
+verifies the APK and stores the choice in `~/.config/blockheads-pc/launcher.toml`. Its Launch button starts the
+`bhpc-run` that sits next to the launcher binary (build it with the `play` feature first) and passes `--apk`,
+`--data-dir` and `--force`. `bhpc-run` itself does **not** read `launcher.toml` yet, and the window size and key
+bindings set in the launcher are not applied; use the flags above.
+
+**Load only** (no window, runs every constructor and prints the thunk histogram; exit code 0 = fine, about 2 s):
+
+```sh
+./target/release/bhpc-run --apk "$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk" --init-only --data-dir /tmp/bhpc-data
+```
+
+Further reading: [`docs/m3/play-bringup.md`](docs/m3/play-bringup.md) (play mode internals),
+[`docs/m7/net-bringup.md`](docs/m7/net-bringup.md) (networking). The smoke test runs the load path against a real APK;
+it is `#[ignore]`d and needs the APK:
 
 ```sh
 BHPC_APK="$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk" cargo test -p bhpc-run --test smoke -- --ignored --nocapture
 ```
+
+### Known issues
+
+- Verified on x86_64 Linux only (Windows, macOS and arm64 are planned).
+- Only the 1.7.4, 1.7.5 and 1.7.6 builds are known to boot.
+- Performance is that of a JIT plus host re-implementations: expect the frame rate to be well below a phone's on
+  busy scenes, and the first seconds of a start to be slow.
+- A fresh data directory starts in a world scene a few seconds after the menu in the sanity run (first-run flow of
+  the game); this has not been investigated.
+- Some Java services are still stubs and answer 0/null (notifications, news client, in-app purchases, ad and
+  analytics SDKs); the end-of-run report lists the ones the game called.
+- No gamepad support, no DPI scaling of the content size, and the on-screen keyboard is replaced by host text input.
+- `bhpc-run` ignores the launcher's config file (see above).
+- Gameplay has been exercised only briefly; expect rough edges and report what you find.
 
 Rebuilding the fixture needs the Android NDK (r27, `ANDROID_NDK_HOME` or `~/Android/Sdk/ndk/27.2.12479018`):
 `fixtures/build.sh`.
