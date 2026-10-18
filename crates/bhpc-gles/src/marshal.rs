@@ -8,6 +8,7 @@ use crate::imgsize::image_bytes;
 use crate::state::{guest_cstr, guest_write, host_ptr, Gles};
 use crate::Handler;
 use bhpc_cpu::Cpu;
+use std::io::Write;
 
 macro_rules! args {
     ($c:expr; $($n:ident),+) => {
@@ -268,6 +269,27 @@ fn tex_parameteriv(c: &mut Cpu, g: &Gles) {
 }
 
 // ---------- shaders and programs ----------
+
+/// `glCompileShader`; with `check_errors` a failed compile logs the host info log (the game itself only says
+/// "Failed to compile vertex shader").
+fn compile_shader(c: &mut Cpu, g: &Gles) {
+    args!(c; shader);
+    let mut s = g.lock();
+    s.api.glCompileShader(shader);
+    if !s.cfg.check_errors {
+        return;
+    }
+    let mut ok = 1i32;
+    s.api.glGetShaderiv(shader, GL_COMPILE_STATUS, (&mut ok as *mut i32).cast());
+    if ok == 0 {
+        let mut buf = [0u8; 2048];
+        let mut len = 0i32;
+        s.api.glGetShaderInfoLog(shader, buf.len() as i32, (&mut len as *mut i32).cast(), buf.as_mut_ptr().cast());
+        let n = (len.max(0) as usize).min(buf.len());
+        let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+        let _ = writeln!(s.log, "bhpc-gles: shader {shader} failed to compile: {}", text.trim_end());
+    }
+}
 
 fn shader_source(c: &mut Cpu, g: &Gles) {
     args!(c; shader, count, strings, lengths);
@@ -641,6 +663,7 @@ pub const TABLE: &[(&str, Handler)] = &[
     ("glTexParameterfv", tex_parameterfv),
     ("glTexParameteriv", tex_parameteriv),
     ("glShaderSource", shader_source),
+    ("glCompileShader", compile_shader),
     ("glGetAttribLocation", get_attrib_location),
     ("glGetUniformLocation", get_uniform_location),
     ("glBindAttribLocation", bind_attrib_location),

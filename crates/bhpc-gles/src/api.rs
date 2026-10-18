@@ -133,7 +133,6 @@ macro_rules! gl_list {
             direct fn glClearDepthf(d: f32);
             direct fn glClearStencil(s: i32);
             direct fn glColorMask(r: u8, g: u8, b: u8, a: u8);
-            direct fn glCompileShader(shader: u32);
             direct fn glCopyTexImage2D(target: u32, level: i32, format: u32, x: i32, y: i32, w: i32, h: i32, border: i32);
             direct fn glCopyTexSubImage2D(target: u32, level: i32, xo: i32, yo: i32, x: i32, y: i32, w: i32, h: i32);
             direct fn glCreateProgram() -> u32;
@@ -225,6 +224,7 @@ macro_rules! gl_list {
             host fn glGetProgramInfoLog(program: u32, bufsize: i32, length: PM, log: PM);
             host fn glGetProgramiv(program: u32, pname: u32, out: PM);
             host fn glGetRenderbufferParameteriv(target: u32, pname: u32, out: PM);
+            host fn glCompileShader(shader: u32);
             host fn glGetShaderInfoLog(shader: u32, bufsize: i32, length: PM, log: PM);
             host fn glGetShaderPrecisionFormat(shader: u32, precision: u32, range: PM, bits: PM);
             host fn glGetShaderSource(shader: u32, bufsize: i32, length: PM, src: PM);

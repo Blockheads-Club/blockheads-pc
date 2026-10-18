@@ -791,3 +791,36 @@ fn the_default_framebuffer_is_the_windows_offscreen_surface() {
     e.call("glGetIntegerv", &[GL_FRAMEBUFFER_BINDING, S]);
     assert_eq!(e.word(S), 4);
 }
+
+#[test]
+fn failed_compiles_log_the_host_info_log_in_debug_mode() {
+    // The mock host reports a failed compile with a short info log.
+    fn fail_host(e: &Env) {
+        e.rec.on_call(|name, args| {
+            // SAFETY: the thunk passes pointers to live host buffers of at least the sizes it announces.
+            unsafe {
+                match (name, args) {
+                    ("glGetShaderiv", [_, _, Arg::P(out)]) => *(*out as *mut i32) = 0,
+                    ("glGetShaderInfoLog", [_, _, Arg::P(len), Arg::P(buf)]) => {
+                        let msg = b"0:3(1): error: synthetic\n";
+                        std::ptr::copy_nonoverlapping(msg.as_ptr(), *buf as *mut u8, msg.len());
+                        *(*len as *mut i32) = msg.len() as i32;
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    let mut quiet = Env::new();
+    fail_host(&quiet);
+    quiet.call("glCompileShader", &[7]);
+    assert!(quiet.rec.names().contains(&"glCompileShader".to_string()));
+    assert_eq!(quiet.log_text(), "", "no extra host calls or output without the debug flag");
+
+    let mut debug = Env::with(|c| c.check_errors = true);
+    debug.call("glCompileShader", &[7]);
+    assert_eq!(debug.log_text(), "", "a compile that succeeds logs nothing");
+    fail_host(&debug);
+    debug.call("glCompileShader", &[8]);
+    assert!(debug.log_text().contains("shader 8 failed to compile: 0:3(1): error: synthetic"), "{}", debug.log_text());
+}

@@ -4,6 +4,7 @@
 pub const GL_NO_ERROR: u32 = 0;
 pub const GL_INVALID_ENUM: u32 = 0x0500;
 pub const GL_INVALID_VALUE: u32 = 0x0501;
+pub const GL_COMPILE_STATUS: u32 = 0x8B81;
 pub const GL_INVALID_OPERATION: u32 = 0x0502;
 pub const GL_OUT_OF_MEMORY: u32 = 0x0505;
 
