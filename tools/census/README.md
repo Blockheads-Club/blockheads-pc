@@ -11,3 +11,9 @@ python3 tools/census/report.py /tmp/census-out docs/m0 /tmp/dynarmic-src "$(git 
 ```
 
 Needs `llvm-objdump` (LLVM 17+), `python3` with `numpy` and `pyelftools`. `census.py LIB.so OUT.json DYNARMIC_SRC` runs one library.
+
+Data hygiene (G1 finding F4): the committed CSVs and `opcode-census.md` carry addresses, mnemonics and function names
+only, never raw instruction words (`encoding_hex`, `example_encoding` and "sample encodings" were dropped). The
+analysis scripts keep the words in memory while they run; they are not written to the repository.
+
+These Python tools are outside the Rust coverage gate (`scripts/coverage.sh` measures Rust code only).

@@ -1,4 +1,5 @@
-//! `<time.h>` / `<sys/time.h>` / sleeping. The guest's time zone is always UTC.
+//! `<time.h>` / `<sys/time.h>` / sleeping. `gmtime` is UTC; `localtime`, `mktime` and `tzset` use the host's local
+//! time zone (through [`HostClock::local_zone`]) unless the guest environment sets `TZ` to UTC.
 
 use crate::guest::{rd32, wr32};
 use crate::layout::{clock, errno, timespec, tm};
@@ -6,6 +7,24 @@ use crate::misc::fail;
 use crate::{lock, Impl, Shared};
 use bhpc_cpu::Cpu;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// The local time zone in effect at one instant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneInfo {
+    /// Seconds east of UTC (`tm_gmtoff`).
+    pub offset: i32,
+    /// Daylight saving time is in effect.
+    pub dst: bool,
+    /// Abbreviation (`tm_zone`), such as `CEST`.
+    pub name: String,
+}
+
+impl ZoneInfo {
+    /// Coordinated Universal Time.
+    pub fn utc() -> ZoneInfo {
+        ZoneInfo { offset: 0, dst: false, name: "UTC".to_string() }
+    }
+}
 
 /// Time source and sleeper behind the guest's clocks (replaceable for deterministic tests).
 pub trait HostClock: Send {
@@ -17,6 +36,10 @@ pub trait HostClock: Send {
     fn cpu_time(&mut self) -> (i64, u32);
     /// Block the calling thread for `ns` nanoseconds.
     fn sleep(&mut self, ns: u64);
+    /// The local time zone at the UTC instant `t` (seconds since the epoch). UTC unless overridden.
+    fn local_zone(&mut self, _t: i64) -> ZoneInfo {
+        ZoneInfo::utc()
+    }
 }
 
 /// The real clock.
@@ -54,6 +77,32 @@ impl HostClock for SystemClock {
     fn sleep(&mut self, ns: u64) {
         std::thread::sleep(std::time::Duration::from_nanos(ns));
     }
+    fn local_zone(&mut self, t: i64) -> ZoneInfo {
+        host_zone(t)
+    }
+}
+
+/// The host's own local time zone, from the C library (honours the host `TZ` and `/etc/localtime`).
+#[cfg(unix)]
+fn host_zone(t: i64) -> ZoneInfo {
+    use std::ffi::CStr;
+    // SAFETY: `localtime_r` only writes into the zeroed `tm` we pass; `tm_zone` points to static zone data.
+    unsafe {
+        let secs = t as libc::time_t;
+        let mut out: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&secs, &mut out).is_null() {
+            return ZoneInfo::utc();
+        }
+        let name =
+            if out.tm_zone.is_null() { "UTC".into() } else { CStr::from_ptr(out.tm_zone).to_string_lossy().into() };
+        ZoneInfo { offset: out.tm_gmtoff as i32, dst: out.tm_isdst > 0, name }
+    }
+}
+
+/// Hosts without a C `localtime_r` (Windows) keep UTC until a native zone lookup is added.
+#[cfg(not(unix))]
+fn host_zone(_t: i64) -> ZoneInfo {
+    ZoneInfo::utc()
 }
 
 /// Days since 1970-01-01 of a proleptic Gregorian date (month 1..=12).
@@ -99,15 +148,72 @@ pub fn break_down(t: i64) -> [i32; 9] {
     ]
 }
 
-fn write_tm(c: &mut Cpu, st: &Shared, at: u32, t: i64) -> bool {
-    let utc = lock(st).utc;
-    let f = break_down(t);
+/// Guest address of a NUL-terminated copy of the zone abbreviation `name` (kept for the life of the process).
+fn zone_name(st: &Shared, name: &str) -> u32 {
+    let mut s = lock(st);
+    if let Some(p) = s.zone_names.get(name) {
+        return *p;
+    }
+    let p = s.heap.alloc(name.len() as u32 + 1);
+    let mut bytes = name.as_bytes().to_vec();
+    bytes.push(0);
+    // The heap block is always mapped.
+    let _ = s.mem.write_bytes(p, &bytes);
+    s.zone_names.insert(name.to_string(), p);
+    p
+}
+
+/// The zone the guest sees at UTC instant `t`: UTC if its environment says `TZ=UTC` (or `GMT`), else the host's.
+fn zone_at(st: &Shared, t: i64) -> ZoneInfo {
+    let mut s = lock(st);
+    let forced_utc = s.env.iter().find(|e| e.name == b"TZ").is_some_and(|e| {
+        let val = s.mem.read_cstr(e.base).unwrap_or_default();
+        let val = val.split_once('=').map_or("", |kv| kv.1).trim_start_matches(':');
+        matches!(val, "" | "UTC" | "UTC0" | "GMT" | "GMT0")
+    });
+    if forced_utc {
+        return ZoneInfo::utc();
+    }
+    s.clock.local_zone(t)
+}
+
+/// Write the broken-down time of `t`, in the local zone if `local`, into the `struct tm` at `at`.
+fn write_tm(c: &mut Cpu, st: &Shared, at: u32, t: i64, local: bool) -> bool {
+    if local && !lock(st).tz_ready {
+        publish_tz(st);
+    }
+    let zone = if local { zone_at(st, t) } else { ZoneInfo::utc() };
+    let name = if local { zone_name(st, &zone.name) } else { lock(st).utc };
+    let mut f = break_down(t + i64::from(zone.offset));
+    f[8] = i32::from(zone.dst);
     for (i, v) in f.iter().enumerate() {
         if !wr32(c, at + 4 * i as u32, *v as u32) {
             return false;
         }
     }
-    wr32(c, at + tm::GMTOFF, 0) && wr32(c, at + tm::ZONE, utc)
+    wr32(c, at + tm::GMTOFF, zone.offset as u32) && wr32(c, at + tm::ZONE, name)
+}
+
+/// `tzset`: publish `timezone` (seconds west of UTC, standard time) and `tzname` of the local zone.
+fn tzset(_: &mut Cpu, st: &Shared) {
+    publish_tz(st);
+}
+
+/// Fill the `timezone` and `tzname` data symbols from the local zone.
+fn publish_tz(st: &Shared) {
+    lock(st).tz_ready = true;
+    let now = lock(st).clock.realtime().0;
+    let here = zone_at(st, now);
+    // The other half of the year tells the standard name from the daylight one.
+    let other = zone_at(st, now + 182 * 86_400);
+    let (std, dst) = if here.dst { (other.clone(), here.clone()) } else { (here.clone(), other.clone()) };
+    let dst = if dst.dst { dst } else { std.clone() };
+    let (std_name, dst_name) = (zone_name(st, &std.name), zone_name(st, &dst.name));
+    let s = lock(st);
+    let (tz, names) = (s.data["timezone"], s.data["tzname"]);
+    let _ = s.mem.write_u32(tz, (-std.offset) as u32);
+    let _ = s.mem.write_u32(names, std_name);
+    let _ = s.mem.write_u32(names + 4, dst_name);
 }
 
 fn time(c: &mut Cpu, st: &Shared) {
@@ -170,24 +276,41 @@ fn clock_fn(c: &mut Cpu, st: &Shared) {
     c.ret_u32((sec as u32).wrapping_mul(clock::CLOCKS_PER_SEC).wrapping_add(nsec / 1000));
 }
 
-fn gmtime_r(c: &mut Cpu, st: &Shared) {
+fn broken_down_r(c: &mut Cpu, st: &Shared, local: bool) {
     let mut a = c.args();
     let (tp, out) = (a.u32(c), a.u32(c));
     let Some(t) = rd32(c, tp) else { return };
-    if write_tm(c, st, out, t as i32 as i64) {
+    if write_tm(c, st, out, t as i32 as i64, local) {
         c.ret_u32(out);
     }
 }
 
-fn gmtime(c: &mut Cpu, st: &Shared) {
+fn broken_down(c: &mut Cpu, st: &Shared, local: bool) {
     let tp = c.args().u32(c);
     let buf = lock(st).tm_buf;
     let Some(t) = rd32(c, tp) else { return };
-    if write_tm(c, st, buf, t as i32 as i64) {
+    if write_tm(c, st, buf, t as i32 as i64, local) {
         c.ret_u32(buf);
     }
 }
 
+fn gmtime_r(c: &mut Cpu, st: &Shared) {
+    broken_down_r(c, st, false);
+}
+
+fn gmtime(c: &mut Cpu, st: &Shared) {
+    broken_down(c, st, false);
+}
+
+fn localtime_r(c: &mut Cpu, st: &Shared) {
+    broken_down_r(c, st, true);
+}
+
+fn localtime(c: &mut Cpu, st: &Shared) {
+    broken_down(c, st, true);
+}
+
+/// `mktime`: the fields are local time; normalise them and return the UTC `time_t`.
 fn mktime(c: &mut Cpu, st: &Shared) {
     let p = c.args().u32(c);
     let mut f = [0i64; 6];
@@ -198,11 +321,15 @@ fn mktime(c: &mut Cpu, st: &Shared) {
     let [sec, min, hour, mday, mon, year] = f;
     let y = year + 1900 + mon.div_euclid(12);
     let days = days_from_civil(y, mon.rem_euclid(12) + 1, 1) + mday - 1;
-    let t = days * 86_400 + hour * 3600 + min * 60 + sec;
+    let naive = days * 86_400 + hour * 3600 + min * 60 + sec;
+    // The offset depends on the instant, which depends on the offset: settle it in two steps.
+    let first = i64::from(zone_at(st, naive).offset);
+    let guess = naive - first;
+    let t = naive - i64::from(zone_at(st, guess).offset);
     if i32::try_from(t).is_err() {
         return c.ret_u32(-1i32 as u32);
     }
-    if write_tm(c, st, p, t) {
+    if write_tm(c, st, p, t, true) {
         c.ret_u32(t as u32);
     }
 }
@@ -274,8 +401,6 @@ fn strftime(c: &mut Cpu, _: &Shared) {
     }
 }
 
-fn tzset(_: &mut Cpu, _: &Shared) {}
-
 pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("time", time),
     ("clock_gettime", clock_gettime),
@@ -284,8 +409,8 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("clock", clock_fn),
     ("gmtime", gmtime),
     ("gmtime_r", gmtime_r),
-    ("localtime", gmtime),
-    ("localtime_r", gmtime_r),
+    ("localtime", localtime),
+    ("localtime_r", localtime_r),
     ("mktime", mktime),
     ("nanosleep", nanosleep),
     ("usleep", usleep),
@@ -465,5 +590,128 @@ mod tests {
             e.try_call("strftime", &[SCRATCH + 0x300, 64, SCRATCH + 0x200, tmp]),
             Err(bhpc_cpu::Stop::Fault(_))
         ));
+    }
+
+    /// A US-Eastern-like zone: EST, and EDT between 2021-03-14 07:00Z and 2021-11-07 06:00Z.
+    fn eastern(t: i64) -> ZoneInfo {
+        if (1_615_705_200..1_636_264_800).contains(&t) {
+            ZoneInfo { offset: -14_400, dst: true, name: "EDT".into() }
+        } else {
+            ZoneInfo { offset: -18_000, dst: false, name: "EST".into() }
+        }
+    }
+
+    fn tm_words(e: &Env, at: u32) -> Vec<i32> {
+        (0..9).map(|i| e.mem().read_u32(at + 4 * i).unwrap() as i32).collect()
+    }
+
+    #[test]
+    fn localtime_and_mktime_use_the_host_zone() {
+        let mut e = Env::new();
+        e.clock.set_zone(eastern);
+        // 2021-07-01 16:00:00 UTC is 12:00 EDT.
+        let t = (days_from_civil(2021, 7, 1) * 86_400 + 16 * 3600) as u32;
+        e.mem().write_u32(SCRATCH, t).unwrap();
+        let r = e.call("localtime_r", &[SCRATCH, SCRATCH + 0x40]).r0;
+        assert_eq!(r, SCRATCH + 0x40);
+        assert_eq!(&tm_words(&e, r)[..3], &[0, 0, 12]);
+        assert_eq!(tm_words(&e, r)[8], 1, "tm_isdst");
+        assert_eq!(e.mem().read_u32(r + tm::GMTOFF).unwrap() as i32, -14_400);
+        assert_eq!(e.get_str(e.mem().read_u32(r + tm::ZONE).unwrap()), "EDT");
+        // gmtime stays UTC.
+        let g = e.call("gmtime_r", &[SCRATCH, SCRATCH + 0x80]).r0;
+        assert_eq!(tm_words(&e, g)[2], 16);
+        assert_eq!(e.get_str(e.mem().read_u32(g + tm::ZONE).unwrap()), "UTC");
+        // Winter: EST, and the zone name string is shared between calls.
+        e.mem().write_u32(SCRATCH, 1_610_000_000).unwrap();
+        let w = e.call("localtime", &[SCRATCH]).r0;
+        assert_eq!(tm_words(&e, w)[8], 0);
+        assert_eq!(e.get_str(e.mem().read_u32(w + tm::ZONE).unwrap()), "EST");
+        let z1 = e.mem().read_u32(w + tm::ZONE).unwrap();
+        e.call("localtime", &[SCRATCH]);
+        assert_eq!(e.mem().read_u32(w + tm::ZONE).unwrap(), z1);
+        // mktime reads local fields: 2021-07-01 12:00:00 EDT is 16:00 UTC; and 12:00 on 2021-01-15 EST is 17:00 UTC.
+        for (y, m, d, expect) in
+            [(2021, 7, 1, t), (2021, 1, 15, (days_from_civil(2021, 1, 15) * 86_400 + 17 * 3600) as u32)]
+        {
+            for (i, v) in [0u32, 0, 12, d as u32, m as u32 - 1, y as u32 - 1900].iter().enumerate() {
+                e.mem().write_u32(SCRATCH + 0x100 + 4 * i as u32, *v).unwrap();
+            }
+            assert_eq!(e.call("mktime", &[SCRATCH + 0x100]).r0, expect, "{y}-{m}-{d}");
+            assert_eq!(e.mem().read_u32(SCRATCH + 0x100 + tm::HOUR).unwrap(), 12);
+        }
+    }
+
+    #[test]
+    fn tzset_publishes_timezone_and_tzname() {
+        let mut e = Env::new();
+        let (tz, names) = (e.data("timezone"), e.data("tzname"));
+        let name = |e: &Env, i: u32| e.get_str(e.mem().read_u32(names + 4 * i).unwrap());
+        e.clock.set_zone(eastern);
+        // Summer: daylight time now, standard time half a year later.
+        e.clock.set(1_625_000_000, 0);
+        e.call("tzset", &[]);
+        assert_eq!(e.mem().read_u32(tz).unwrap(), 18_000);
+        assert_eq!((name(&e, 0), name(&e, 1)), ("EST".to_string(), "EDT".to_string()));
+        // Winter.
+        e.clock.set(1_610_000_000, 0);
+        e.call("tzset", &[]);
+        assert_eq!((name(&e, 0), name(&e, 1)), ("EST".to_string(), "EDT".to_string()));
+        // A zone without daylight saving time repeats the standard name.
+        e.clock.set_zone(|_| ZoneInfo { offset: 3 * 3600, dst: false, name: "+03".into() });
+        e.call("tzset", &[]);
+        assert_eq!(e.mem().read_u32(tz).unwrap() as i32, -3 * 3600);
+        assert_eq!((name(&e, 0), name(&e, 1)), ("+03".to_string(), "+03".to_string()));
+        // The first localtime publishes it too.
+        let mut e = Env::new();
+        e.clock.set_zone(eastern);
+        e.call("localtime", &[SCRATCH]);
+        assert_eq!(e.mem().read_u32(e.data("timezone")).unwrap(), 18_000);
+    }
+
+    #[test]
+    fn tz_utc_in_the_guest_environment_forces_utc() {
+        for val in ["UTC", ":UTC", "GMT0", ""] {
+            let mut e = Env::new();
+            e.clock.set_zone(eastern);
+            crate::misc::env_set(&mut lock(&e.st), b"TZ", val.as_bytes(), true);
+            e.mem().write_u32(SCRATCH, 1_625_000_000).unwrap();
+            let r = e.call("localtime", &[SCRATCH]).r0;
+            assert_eq!(e.mem().read_u32(r + tm::GMTOFF).unwrap(), 0, "TZ={val}");
+        }
+        // Another TZ value (or another variable) leaves the host zone alone.
+        let mut e = Env::new();
+        e.clock.set_zone(eastern);
+        crate::misc::env_set(&mut lock(&e.st), b"TZ", b"America/New_York", true);
+        crate::misc::env_set(&mut lock(&e.st), b"TZX", b"UTC", true);
+        e.mem().write_u32(SCRATCH, 1_625_000_000).unwrap();
+        let r = e.call("localtime", &[SCRATCH]).r0;
+        assert_eq!(e.mem().read_u32(r + tm::GMTOFF).unwrap() as i32, -14_400);
+    }
+
+    #[test]
+    fn the_system_clock_reports_the_host_zone() {
+        let mut c = SystemClock::default();
+        let z = c.local_zone(1_625_000_000);
+        assert!(z.offset.abs() <= 14 * 3600 && !z.name.is_empty(), "{z:?}");
+        #[cfg(unix)]
+        assert_eq!(c.local_zone(i64::MAX), ZoneInfo::utc(), "unrepresentable instants fall back to UTC");
+        // A clock that does not know about zones is UTC.
+        struct Plain;
+        impl HostClock for Plain {
+            fn realtime(&mut self) -> (i64, u32) {
+                (0, 0)
+            }
+            fn monotonic(&mut self) -> (i64, u32) {
+                (0, 0)
+            }
+            fn cpu_time(&mut self) -> (i64, u32) {
+                (0, 0)
+            }
+            fn sleep(&mut self, _: u64) {}
+        }
+        assert_eq!(Plain.local_zone(5), ZoneInfo::utc());
+        assert_eq!((Plain.realtime(), Plain.monotonic(), Plain.cpu_time()), ((0, 0), (0, 0), (0, 0)));
+        Plain.sleep(1);
     }
 }

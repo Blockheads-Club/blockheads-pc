@@ -58,8 +58,7 @@ fails! {
     f_sigsuspend "sigsuspend" errno::EINTR;
 }
 
-nulls! { n_freopen "freopen" errno::ENOENT;
-    n_fgetln "fgetln" 0;
+nulls! { n_fgetln "fgetln" 0;
     n_gethostbyname2 "gethostbyname2" 0; n_gethostbyaddr "gethostbyaddr" 0;
     n_if_indextoname "if_indextoname" errno::ENOSYS;
 }

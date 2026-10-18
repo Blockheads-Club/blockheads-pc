@@ -257,6 +257,7 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("__fpclassifyd", m_fpclassifyd),
     ("isnan", m_isnan),
     ("isinf", m_isinf),
+    ("__isinf", m_isinf),
     ("__isnanl", m_isnan),
     ("__isinfl", m_isinf),
     ("isnanf", m_isnanf),
@@ -438,7 +439,7 @@ mod tests {
         for n in ["isnan", "__isnanl"] {
             assert_eq!((dd(&mut e, n, f64::NAN), dd(&mut e, n, 1.0)), (1, 0));
         }
-        for n in ["isinf", "__isinfl"] {
+        for n in ["isinf", "__isinf", "__isinfl"] {
             assert_eq!((dd(&mut e, n, f64::INFINITY), dd(&mut e, n, 1.0)), (1, 0));
         }
         assert_eq!((dd(&mut e, "__signbit", -0.0), dd(&mut e, "__signbit", 1.0)), (1, 0));

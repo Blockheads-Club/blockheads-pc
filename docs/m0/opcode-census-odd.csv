@@ -1,18 +1,18 @@
-instruction,count_1.7.4,count_1.7.5,count_1.7.6,libs,example_encoding,top_functions_1.7.6
-"vmrs APSR_nzcv, fpscr",7782,7782,7782,libApplication.so;libAudioToolbox.so;libAudioUnit.so;libBridgeKit.so;libCFNetwork.so;libCoreFoundation.so;libCoreGraphics.so;libCoreText.so;libFoundation.so;libGraphicsServices.so;libOpenAL.so;libSystem.so;libcxx.so;libgles_apportable.so;libicu.so;libpango.so;libv.so;libxml2.so,eef1fa10,libApplication.so:-[CreateWorldUI finalCreateButton:]=171; libApplication.so:-[Blockhead update:accurateDT:isSimulation:]=160; libApplication.so:-[MainMenuUI render:projectionMatrix:]=121; libApplication.so:-[LoadWorldUI windowInfoChanged:]=120; libApplication.so:-[JoinWorldUI windowInfoChanged:]=119; libApplication.so:-[Blockhead preDrawUpdate:cameraMinXWorld:cameraMaxXWorld:cameraMinYWorld:cameraMaxYWorld:]=116
-dmb,1650,1650,1650,libApplication.so;libCoreGraphics.so;libFoundation.so;libSecurity.so;libSystem.so;libcxx.so;libv.so,f57ff05b,libSystem.so:sub_9ebd8=24; libSystem.so:_dispatch_queue_invoke=18; libv.so:nolock_write=18; libSystem.so:dispatch_apply_f=16; libSystem.so:sub_9d810=14; libSystem.so:sub_996dc=12
-nop,437,437,437,libApplication.so;libAudioToolbox.so;libAudioUnit.so;libBridgeKit.so;libCFNetwork.so;libCoreFoundation.so;libCoreGraphics.so;libCoreText.so;libFoundation.so;libGraphicsServices.so;libOpenAL.so;libSecurity.so;libSystem.so;libcxx.so;libicu.so;libpango.so;libv.so;libxml2.so,e320f000,libApplication.so:bsaes_cbc_encrypt=8; libSecurity.so:bsaes_cbc_encrypt=8; libApplication.so:bsaes_xts_encrypt=4; libSecurity.so:bsaes_xts_encrypt=4; libApplication.so:glhInvertMatrixf2=2; libApplication.so:sha256_block_data_order=2
-ldrex,334,334,334,libApplication.so;libCoreGraphics.so;libSecurity.so;libSystem.so;libcxx.so;libv.so,e1900f9f,libSystem.so:sub_9ebd8=12; libSystem.so:_dispatch_queue_invoke=9; libv.so:nolock_write=9; libSystem.so:dispatch_apply_f=8; libSystem.so:sub_9d810=7; libSystem.so:sub_996dc=6
-strex,334,334,334,libApplication.so;libCoreGraphics.so;libSecurity.so;libSystem.so;libcxx.so;libv.so,e1812f90,libSystem.so:sub_9ebd8=12; libSystem.so:_dispatch_queue_invoke=9; libv.so:nolock_write=9; libSystem.so:dispatch_apply_f=8; libSystem.so:sub_9d810=7; libSystem.so:sub_996dc=6
-ldcl,16,16,16,libv.so,ecf0f102,libv.so:__gnu_Unwind_Restore_WMMXD=16
-stcl,16,16,16,libv.so,ece0f102,libv.so:__gnu_Unwind_Save_WMMXD=16
-"vmrs r0, fpscr",5,5,5,libv.so,eef10a10,libv.so:__wrap_strtod=2; libv.so:strtod=2; libv.so:__ldtoa=1
-ldc2,4,4,4,libv.so,fcb0b101,libv.so:__gnu_Unwind_Restore_WMMXC=4
-stc2,4,4,4,libv.so,fca0b101,libv.so:__gnu_Unwind_Save_WMMXC=4
-mrrc,2,2,2,libApplication.so;libSecurity.so,ec510f1e,libApplication.so:_armv7_tick=1; libSecurity.so:_armv7_tick=1
-pld,2,2,2,libCoreGraphics.so,f7d1f102,libCoreGraphics.so:sub_28536c=1; libCoreGraphics.so:sub_285b50=1
-"msr APSR_nzcvq, r12",2,2,2,libv.so,e128f00c,libv.so:__wrap_memcpy=2
-udf #0x10,1,1,1,libCoreFoundation.so,e7f001f0,libCoreFoundation.so:___forwarding___=1
-"msr APSR_nzcvq, r2",1,1,1,libv.so,e128f002,libv.so:__wrap_memcpy=1
-"msr APSR_nzcvq, r1",1,1,1,libv.so,e128f001,libv.so:__wrap_bzero=1
-"msr APSR_nzcvq, r3",1,1,1,libv.so,e128f003,libv.so:__wrap_bzero=1
+instruction,count_1.7.4,count_1.7.5,count_1.7.6,libs,top_functions_1.7.6
+"vmrs APSR_nzcv, fpscr",7782,7782,7782,libApplication.so;libAudioToolbox.so;libAudioUnit.so;libBridgeKit.so;libCFNetwork.so;libCoreFoundation.so;libCoreGraphics.so;libCoreText.so;libFoundation.so;libGraphicsServices.so;libOpenAL.so;libSystem.so;libcxx.so;libgles_apportable.so;libicu.so;libpango.so;libv.so;libxml2.so,libApplication.so:-[CreateWorldUI finalCreateButton:]=171; libApplication.so:-[Blockhead update:accurateDT:isSimulation:]=160; libApplication.so:-[MainMenuUI render:projectionMatrix:]=121; libApplication.so:-[LoadWorldUI windowInfoChanged:]=120; libApplication.so:-[JoinWorldUI windowInfoChanged:]=119; libApplication.so:-[Blockhead preDrawUpdate:cameraMinXWorld:cameraMaxXWorld:cameraMinYWorld:cameraMaxYWorld:]=116
+dmb,1650,1650,1650,libApplication.so;libCoreGraphics.so;libFoundation.so;libSecurity.so;libSystem.so;libcxx.so;libv.so,libSystem.so:sub_9ebd8=24; libSystem.so:_dispatch_queue_invoke=18; libv.so:nolock_write=18; libSystem.so:dispatch_apply_f=16; libSystem.so:sub_9d810=14; libSystem.so:sub_996dc=12
+nop,437,437,437,libApplication.so;libAudioToolbox.so;libAudioUnit.so;libBridgeKit.so;libCFNetwork.so;libCoreFoundation.so;libCoreGraphics.so;libCoreText.so;libFoundation.so;libGraphicsServices.so;libOpenAL.so;libSecurity.so;libSystem.so;libcxx.so;libicu.so;libpango.so;libv.so;libxml2.so,libApplication.so:bsaes_cbc_encrypt=8; libSecurity.so:bsaes_cbc_encrypt=8; libApplication.so:bsaes_xts_encrypt=4; libSecurity.so:bsaes_xts_encrypt=4; libApplication.so:glhInvertMatrixf2=2; libApplication.so:sha256_block_data_order=2
+ldrex,334,334,334,libApplication.so;libCoreGraphics.so;libSecurity.so;libSystem.so;libcxx.so;libv.so,libSystem.so:sub_9ebd8=12; libSystem.so:_dispatch_queue_invoke=9; libv.so:nolock_write=9; libSystem.so:dispatch_apply_f=8; libSystem.so:sub_9d810=7; libSystem.so:sub_996dc=6
+strex,334,334,334,libApplication.so;libCoreGraphics.so;libSecurity.so;libSystem.so;libcxx.so;libv.so,libSystem.so:sub_9ebd8=12; libSystem.so:_dispatch_queue_invoke=9; libv.so:nolock_write=9; libSystem.so:dispatch_apply_f=8; libSystem.so:sub_9d810=7; libSystem.so:sub_996dc=6
+ldcl,16,16,16,libv.so,libv.so:__gnu_Unwind_Restore_WMMXD=16
+stcl,16,16,16,libv.so,libv.so:__gnu_Unwind_Save_WMMXD=16
+"vmrs r0, fpscr",5,5,5,libv.so,libv.so:__wrap_strtod=2; libv.so:strtod=2; libv.so:__ldtoa=1
+ldc2,4,4,4,libv.so,libv.so:__gnu_Unwind_Restore_WMMXC=4
+stc2,4,4,4,libv.so,libv.so:__gnu_Unwind_Save_WMMXC=4
+mrrc,2,2,2,libApplication.so;libSecurity.so,libApplication.so:_armv7_tick=1; libSecurity.so:_armv7_tick=1
+pld,2,2,2,libCoreGraphics.so,libCoreGraphics.so:sub_28536c=1; libCoreGraphics.so:sub_285b50=1
+"msr APSR_nzcvq, r12",2,2,2,libv.so,libv.so:__wrap_memcpy=2
+udf #0x10,1,1,1,libCoreFoundation.so,libCoreFoundation.so:___forwarding___=1
+"msr APSR_nzcvq, r2",1,1,1,libv.so,libv.so:__wrap_memcpy=1
+"msr APSR_nzcvq, r1",1,1,1,libv.so,libv.so:__wrap_bzero=1
+"msr APSR_nzcvq, r3",1,1,1,libv.so,libv.so:__wrap_bzero=1

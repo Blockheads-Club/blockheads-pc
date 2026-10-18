@@ -1,7 +1,7 @@
 //! Process-level services: `errno`, the environment, system properties, Android logging, process
 //! control (`abort`, `exit`, stack protector, `__cxa_atexit`), identity and `sysconf`.
 
-use crate::guest::{cstr, wr_cstr};
+use crate::guest::{cstr, rd32, wr32, wr_cstr};
 use crate::layout::{errno, sc, PAGE_SIZE, PROP_VALUE_MAX};
 use crate::state::{AtExit, EnvVar, LogRecord, State};
 use crate::stdio::{format_guest, Args};
@@ -248,6 +248,53 @@ fn cxa_atexit(c: &mut Cpu, st: &Shared) {
 
 fn cxa_finalize(_: &mut Cpu, _: &Shared) {}
 
+/// `__cxa_begin_cleanup(ucb)`: the compiler-generated cleanup pad of an ARM EHABI function announces itself.
+/// Unwinding itself runs in the guest's own unwinder, so all the host owes the pad is "true" (resume with
+/// `_Unwind_Resume` / `__cxa_end_cleanup` afterwards).
+fn cxa_begin_cleanup(c: &mut Cpu, _: &Shared) {
+    c.ret_u32(1);
+}
+
+/// Size of an ARM EHABI `_Unwind_Control_Block`, and the distance from it back to the start of libc++abi's
+/// 32-bit `__cxa_exception` (reference count, type, destructor, two handlers, next, two counts).
+const UCB_SIZE: u32 = 88;
+const EXCEPTION_HEADER: u32 = 32;
+/// `ctm_failed` / `ctm_succeeded` results of `__cxa_type_match`.
+const CTM_FAILED: u32 = 0;
+const CTM_SUCCEEDED: u32 = 1;
+
+/// `__cxa_type_match(ucb, catch_type, is_reference, thrown_ptr_p)`: does the C++ exception being unwound match a
+/// `catch (T)` clause? Handles foreign exceptions (never match) and exact type matches (same `type_info` object
+/// or same mangled name), storing the address of the thrown object in `*thrown_ptr_p`; a thrown pointer is
+/// unwrapped. Base-class and pointer-conversion catches are not recognised.
+fn cxa_type_match(c: &mut Cpu, _: &Shared) {
+    args!(c; ucb, catch_type, _is_reference, thrown_ptr_p);
+    let (Some(class0), Some(class1)) = (rd32(c, ucb), rd32(c, ucb + 4)) else { return };
+    let native =
+        matches!([class0.to_le_bytes(), class1.to_le_bytes()].concat().as_slice(), b"GNUCC++\0" | b"CLNGC++\0");
+    if !native {
+        return c.ret_u32(CTM_FAILED);
+    }
+    let Some(thrown_type) = rd32(c, ucb - EXCEPTION_HEADER + 4) else { return };
+    let (Some(thrown_name), Some(catch_name)) = (type_name(c, thrown_type), type_name(c, catch_type)) else {
+        return c.ret_u32(CTM_FAILED);
+    };
+    if thrown_type != catch_type && thrown_name != catch_name {
+        return c.ret_u32(CTM_FAILED);
+    }
+    let object = ucb + UCB_SIZE;
+    let adjusted = if thrown_name.starts_with(b"P") { rd32(c, object).unwrap_or(0) } else { object };
+    if wr32(c, thrown_ptr_p, adjusted) {
+        c.ret_u32(CTM_SUCCEEDED);
+    }
+}
+
+/// The mangled name of a `std::type_info` (its second word points at it), if readable.
+fn type_name(c: &mut Cpu, type_info: u32) -> Option<Vec<u8>> {
+    let name = c.mem().read_u32(type_info.checked_add(4)?).ok()?;
+    c.mem().read_cstr(name).ok().map(String::into_bytes)
+}
+
 /// `cacheflush(start, end, flags)`: invalidate translated code in the range.
 fn cacheflush(c: &mut Cpu, _: &Shared) {
     args!(c; start, end, _flags);
@@ -316,6 +363,8 @@ pub(crate) const TABLE: &[(&str, Impl)] = &[
     ("__assert2", assert2),
     ("__cxa_atexit", cxa_atexit),
     ("__cxa_finalize", cxa_finalize),
+    ("__cxa_begin_cleanup", cxa_begin_cleanup),
+    ("__cxa_type_match", cxa_type_match),
     ("cacheflush", cacheflush),
     ("getpid", getpid),
     ("gettid", getpid),
@@ -587,5 +636,45 @@ mod tests {
         assert_ne!(e.call("getenv", &[SCRATCH]).r0, 0);
         e.put_str(SCRATCH, "NO_SUCH_VARIABLE");
         assert_eq!(e.call("getenv", &[SCRATCH]).r0, 0);
+    }
+
+    #[test]
+    fn arm_ehabi_helpers() {
+        let mut e = Env::new();
+        assert_eq!(e.call("__cxa_begin_cleanup", &[A]).r0, 1);
+        // An exception object: UCB at B, type_info at C (name "i"), another type_info with the same name at C+0x20.
+        let m = e.mem();
+        let (ucb, ti, ti_same, ti_other, ti_ptr, out) = (B, C, C + 0x20, C + 0x40, C + 0x60, A + 0x80);
+        m.write_bytes(ucb, b"GNUCC++\0").unwrap();
+        for (t, name, at) in
+            [(ti, "i", C + 0x100), (ti_same, "i", C + 0x110), (ti_other, "f", C + 0x120), (ti_ptr, "Pc", C + 0x130)]
+        {
+            m.write_cstr(at, name).unwrap();
+            m.write_u32(t + 4, at).unwrap();
+        }
+        let set_thrown = |t: u32| m.write_u32(ucb - 32 + 4, t).unwrap();
+        set_thrown(ti);
+        for (catch, want) in [(ti, 1), (ti_same, 1), (ti_other, 0)] {
+            m.write_u32(out, 0).unwrap();
+            assert_eq!(e.call("__cxa_type_match", &[ucb, catch, 0, out]).r0, want);
+            assert_eq!(m.read_u32(out).unwrap(), if want == 1 { ucb + 88 } else { 0 });
+        }
+        // A thrown pointer is unwrapped to the pointee address.
+        set_thrown(ti_ptr);
+        m.write_u32(ucb + 88, 0x1234).unwrap();
+        assert_eq!(e.call("__cxa_type_match", &[ucb, ti_ptr, 0, out]).r0, 1);
+        assert_eq!(m.read_u32(out).unwrap(), 0x1234);
+        // Foreign exceptions, unreadable type_infos and unreadable names never match.
+        assert_eq!(e.call("__cxa_type_match", &[ucb, 0, 0, out]).r0, 0);
+        assert_eq!(e.call("__cxa_type_match", &[ucb, ti, 0, out]).r0, 0);
+        m.write_u32(ti_other + 4, 0).unwrap();
+        assert_eq!(e.call("__cxa_type_match", &[ucb, ti_other, 0, out]).r0, 0);
+        m.write_u32(ucb, 0x4443_4241).unwrap();
+        assert_eq!(e.call("__cxa_type_match", &[ucb, ti_ptr, 0, out]).r0, 0);
+        m.write_bytes(ucb, b"CLNGC++\0").unwrap();
+        assert_eq!(e.call("__cxa_type_match", &[ucb, ti_ptr, 0, out]).r0, 1);
+        assert!(matches!(e.try_call("__cxa_type_match", &[BAD, ti, 0, out]), Err(Stop::Fault(_))));
+        assert!(matches!(e.try_call("__cxa_type_match", &[ucb, ti_ptr, 0, BAD]), Err(Stop::Fault(_))));
+        assert!(matches!(e.try_call("__cxa_type_match", &[ucb, 0xFFFF_FFFE, 0, out]), Ok(r) if r.r0 == 0));
     }
 }

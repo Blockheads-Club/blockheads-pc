@@ -869,3 +869,78 @@ fn untranslatable_instruction_requests_interpreter_fallback() {
     put(&cpu, CODE, &[0xF100_0000, BX_LR]); // cpsie-class encoding dynarmic wants interpreted
     assert_eq!(cpu.call(CODE, &[]), Err(Stop::Fallback { pc: CODE }));
 }
+
+fn counting_cpu() -> Box<Cpu> {
+    let mem = Arc::new(GuestMemory::new().unwrap());
+    mem.map(CODE, 0x1000).unwrap();
+    let mut cpu =
+        Cpu::with_options(mem, CpuOptions { fastmem: true, code_cache_bytes: 8 << 20, cycle_counting: true }).unwrap();
+    cpu.set_sp(0x8000_0000);
+    put(&cpu, CODE, &[0xEAFF_FFFE]); // b .
+    cpu
+}
+
+#[test]
+fn time_slices_call_the_hook_until_the_budget_is_gone() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let mut cpu = counting_cpu();
+    let calls = StdArc::new(AtomicU32::new(0));
+    let c2 = calls.clone();
+    cpu.set_ticks(10_000);
+    cpu.set_slice(
+        1_000,
+        Arc::new(move |_| {
+            c2.fetch_add(1, Ordering::Relaxed);
+            None
+        }),
+    );
+    assert_eq!(cpu.ticks(), 10_000, "installing a policy keeps the budget");
+    assert!(matches!(cpu.call(CODE, &[]), Err(Stop::Halted(_))));
+    let n = calls.load(Ordering::Relaxed);
+    assert!((8..=10).contains(&n), "{n} slices");
+    assert_eq!(cpu.ticks(), 0);
+    // A budget smaller than one slice never calls the hook.
+    calls.store(0, Ordering::Relaxed);
+    cpu.set_ticks(500);
+    assert!(matches!(cpu.call(CODE, &[]), Err(Stop::Halted(_))));
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn a_slice_hook_can_stop_the_guest() {
+    let mut cpu = counting_cpu();
+    cpu.set_ticks(1 << 40);
+    cpu.set_slice(1_000, Arc::new(|_| Some(Stop::Host("enough".into()))));
+    assert_eq!(cpu.call(CODE, &[]), Err(Stop::Host("enough".into())));
+}
+
+#[test]
+fn threads_and_nested_calls_inherit_the_slice_policy() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let mut cpu = counting_cpu();
+    let calls = StdArc::new(AtomicU32::new(0));
+    let c2 = calls.clone();
+    cpu.set_ticks(1 << 40);
+    cpu.set_slice(
+        1_000,
+        Arc::new(move |_| {
+            // Stop on the third slice, wherever it runs.
+            let n = c2.fetch_add(1, Ordering::Relaxed) + 1;
+            (n % 3 == 0).then(|| Stop::Host("third".into()))
+        }),
+    );
+    let mut other = cpu.new_thread().unwrap();
+    other.set_sp(0x7000_0000);
+    other.set_ticks(1 << 40);
+    assert_eq!(other.call(CODE, &[]), Err(Stop::Host("third".into())));
+    let t = cpu
+        .register_thunk(
+            "spin_nested",
+            Box::new(|c: &mut Cpu| {
+                let _ = c.call_or_stop(CODE, &[]);
+            }),
+        )
+        .unwrap();
+    assert_eq!(cpu.call(t, &[]), Err(Stop::Host("third".into())));
+    assert!(calls.load(Ordering::Relaxed) >= 6);
+}

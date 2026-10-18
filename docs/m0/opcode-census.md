@@ -274,14 +274,14 @@ Per-lib figures for every version are in `opcode-census-libs.csv`; the full mnem
 
 ### 5.1 Encodings decoded by LLVM but matched by no dynarmic decoder entry (1.7.6)
 
-| isa | mnemonic | count | libs | top functions | sample encodings |
-|---|---|---|---|---|---|
-| A | sha1su0.32 [cond=NV -> arm_EOR_imm] | 32 | libApplication.so, libSecurity.so | libApplication.so:sha1_block_data_order; libSecurity.so:sha1_block_data_order | f23a8c4c, f23cac4e, f23ecc48 |
-| A | sha1p.32 [cond=NV -> arm_AND_imm] | 20 | libApplication.so, libSecurity.so | libApplication.so:sha1_block_data_order; libSecurity.so:sha1_block_data_order | f2160c6a, f2140c68 |
-| A | sha1c.32 [cond=NV -> arm_AND_imm] | 12 | libApplication.so, libSecurity.so | libApplication.so:sha1_block_data_order; libSecurity.so:sha1_block_data_order; libApplication.so:_armv8_sha1_probe | f2060c6a, f2040c68, f2000c40 |
-| A | sha1m.32 [cond=NV -> arm_EOR_imm] | 10 | libApplication.so, libSecurity.so | libApplication.so:sha1_block_data_order; libSecurity.so:sha1_block_data_order | f2240c68, f2260c6a |
-| A | ldc2 [cond=NV -> arm_LDC] | 4 | libv.so | libv.so:__gnu_Unwind_Restore_WMMXC | fcb08101, fcb09101, fcb0a101 |
-| A | stc2 [cond=NV -> arm_STC] | 4 | libv.so | libv.so:__gnu_Unwind_Save_WMMXC | fca08101, fca09101, fca0a101 |
+| isa | mnemonic | count | libs | top functions |
+|---|---|---|---|---|
+| A | sha1su0.32 [cond=NV -> arm_EOR_imm] | 32 | libApplication.so, libSecurity.so | libApplication.so:sha1_block_data_order; libSecurity.so:sha1_block_data_order |
+| A | sha1p.32 [cond=NV -> arm_AND_imm] | 20 | libApplication.so, libSecurity.so | libApplication.so:sha1_block_data_order; libSecurity.so:sha1_block_data_order |
+| A | sha1c.32 [cond=NV -> arm_AND_imm] | 12 | libApplication.so, libSecurity.so | libApplication.so:sha1_block_data_order; libSecurity.so:sha1_block_data_order; libApplication.so:_armv8_sha1_probe |
+| A | sha1m.32 [cond=NV -> arm_EOR_imm] | 10 | libApplication.so, libSecurity.so | libApplication.so:sha1_block_data_order; libSecurity.so:sha1_block_data_order |
+| A | ldc2 [cond=NV -> arm_LDC] | 4 | libv.so | libv.so:__gnu_Unwind_Restore_WMMXC |
+| A | stc2 [cond=NV -> arm_STC] | 4 | libv.so | libv.so:__gnu_Unwind_Save_WMMXC |
 
 ### 5.2 Instructions LLVM cannot decode at all (1.7.6)
 

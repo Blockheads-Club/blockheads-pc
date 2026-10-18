@@ -61,3 +61,13 @@ Umbrella rules: `../AGENTS.md`.
 - `sched::sleep`/`sched::block` give the baton to other guest threads; never use `std::thread::sleep` in a thunk that
   other guest threads depend on.
 - The fake VM allocator must return zeroed memory; `BHPC_JNI_CALLS`-style tracing is `--trace-jni --trace-jni-calls`.
+
+## Gotchas learned in M2 (G1 fixes)
+- Guest threads run one at a time under the scheduler baton and only hand it over when they block. A spinning
+  thread therefore needs the cycle time slice: `Cpu::set_slice` / `sched::enable_time_slice` (the CPU must count
+  cycles and have a budget). Whoever builds the main CPU (`bhpc-run`) has to call it for the main thread; threads
+  made with `pthread_create` inherit it. `sched::set_wall_deadline` is the host watchdog checked at slice ends.
+- `pthread_once` is IN_PROGRESS while the initialiser runs; other threads block in `sched::block` until it returns.
+  `__futex_wait/__futex_wake` use the same ticket queues as condition variables, keyed by the futex word address.
+- `localtime`/`mktime`/`tzset` use the host zone via `HostClock::local_zone` (libc `localtime_r` on unix, UTC on
+  Windows for now); `TZ=UTC` in the guest environment forces UTC.

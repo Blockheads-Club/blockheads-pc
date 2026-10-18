@@ -176,6 +176,15 @@ impl Sched {
         self.g().live += 1;
     }
 
+    /// A thread that was announced with [`Sched::thread_started`] could not be created. The caller keeps the baton.
+    pub(crate) fn thread_cancelled(&self) {
+        let mut g = self.g();
+        g.live -= 1;
+        g.epoch += 1;
+        g.blocked = 0;
+        self.cv.notify_all();
+    }
+
     /// The calling thread is done: give up the baton for good.
     pub(crate) fn thread_exit(&self, failure: Option<String>) {
         let mut g = self.g();
@@ -237,6 +246,39 @@ pub fn sleep(c: &mut Cpu, st: &Shared, ns: u64) {
             return;
         }
     }
+}
+
+/// Default length of a guest time slice, in guest cycles (about a millisecond of host time).
+pub const DEFAULT_SLICE_CYCLES: u64 = 2_000_000;
+
+/// Give the guest `cpu` (and the threads and nested calls derived from it) a time slice: every `cycles`
+/// guest cycles it hands the baton to the other runnable guest threads, so a thread spinning on a flag
+/// (`ldrex`/`strex` loops, spin locks) cannot starve the one that would set it, and checks the wall-clock
+/// watchdog set with [`set_wall_deadline`]. Needs a cycle-counting CPU with a budget (`Cpu::set_ticks`).
+pub fn enable_time_slice(cpu: &mut Cpu, st: &Shared, cycles: u64) {
+    let st = st.clone();
+    cpu.set_slice(cycles, Arc::new(move |_| slice_expired(&st)));
+}
+
+/// Stop the guest (every thread, at its next slice boundary) once the host clock passes `deadline`.
+/// `None` removes the limit.
+pub fn set_wall_deadline(st: &Shared, deadline: Option<Instant>) {
+    lock(st).wall_deadline = deadline;
+}
+
+/// One time slice is used up: enforce the wall-clock limit, otherwise let the other threads run.
+fn slice_expired(st: &Shared) -> Option<Stop> {
+    let (sched, deadline) = {
+        let s = lock(st);
+        (s.sched.clone(), s.wall_deadline)
+    };
+    if deadline.is_some_and(|d| Instant::now() >= d) {
+        // Wake the blocked threads too: nobody is going to make progress any more.
+        sched.shutdown();
+        return Some(Stop::Host("watchdog: the wall-clock limit for the guest was exceeded".into()));
+    }
+    sched.yield_now();
+    None
 }
 
 /// Wake threads waiting in [`block`].
@@ -380,7 +422,7 @@ fn sched_undo(st: &Shared, handle: u32) {
     s.heap.free(handle);
     let sched = s.sched.clone();
     drop(s);
-    sched.thread_exit(None);
+    sched.thread_cancelled();
 }
 
 /// Call the destructors of the thread's non-null TLS values once, as `pthread_exit` does.
@@ -483,6 +525,14 @@ mod tests {
         assert_eq!(create(&mut e, 0, 0, 0), errno::EINVAL);
         assert!(matches!(e.try_call("pthread_create", &[BAD, 0, nop, 0]), Err(Stop::Fault(_))));
         assert!(matches!(e.try_call("pthread_create", &[T, BAD, nop, 0]), Err(Stop::Fault(_))));
+        // The thread created before the unwritable `pthread_t` faulted still runs to its end; let it finish.
+        for _ in 0..5000 {
+            if e.st.lock().unwrap().sched.live() == 1 {
+                break;
+            }
+            e.call("sched_yield", &[]);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         // A stack that cannot be mapped.
         e.call("pthread_attr_init", &[ATTR]);
         e.mem().write_u32(ATTR + attr::STACK_SIZE, 0xF000_0000).unwrap();
@@ -925,5 +975,160 @@ mod tests {
         e.mem().write_u32(TS, 1).unwrap();
         e.mem().write_u32(TS + 4, 0).unwrap();
         assert!(matches!(e.try_call("nanosleep", &[TS, 0]), Err(Stop::Host(m)) if m.contains("sleep")));
+    }
+
+    #[test]
+    fn pthread_once_waiters_block_until_the_initialiser_returns() {
+        let mut e = Env::new();
+        let once_f = e.addr("pthread_once");
+        let st = e.st.clone();
+        let (once, runs, seen) = (SCRATCH + 0x900, SCRATCH + 0x910, SCRATCH + 0x920);
+        let init = thunk(&e, "slow_init", move |c| {
+            let n = c.mem().read_u32(runs).unwrap();
+            // Hand the baton to the other thread while the initialiser is "running".
+            sleep(c, &st, 30_000_000);
+            c.mem().write_u32(runs, n + 1).unwrap();
+            c.ret_u32(0);
+        });
+        let worker = thunk(&e, "once_worker", move |c| {
+            let r = c.call(once_f, &[once, init]).unwrap();
+            let runs_seen = c.mem().read_u32(runs).unwrap();
+            c.mem().write_u32(seen, runs_seen + 100 * r.r0).unwrap();
+            c.ret_u32(0);
+        });
+        assert_eq!(create(&mut e, 0, worker, 0), 0);
+        let t = handle(&e);
+        assert_eq!(e.call("pthread_once", &[once, init]).r0, 0);
+        assert_eq!(e.call("pthread_join", &[t, 0]).r0, 0);
+        assert_eq!(e.mem().read_u32(runs).unwrap(), 1, "the initialiser ran exactly once");
+        assert_eq!(e.mem().read_u32(seen).unwrap(), 1, "the waiter returned only after the initialiser finished");
+        assert_eq!(e.mem().read_u32(once).unwrap(), crate::layout::sync::ONCE_DONE);
+        assert!(lock(&e.st).once_owner.is_empty());
+    }
+
+    #[test]
+    fn pthread_once_detects_reentry_and_a_stuck_initialiser() {
+        let mut e = Env::new();
+        let once_f = e.addr("pthread_once");
+        let (once, out) = (SCRATCH + 0x900, SCRATCH + 0x910);
+        let init = e.cpu.register_shared_thunk(
+            "reenter",
+            Arc::new(move |c: &mut Cpu| {
+                let me = c.thunk_addr("reenter").unwrap();
+                let r = c.call(once_f, &[once, me]).unwrap();
+                c.mem().write_u32(out, r.r0).unwrap();
+                c.ret_u32(0);
+            }),
+        );
+        let init = init.unwrap();
+        assert_eq!(e.call("pthread_once", &[once, init]).r0, 0);
+        assert_eq!(e.mem().read_u32(out).unwrap(), errno::EDEADLK);
+        // Another (dead) thread owns the in-progress initialiser and nobody can finish it.
+        let stuck = SCRATCH + 0x930;
+        e.mem().write_u32(stuck, crate::layout::sync::ONCE_IN_PROGRESS).unwrap();
+        lock(&e.st).once_owner.insert(stuck, 99);
+        let r = e.try_call("pthread_once", &[stuck, init]);
+        assert!(matches!(r, Err(Stop::Host(ref m)) if m.contains("pthread_once")), "{r:?}");
+    }
+
+    #[test]
+    fn futex_wait_and_wake() {
+        const NEG_EAGAIN: u32 = -(errno::EAGAIN as i32) as u32;
+        const NEG_TIMEDOUT: u32 = -(errno::ETIMEDOUT as i32) as u32;
+        let mut e = Env::new();
+        let (w, ts) = (SCRATCH + 0xA00, SCRATCH + 0xA10);
+        let wait_f = e.addr("__futex_wait");
+        let st = e.st.clone();
+        // The word differs from the expected value.
+        e.mem().write_u32(w, 1).unwrap();
+        assert_eq!(e.call("__futex_wait", &[w, 0, 0]).r0, NEG_EAGAIN);
+        // Waking without waiters wakes nobody.
+        assert_eq!(e.call("__futex_wake", &[w, 1]).r0, 0);
+        // A timed wait that nobody wakes times out; a bad timeout is rejected.
+        e.mem().write_u32(ts, 0).unwrap();
+        e.mem().write_u32(ts + 4, 2_000_000).unwrap();
+        assert_eq!(e.call("__futex_wait", &[w, 1, ts]).r0, NEG_TIMEDOUT);
+        e.mem().write_u32(ts + 4, 1_000_000_000).unwrap();
+        assert_eq!(e.call("__futex_wait", &[w, 1, ts]).r0 as i32, -(errno::EINVAL as i32));
+        // Faults.
+        assert!(matches!(e.try_call("__futex_wait", &[BAD, 0, 0]), Err(Stop::Fault(_))));
+        assert!(matches!(e.try_call("__futex_wait", &[w, 1, BAD]), Err(Stop::Fault(_))));
+        // Two waiters in other threads; wake one, then the other.
+        let out = SCRATCH + 0xA20;
+        let waiter = thunk(&e, "futex_waiter", move |c| {
+            let idx = c.args().u32(c);
+            let r = c.call(wait_f, &[w, 1, 0]).unwrap();
+            c.mem().write_u32(out + 4 * idx, r.r0 + 10).unwrap();
+            c.ret_u32(0);
+        });
+        let mut ts_ = Vec::new();
+        for i in 0..2 {
+            assert_eq!(create(&mut e, 0, waiter, i), 0);
+            ts_.push(handle(&e));
+        }
+        // Let both threads reach the wait.
+        for _ in 0..5000 {
+            if lock(&st).futex_q.get(&w).map_or(0, |q| q.len()) == 2 {
+                break;
+            }
+            e.call("sched_yield", &[]);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(e.call("__futex_wake", &[w, 1]).r0, 1);
+        pump(&mut e, out);
+        assert_eq!(e.call("__futex_wake", &[w, 100]).r0, 1);
+        for t in ts_ {
+            assert_eq!(e.call("pthread_join", &[t, 0]).r0, 0);
+        }
+        assert_eq!(e.mem().read_u32(out).unwrap(), 10);
+        assert_eq!(e.mem().read_u32(out + 4).unwrap(), 10);
+        // A lone thread waiting forever is a deadlock.
+        assert!(matches!(e.try_call("__futex_wait", &[w, 1, 0]), Err(Stop::Host(m)) if m.contains("__futex_wait")));
+    }
+
+    /// `ldr r1,[r0]; cmp r1,#0; beq .-8; bx lr`: spin until the word at `r0` becomes non-zero.
+    const SPIN: [u32; 4] = [0xE590_1000, 0xE351_0000, 0x0AFF_FFFC, 0xE12F_FF1E];
+    /// The same wait with exclusive loads: `ldrex r1,[r0]; cmp r1,#0; beq .-8; bx lr`.
+    const SPIN_EX: [u32; 4] = [0xE190_1F9F, 0xE351_0000, 0x0AFF_FFFC, 0xE12F_FF1E];
+
+    #[test]
+    fn time_slices_let_the_flag_setter_run_while_another_thread_spins() {
+        for code in [SPIN, SPIN_EX] {
+            let mut e = Env::counting();
+            enable_time_slice(&mut e.cpu, &e.st, 20_000);
+            let spin = SCRATCH + 0x1000;
+            for (i, w) in code.iter().enumerate() {
+                e.mem().write_u32(spin + 4 * i as u32, *w).unwrap();
+            }
+            let flag = SCRATCH + 0xB00;
+            let setter = thunk(&e, "setter", move |c| {
+                c.mem().write_u32(flag, 1).unwrap();
+                c.ret_u32(0);
+            });
+            assert_eq!(create(&mut e, 0, setter, 0), 0);
+            let t = handle(&e);
+            // Without preemption this call would spin forever: the setter never gets the baton.
+            e.cpu.set_ticks(1 << 40);
+            assert_eq!(e.try_call_addr(spin, &[flag]).map(|r| r.r0), Ok(flag));
+            e.call("pthread_join", &[t, 0]);
+        }
+    }
+
+    #[test]
+    fn the_wall_clock_watchdog_stops_a_spinning_guest() {
+        let mut e = Env::counting();
+        enable_time_slice(&mut e.cpu, &e.st, 20_000);
+        let spin = SCRATCH + 0x1000;
+        for (i, w) in SPIN.iter().enumerate() {
+            e.mem().write_u32(spin + 4 * i as u32, *w).unwrap();
+        }
+        e.cpu.set_ticks(1 << 40);
+        set_wall_deadline(&e.st, Some(Instant::now() + std::time::Duration::from_millis(30)));
+        let r = e.try_call_addr(spin, &[SCRATCH + 0xB10]);
+        assert!(matches!(r, Err(Stop::Host(ref m)) if m.contains("watchdog")), "{r:?}");
+        // Removing the limit lets a later slice pass again.
+        set_wall_deadline(&e.st, None);
+        e.mem().write_u32(SCRATCH + 0xB10, 1).unwrap();
+        assert_eq!(e.try_call_addr(spin, &[SCRATCH + 0xB10]).map(|r| r.r0), Ok(SCRATCH + 0xB10));
     }
 }
