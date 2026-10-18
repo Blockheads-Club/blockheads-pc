@@ -233,17 +233,17 @@ impl SdlGl {
         self.vsync.store(allowed, Ordering::SeqCst);
     }
 
-    /// The window as `compose` would draw it, read back as RGBA (bottom row first) with its size; rendered into a
+    /// The window as `compose` would draw it, read back into `px` as RGBA (bottom row first); returns its size; rendered into a
     /// texture of the drawable's size, so it is right even when the window's own surface is not (the offscreen video
     /// driver keeps the surface size it was created with). Needs the game's context to be current.
-    pub fn compose_read(&self) -> Option<(u32, u32, Vec<u8>)> {
+    pub fn compose_read(&self, px: &mut Vec<u8>) -> Option<(u32, u32)> {
         if !self.live() {
             return None;
         }
         // SAFETY: plain SDL query.
         let ctx = ctx_nonzero(unsafe { sys::SDL_GL_GetCurrentContext() } as usize)?;
         let size = self.drawable_size();
-        self.surface.compose_read(ctx, size, &|n| self.proc_address(n)).map(|px| (size.0, size.1, px))
+        self.surface.compose_read(ctx, size, &|n| self.proc_address(n), px).map(|()| size)
     }
 
     fn live(&self) -> bool {

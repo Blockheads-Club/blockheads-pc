@@ -111,13 +111,14 @@ impl InputTracker {
     }
 }
 
-/// Turns bottom-up RGBA pixels (what `glReadPixels` returns) into the frame file's top-down opaque BGRA.
+/// Turns bottom-up RGBA pixels (what `glReadPixels` returns) into the frame file's top-down opaque BGRA. `out` is
+/// reused between frames (resized, never cleared).
 pub fn rgba_bottom_up_to_bgra(width: u32, height: u32, rgba: &[u8], out: &mut Vec<u8>) {
     let row = width as usize * 4;
-    out.clear();
-    out.reserve(rgba.len());
-    for r in rgba.chunks_exact(row).rev() {
-        out.extend(r.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], 255]));
+    out.resize(row * height as usize, 0);
+    for (dst, src) in out.chunks_exact_mut(row).zip(rgba.chunks_exact(row).rev()) {
+        for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+            d.copy_from_slice(&[s[2], s[1], s[0], 255]);
+        }
     }
-    debug_assert_eq!(out.len(), row * height as usize);
 }

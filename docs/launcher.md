@@ -53,14 +53,58 @@ the sidecar and icons only: no APK, game libraries or assets. Product name "Bloc
 macOS: the sidecar needs the JIT entitlements (`app/src-tauri/entitlements.plist`); signing and notarisation are not
 configured. Windows and macOS bundles have never been built (no runners yet).
 
+## Playing in the launcher window
+
+The requirement: the game must not open in a separate window; the launcher's frameless window (title bar, control
+strip) shows it below the strip, and fullscreen hides the bars.
+
+Architectures considered:
+
+* **(a) In-process** (launcher links `bhpc-run`, renders into a GtkGLArea / child HWND / NSView): rejected for now. The
+  guest main thread, the UI thread and the GL contexts are bound to the SDL window, a JIT crash would take the
+  launcher with it, and each OS needs its own context glue.
+* **(b) Out-of-process with frame sharing**: chosen. Cross-process window reparenting does not exist on Wayland, but
+  sharing pixels works everywhere and keeps crash isolation (a crash is a "crashed" state with logs, as before).
+
+How it works on Linux (X11 and Wayland, same code through GTK):
+
+1. `game_start` creates a **frame file** (`$XDG_RUNTIME_DIR/bhpc-frame-<pid>-<n>`, fixed size, three BGRA slots, header
+   with a sequence number; `bhpc_launcher::embed`) and starts `bhpc-run --embed FILE` with stdin piped.
+2. The runner forces SDL's *offscreen* video driver (no window; audio is unaffected), waits for the launcher's first
+   `size`, renders as usual and, once per presented frame (at most 60 per second), composes the letterboxed game plus
+   the Java-view overlay into a texture of exactly the view size, reads it back and publishes it into the frame file.
+   (The offscreen driver does not resize its surface with the window, so the window's own framebuffer is not used.)
+3. The launcher adds a GTK `DrawingArea` as an **overlay over the webview** (`app/src-tauri/src/embed.rs`), below the
+   title bar and strip (the page reports where the stage starts, `embed_layout`; `-1` hides the view while a dialog is
+   open; `0` is fullscreen). Once per display frame it copies the newest frame into a cairo surface and paints it.
+4. Mouse, wheel, keys (GDK keycode to HID usage), text (GTK input method), focus and size go to the runner as text
+   lines on its stdin (`embed::Cmd`). The runner exits when stdin closes, so it never outlives the launcher.
+   Frame files of dead launchers are deleted at the next start.
+5. If the runner cannot get a GL context without a window it exits with code 3 and the launcher restarts it with a
+   window of its own; so does a platform without the view. `BHPC_EMBED=0` forces the separate window.
+
+The runner logs `[embed] frame path: shared frame file, WxH, N fps, X ms per frame` every ten seconds.
+Headless measurement (Xvfb, llvmpipe software GL, so the read-back also waits for the software rendering of the
+compose pass; the game itself runs about 30 fps there): 1100x700 5 ms per frame, runner about 67 % of one core;
+1920x1080 11 ms per frame, about 81 % of one core.
+
+Not done yet (next step): a zero-copy GPU path. Export the composed texture as a dmabuf (`EGL_MESA_image_dma_buf_export`),
+pass the fds over a unix socket (SCM_RIGHTS) and import them in the launcher (`EGL_EXT_image_dma_buf_import`) into a
+GtkGLArea, with the shared-memory path as the automatic fallback. GTK3 uses GLX on X11, so this only helps on Wayland
+(EGL), and it needs a GPU render node to test; that is why it is not part of this change. Windows (shared D3D/GL
+handle into a child HWND) and macOS (IOSurface into an NSView) are also still to do; both fall back to a separate
+window now.
+
 ## Deviations from the design
 
-- **Playing, "game inside the launcher".** The game is its own SDL window. The launcher shows the running state on a
-  dark Playing screen (Home, status, help, logs, Stop) and notices a crash or exit by itself. The game window does not
-  yet have the PC icon or the title "Blockheads PC · Playing The Blockheads 1.7.x": that needs `crates/bhpc-run/src/play.rs`
-  (title and icon on the SDL window), which was being edited by someone else.
-- **Fullscreen, vsync, key bindings.** Saved in `launcher.toml` and passed as flags, but `bhpc-run` only applies the
-  window size today (`play.rs` hard-wires fullscreen off and vsync off and the input mapper's bindings).
+- **Playing, "game inside the launcher".** One window on Linux (see "Playing in the launcher window"). On Windows
+  and macOS the game still opens in a window of its own (title "Blockheads PC · Playing The Blockheads 1.7.x" and the
+  PC icon) while the launcher shows the Playing screen. The design's tip pill over the stage is not drawn (the stage
+  is a native view). The window is square (no rounded corners) while the game view is up.
+- **Fullscreen, vsync, key bindings, window size, sound.** Applied by `bhpc-run` (`--fullscreen`, `--no-vsync`,
+  `--bind ACTION=BINDING` for every non-default binding, `--window`, `--title`; sound off sets
+  `SDL_AUDIODRIVER=dummy`). The bindings reach the `bhpc-input` mapper (`Bindings`): touch, pan, zoom, pinch, back,
+  fullscreen. In the in-window view the launcher itself handles the fullscreen binding (it owns the window).
 - **Mute in background** is shown disabled ("not available yet"); **Game sound** off starts the game with
   `SDL_AUDIODRIVER=dummy`.
 - **Controls**: six actions (the backend has one "touch" action for tap and drag, not two).

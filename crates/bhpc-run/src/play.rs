@@ -230,6 +230,10 @@ struct EmbedOut {
     writer: FrameWriter,
     last: Option<Instant>,
     bgra: Vec<u8>,
+    /// Read-back buffer, reused.
+    rgba: Vec<u8>,
+    /// Frames published and time spent reading back, converting and writing them since the last report.
+    stats: (u64, Duration, Instant),
 }
 
 /// The smallest edge the first reported size may have.
@@ -291,11 +295,24 @@ impl Hooks {
         if e.last.is_some_and(|t| t.elapsed() < EMBED_FRAME_GAP) {
             return;
         }
-        let Some((w, h, rgba)) = self.sdl.compose_read() else { return };
-        let EmbedOut { writer, last, bgra } = &mut *e;
-        rgba_bottom_up_to_bgra(w, h, &rgba, bgra);
+        let began = Instant::now();
+        let EmbedOut { writer, last, bgra, rgba, stats } = &mut *e;
+        let Some((w, h)) = self.sdl.compose_read(rgba) else { return };
+        rgba_bottom_up_to_bgra(w, h, rgba, bgra);
         match writer.publish(w, h, bgra) {
-            Ok(true) => *last = Some(Instant::now()),
+            Ok(true) => {
+                *last = Some(Instant::now());
+                stats.0 += 1;
+                stats.1 += began.elapsed();
+                if stats.2.elapsed() >= Duration::from_secs(10) {
+                    let ms = stats.1.as_secs_f64() * 1000.0 / stats.0.max(1) as f64;
+                    eprintln!(
+                        "[embed] frame path: shared frame file, {w}x{h}, {:.1} fps, {ms:.2} ms per frame spent in read-back, convert and write",
+                        stats.0 as f64 / stats.2.elapsed().as_secs_f64()
+                    );
+                    *stats = (0, Duration::ZERO, Instant::now());
+                }
+            }
             Ok(false) => eprintln!("[play] a {w}x{h} frame does not fit the frame file"),
             Err(e) => eprintln!("[play] cannot write the frame file: {e}"),
         }
@@ -684,7 +701,13 @@ fn boot(
     let embed_out: Mutex<Option<EmbedOut>> = Mutex::new(match &cfg.embed {
         Some(path) => {
             let writer = FrameWriter::open(path).map_err(|e| other(format!("frame file {}: {e}", path.display())))?;
-            Some(EmbedOut { writer, last: None, bgra: Vec::new() })
+            Some(EmbedOut {
+                writer,
+                last: None,
+                bgra: Vec::new(),
+                rgba: Vec::new(),
+                stats: (0, Duration::ZERO, Instant::now()),
+            })
         }
         None => None,
     });

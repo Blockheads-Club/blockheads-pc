@@ -266,14 +266,15 @@ impl VirtualSurface {
     }
 
     /// Like [`VirtualSurface::compose`], but into a texture of exactly `drawable` pixels instead of the window, and
-    /// returns its pixels (RGBA, bottom row first). The window's own framebuffer is never touched, so this works when
+    /// reads its pixels (RGBA, bottom row first) into `px`. The window's own framebuffer is never touched, so this works when
     /// it has the wrong size (the offscreen video driver does not resize its surface with the window).
     pub fn compose_read(
         &self,
         ctx: usize,
         drawable: (u32, u32),
         loader: &dyn Fn(&str) -> *const c_void,
-    ) -> Option<Vec<u8>> {
+        px: &mut Vec<u8>,
+    ) -> Option<()> {
         let size = self.size()?;
         if drawable.0 == 0 || drawable.1 == 0 {
             return None;
@@ -291,7 +292,7 @@ impl VirtualSurface {
                 let mut prev = 0;
                 (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut prev);
                 (g.glBindFramebuffer)(FRAMEBUFFER, target);
-                let mut px = vec![0u8; drawable.0 as usize * drawable.1 as usize * 4];
+                px.resize(drawable.0 as usize * drawable.1 as usize * 4, 0);
                 (g.glReadPixels)(
                     0,
                     0,
@@ -302,7 +303,7 @@ impl VirtualSurface {
                     px.as_mut_ptr().cast(),
                 );
                 (g.glBindFramebuffer)(FRAMEBUFFER, prev as u32);
-                Some(px)
+                Some(())
             }
         })
         .flatten()
