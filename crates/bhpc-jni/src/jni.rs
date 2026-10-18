@@ -327,7 +327,11 @@ fn lend(j: &mut J, obj: Obj, bytes: &[u8], extra: u32, is_copy: u32) -> u32 {
         return 0;
     }
     j.vm.st().lent.insert(p, Lent { obj, len: bytes.len() as u32 });
-    j.write_u32(is_copy, 1);
+    // `jboolean *isCopy` is one byte: a word write clobbered the three bytes after it, which for
+    // `nativeTouchesMove` was its array-length local (the game then saw zero touches).
+    if is_copy != 0 {
+        let _ = j.vm.mem().write_u8(is_copy, 1);
+    }
     p
 }
 

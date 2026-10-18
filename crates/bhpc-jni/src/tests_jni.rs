@@ -893,9 +893,11 @@ fn primitive_array_functions() {
         assert_eq!(&got[size as usize..4 * size as usize], &e.mem().read_bytes(src, 3 * size).unwrap()[..]);
         // Elements: copy out, modify, release with each mode.
         let is_copy = e.buf(4);
+        e.mem().write_bytes(is_copy, &[0, 0x11, 0x22, 0x33]).unwrap();
         let p = e.jni(&format!("Get{name}ArrayElements"), &[a, is_copy]).r0;
         assert_ne!(p, 0);
-        assert_eq!(e.mem().read_u8(is_copy).unwrap(), 1);
+        // A jboolean: the bytes after it belong to the caller's neighbouring locals.
+        assert_eq!(e.mem().read_bytes(is_copy, 4).unwrap(), [1, 0x11, 0x22, 0x33]);
         e.mem().write_u8(p, 0xAA).unwrap();
         // ABORT discards the changes and frees the buffer.
         e.jni(&format!("Release{name}ArrayElements"), &[a, p, 2]);
