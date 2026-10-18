@@ -160,14 +160,15 @@ impl Session {
         Session { run: None, last: None, log: Arc::new(Mutex::new(LogBuffer::new(MAX_LINES))), grace }
     }
 
-    /// Spawns `program args...` with its output captured. The previous session's log is replaced.
-    pub fn start(&mut self, program: &Path, args: &[String]) -> Result<(), SessionError> {
+    /// Spawns `program args...` (with `env` added) with its output captured. The previous session's log is replaced.
+    pub fn start(&mut self, program: &Path, args: &[String], env: &[(String, String)]) -> Result<(), SessionError> {
         self.refresh();
         if self.run.is_some() {
             return Err(SessionError::AlreadyRunning);
         }
         let mut child = Command::new(program)
             .args(args)
+            .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

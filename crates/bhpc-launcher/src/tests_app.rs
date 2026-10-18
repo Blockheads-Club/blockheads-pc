@@ -224,7 +224,7 @@ mod unix {
         assert_eq!(s.poll(0, true).state, GameState::Ready);
         assert_eq!(s.poll(0, false).state, GameState::Missing);
         let (prog, args) = sh("echo out; echo err >&2; printf 'no newline'");
-        s.start(&prog, &args).unwrap();
+        s.start(&prog, &args, &[]).unwrap();
         let snap = until_done(&mut s, true);
         assert_eq!((snap.state, snap.exit_code, snap.signal), (GameState::Stopped, Some(0), None));
         assert!(snap.last_session_secs.is_some() && snap.running_secs.is_none());
@@ -239,21 +239,29 @@ mod unix {
         assert_eq!(std::fs::read_to_string(t.path().join("logs/last.log")).unwrap().lines().count(), 3);
         // The next start replaces the log.
         let (prog, args) = sh("echo second");
-        s.start(&prog, &args).unwrap();
+        s.start(&prog, &args, &[]).unwrap();
         assert_eq!(until_done(&mut s, true).lines, ["second"]);
+    }
+
+    #[test]
+    fn environment_reaches_the_child() {
+        let mut s = Session::new(Duration::ZERO);
+        let (prog, args) = sh("echo \"$BHPC_TEST_VAR\"");
+        s.start(&prog, &args, &[("BHPC_TEST_VAR".into(), "hello".into())]).unwrap();
+        assert_eq!(until_done(&mut s, true).lines, ["hello"]);
     }
 
     #[test]
     fn nonzero_exit_and_signal_are_crashes() {
         let mut s = Session::new(Duration::ZERO);
         let (prog, args) = sh("echo boom; exit 3");
-        s.start(&prog, &args).unwrap();
+        s.start(&prog, &args, &[]).unwrap();
         let snap = until_done(&mut s, true);
         assert_eq!((snap.state, snap.exit_code), (GameState::Crashed, Some(3)));
         // A crash stays a crash even when the file is gone.
         assert_eq!(s.poll(0, false).state, GameState::Crashed);
         let (prog, args) = sh("kill -SEGV $$");
-        s.start(&prog, &args).unwrap();
+        s.start(&prog, &args, &[]).unwrap();
         let snap = until_done(&mut s, true);
         assert_eq!((snap.state, snap.exit_code, snap.signal), (GameState::Crashed, None, Some(11)));
     }
@@ -263,11 +271,11 @@ mod unix {
         let mut s = Session::new(Duration::from_secs(3600));
         s.stop(); // nothing to stop
         let (prog, args) = sh("exec sleep 30");
-        s.start(&prog, &args).unwrap();
+        s.start(&prog, &args, &[]).unwrap();
         let snap = s.poll(0, true);
         assert_eq!(snap.state, GameState::Launching);
         assert!(snap.running_secs.is_some());
-        assert_eq!(s.start(&prog, &args), Err(SessionError::AlreadyRunning));
+        assert_eq!(s.start(&prog, &args, &[]), Err(SessionError::AlreadyRunning));
         s.stop();
         let snap = s.poll(0, true);
         assert_eq!((snap.state, snap.signal), (GameState::Stopped, Some(9)));
@@ -277,16 +285,173 @@ mod unix {
     fn running_after_grace_and_spawn_failure() {
         let mut s = Session::new(Duration::ZERO);
         let (prog, args) = sh("exec sleep 30");
-        s.start(&prog, &args).unwrap();
+        s.start(&prog, &args, &[]).unwrap();
         assert_eq!(s.poll(0, true).state, GameState::Running);
         s.stop();
-        let err = s.start(Path::new("/nonexistent/bhpc-run"), &[]).unwrap_err();
+        let err = s.start(Path::new("/nonexistent/bhpc-run"), &[], &[]).unwrap_err();
         assert!(matches!(err, SessionError::Spawn(ref m) if m.contains("/nonexistent")));
         // A process that ended by itself before stop() is reported as it ended.
         let (prog, args) = sh("exit 4");
-        s.start(&prog, &args).unwrap();
+        s.start(&prog, &args, &[]).unwrap();
         std::thread::sleep(Duration::from_millis(300));
         s.stop();
         assert_eq!(s.poll(0, true).state, GameState::Crashed);
+    }
+}
+
+mod ops_tests {
+    use super::*;
+    use crate::ops::{
+        self, boot, data_dir_from, finish_setup, launch_plan, move_data_dir, normalize_binding, paths, paths_from,
+        save_config, save_prefs, use_apk,
+    };
+    use crate::window::WindowOptions;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    fn fake_apk(dir: &Path) -> PathBuf {
+        let p = dir.join("game.apk");
+        make_zip(&p, &[("lib/armeabi-v7a/libApplication.so", b"synthetic libApplication")]);
+        p
+    }
+
+    fn setup(t: &Path) -> (Paths, LaunchConfig) {
+        let paths = Paths::new(t.join("cfg"));
+        let mut c = LaunchConfig::new(fake_apk(t), t.join("data"));
+        c.force = true;
+        (paths, c)
+    }
+
+    #[test]
+    fn directories_from_environment_or_platform() {
+        let some = |s: &str| Some(OsString::from(s));
+        assert_eq!(paths_from(some("/x"), None).unwrap(), Paths::new("/x"));
+        assert_eq!(paths_from(some(""), Some(Paths::new("/p"))).unwrap(), Paths::new("/p"));
+        assert_eq!(paths_from(None, Some(Paths::new("/p"))).unwrap(), Paths::new("/p"));
+        assert_eq!(paths_from(None, None), Err(LauncherError::NoDefaultDir));
+        let _ = paths();
+        assert_eq!(data_dir_from(some("/d"), Err(LauncherError::NoDefaultDir)).unwrap(), PathBuf::from("/d"));
+        assert_eq!(data_dir_from(None, Ok("/p".into())).unwrap(), PathBuf::from("/p"));
+        assert_eq!(data_dir_from(some(""), Err(LauncherError::NoDefaultDir)), Err(LauncherError::NoDefaultDir));
+    }
+
+    #[test]
+    fn boot_save_and_prefs() {
+        let t = tempfile::tempdir().unwrap();
+        let (paths, c) = setup(t.path());
+        let b = boot(&paths, "/data".into()).unwrap();
+        assert_eq!((b.config, b.defaults.data_dir, b.prefs), (None, PathBuf::from("/data"), Prefs::default()));
+        let mut bad = c.clone();
+        bad.window = WindowOptions { width: 1, ..WindowOptions::default() };
+        assert!(matches!(save_config(&paths, bad), Err(LauncherError::Window(_))));
+        let mut dup = c.clone();
+        dup.keys.pan = dup.keys.touch; // conflicts are saved and shown, not refused
+        assert_eq!(save_config(&paths, dup.clone()).unwrap(), dup);
+        let p = save_prefs(&paths, Prefs { language: "zz".into(), ..Prefs::default() }).unwrap();
+        assert_eq!(p.language, "en");
+        let b = boot(&paths, "/data".into()).unwrap();
+        assert_eq!(b.config, Some(dup));
+        std::fs::write(paths.prefs(), "language = 1").unwrap();
+        assert!(boot(&paths, "/data".into()).is_err());
+    }
+
+    #[test]
+    fn setup_finishes_with_a_private_copy() {
+        let t = tempfile::tempdir().unwrap();
+        let (paths, c) = setup(t.path());
+        let done = finish_setup(&paths, c.clone(), Prefs::default()).unwrap();
+        assert_eq!(done.apk, t.path().join("data/game/TheBlockheads.apk"));
+        assert!(done.apk.exists());
+        assert_eq!(boot(&paths, "/d".into()).unwrap().config, Some(done));
+        // Without a copy the original path is kept.
+        let kept = finish_setup(&paths, c.clone(), Prefs { keep_private_copy: false, ..Prefs::default() }).unwrap();
+        assert_eq!(kept.apk, c.apk);
+        // Refusals: bad window, unknown build without force, unreadable folder for the copy.
+        let mut bad = c.clone();
+        bad.window.height = 1;
+        assert!(matches!(finish_setup(&paths, bad, Prefs::default()), Err(LauncherError::Window(_))));
+        let mut strict = c.clone();
+        strict.force = false;
+        assert!(matches!(finish_setup(&paths, strict, Prefs::default()), Err(LauncherError::Apk(_))));
+        let mut blocked = c.clone();
+        std::fs::write(t.path().join("file"), b"").unwrap();
+        blocked.data_dir = t.path().join("file");
+        assert!(matches!(finish_setup(&paths, blocked, Prefs::default()), Err(LauncherError::Io(_))));
+    }
+
+    #[test]
+    fn switching_game_file_and_bindings() {
+        let t = tempfile::tempdir().unwrap();
+        let (paths, c) = setup(t.path());
+        assert!(matches!(use_apk(&paths, &c.apk, true, false), Err(LauncherError::Io(_))));
+        c.save(&paths.config()).unwrap();
+        let other = t.path().join("other.apk");
+        std::fs::copy(&c.apk, &other).unwrap();
+        let r = use_apk(&paths, &other, true, false).unwrap();
+        assert_eq!(r.apk, other);
+        let r = use_apk(&paths, &other, true, true).unwrap();
+        assert!(r.apk.ends_with("game/TheBlockheads.apk"));
+        assert!(matches!(use_apk(&paths, &other, false, false), Err(LauncherError::Apk(_))));
+        assert_eq!(normalize_binding(" ctrl + left ").unwrap(), "Ctrl+Left");
+        assert_eq!(normalize_binding("ArrowUp").unwrap(), "Up");
+        assert!(matches!(normalize_binding("Hyper+Q"), Err(LauncherError::Parse(_))));
+    }
+
+    #[test]
+    fn import_and_move() {
+        let t = tempfile::tempdir().unwrap();
+        let (paths, mut c) = setup(t.path());
+        let src = t.path().join("pull");
+        std::fs::create_dir_all(src.join("files/s")).unwrap();
+        std::fs::write(src.join("files/s/a"), b"1").unwrap();
+        let s = ops::import_saves(&src, false, &c.data_dir).unwrap();
+        assert_eq!(s.written, 1);
+        assert_eq!(ops::import_saves(&src, false, &c.data_dir).unwrap().skipped_existing, 1);
+        assert_eq!(ops::import_saves(&src, true, &c.data_dir).unwrap().written, 1);
+        assert!(matches!(ops::import_saves(&t.path().join("none"), false, &c.data_dir), Err(LauncherError::Io(_))));
+
+        assert!(matches!(move_data_dir(&paths, &t.path().join("new")), Err(LauncherError::Io(_))));
+        c.apk = c.data_dir.join("game/TheBlockheads.apk");
+        c.save(&paths.config()).unwrap();
+        let same = move_data_dir(&paths, &c.data_dir).unwrap();
+        assert_eq!(same, c);
+        let to = t.path().join("new");
+        let moved = move_data_dir(&paths, &to).unwrap();
+        assert_eq!((moved.data_dir.clone(), moved.apk.clone()), (to.clone(), to.join("game/TheBlockheads.apk")));
+        assert!(to.join("home/s/a").exists() && c.data_dir.join("home/s/a").exists());
+        // An APK outside the data folder stays where it is; a missing source folder fails.
+        let mut outside = moved.clone();
+        outside.apk = t.path().join("game.apk");
+        outside.save(&paths.config()).unwrap();
+        assert_eq!(move_data_dir(&paths, &t.path().join("n2")).unwrap().apk, outside.apk);
+        let mut gone = outside.clone();
+        gone.data_dir = t.path().join("does-not-exist");
+        gone.save(&paths.config()).unwrap();
+        assert!(matches!(move_data_dir(&paths, &t.path().join("n3")), Err(LauncherError::Io(_))));
+    }
+
+    #[test]
+    fn launch_plan_checks_everything_first() {
+        let t = tempfile::tempdir().unwrap();
+        let (paths, mut c) = setup(t.path());
+        let exe = Path::new("/opt/app");
+        assert!(matches!(launch_plan(&paths, exe), Err(LauncherError::Io(_))));
+        c.save(&paths.config()).unwrap();
+        let plan = launch_plan(&paths, exe).unwrap();
+        assert!(plan.program.starts_with("/opt/app") && plan.env.is_empty());
+        assert_eq!(plan.args, ["--config", paths.config().to_str().unwrap()]);
+        Prefs { game_sound: false, ..Prefs::default() }.save(&paths.prefs()).unwrap();
+        assert_eq!(launch_plan(&paths, exe).unwrap().env, [("SDL_AUDIODRIVER".to_string(), "dummy".to_string())]);
+        c.window.width = 1;
+        c.save(&paths.config()).unwrap();
+        assert!(matches!(launch_plan(&paths, exe), Err(LauncherError::Window(_))));
+        c.window = WindowOptions::default();
+        c.apk = t.path().join("missing.apk");
+        c.save(&paths.config()).unwrap();
+        assert!(matches!(launch_plan(&paths, exe), Err(LauncherError::Apk(_))));
+        c.apk = fake_apk(t.path());
+        c.save(&paths.config()).unwrap();
+        std::fs::write(paths.prefs(), "language = 1").unwrap();
+        assert!(matches!(launch_plan(&paths, exe), Err(LauncherError::Parse(_))));
     }
 }

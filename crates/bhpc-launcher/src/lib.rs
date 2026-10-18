@@ -9,6 +9,7 @@
 //! * [`wizard`]: the first-run step state machine.
 //! * [`prefs`]: launcher preferences (language, theme, ...) and the config directory layout.
 //! * [`datadir`]: data folder size and copy.
+//! * [`ops`]: the operations behind the app's commands.
 //! * [`session`]: spawn and supervise `bhpc-run`, keep its log.
 
 pub mod apk;
@@ -16,6 +17,7 @@ pub mod config;
 pub mod datadir;
 pub mod import;
 pub mod keys;
+pub mod ops;
 pub mod prefs;
 pub mod session;
 pub mod window;
