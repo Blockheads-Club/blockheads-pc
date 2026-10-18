@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "splash",
-  "description": "Splash window: listens for the boot state; its buttons are app commands",
-  "windows": ["splash"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+  "description": "Splash window: listens for the boot state, can be dragged; its buttons are app commands",
+  "windows": [
+    "splash"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
 }

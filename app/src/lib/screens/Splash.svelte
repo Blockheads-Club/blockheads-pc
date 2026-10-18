@@ -15,27 +15,28 @@
   const setup = $derived(state.first_run);
 </script>
 
-<div class="wrap">
+<div class="wrap" data-tauri-drag-region>
   <section
     class={['sp', setup ? 'sp-s' : 'sp-l', square && 'sq']}
     role="status"
+    data-tauri-drag-region
     aria-live="polite"
     aria-label={setup ? t('splash.setupLabel') : t('splash.label')}
   >
-    <img class="ic" src={setup ? '/pc-icon-macos.svg' : '/pc-icon.svg'} alt="" width={setup ? 132 : 128} height={setup ? 132 : 128} />
-    <div class="wm">Blockheads<span class="tg">PC</span></div>
-    {#if setup}<p class="welcome">{t('splash.welcome')}</p>{/if}
+    <img class="ic" data-tauri-drag-region src={setup ? '/pc-icon-macos.svg' : '/pc-icon.svg'} alt="" width={setup ? 132 : 128} height={setup ? 132 : 128} />
+    <div class="wm" data-tauri-drag-region>Blockheads<span class="tg" data-tauri-drag-region>PC</span></div>
+    {#if setup}<p class="welcome" data-tauri-drag-region>{t('splash.welcome')}</p>{/if}
     {#if state.boot === 'error'}
-      <p class="err" role="alert">{setup ? t('splash.setupError') : t('splash.error')}</p>
-      <p class="hint detail">{state.error}</p>
+      <p class="err" data-tauri-drag-region role="alert">{setup ? t('splash.setupError') : t('splash.error')}</p>
+      <p class="hint detail" data-tauri-drag-region>{state.error}</p>
       <div class="acts">
         <Button variant="primary" onclick={() => onretry()}>{t('common.retry')}</Button>
         <Button onclick={() => onopenlog()}>{t('splash.openLog')}</Button>
         <Button variant="ghost" onclick={() => onquit()}>{t('common.quit')}</Button>
       </div>
     {:else}
-      <div class="bar"><span></span></div>
-      <p class="msg">{state.boot === 'slow' ? t(setup ? 'splash.slowSetup' : 'splash.slow') : t(setup ? 'splash.loadingSetup' : 'splash.loading')}</p>
+      <div class="bar" data-tauri-drag-region><span data-tauri-drag-region></span></div>
+      <p class="msg" data-tauri-drag-region>{state.boot === 'slow' ? t(setup ? 'splash.slowSetup' : 'splash.slow') : t(setup ? 'splash.loadingSetup' : 'splash.loading')}</p>
     {/if}
     <div class="foot"><span>{t('splash.footer')}</span><span class="mono">{state.version}</span></div>
   </section>
