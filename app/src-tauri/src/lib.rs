@@ -268,7 +268,9 @@ struct Started {
 fn start_game(app: &App, window: &WebviewWindow, handle: &AppHandle, allow_embed: bool) -> Res<Started> {
     let exe = std::env::current_exe().map_err(text)?;
     let dir = exe.parent().unwrap_or(Path::new("."));
-    let plan = ops::launch_plan(&ops::paths().map_err(text)?, dir).map_err(text)?;
+    let paths = ops::paths().map_err(text)?;
+    let plan = ops::launch_plan(&paths, dir).map_err(text)?;
+    app.session().set_history(bhpc_launcher::progress::history_path(&paths.dir));
     let program = sidecar(plan.program.clone());
     // The frame file must exist before the game starts: it opens it at once.
     let frame = (allow_embed && embed::supported())
@@ -344,7 +346,7 @@ fn game_poll(app: State<'_, App>, window: WebviewWindow, handle: AppHandle, sinc
         .map(|c| c.apk.exists())
         .unwrap_or(true);
     let mut snap = app.session().poll(since, present);
-    if app.embedded.load(Ordering::SeqCst) && !matches!(snap.state, GameState::Launching | GameState::Running) {
+    if app.embedded.load(Ordering::SeqCst) && !matches!(snap.state, GameState::Starting | GameState::Running) {
         end_view(&app, &window, &handle);
         // The runner could not render without a window: start it again with a window of its own.
         if snap.exit_code == Some(bhpc_launcher::embed::EMBED_UNAVAILABLE_EXIT)

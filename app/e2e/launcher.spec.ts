@@ -127,3 +127,50 @@ test('rounded frame, and the title bar buttons call the window API', async ({ pa
   expect(await called('plugin:window|toggle_maximize')).toBe(true);
   expect(await called('plugin:window|close')).toBe(true);
 });
+
+test('the loading screen shows real progress, then hands over to the game', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  const bar = page.getByRole('progressbar', { name: 'Starting the game' });
+  await expect(bar).toBeVisible();
+  await expect(page.getByRole('status', { name: 'Game status: Starting…' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancel' }).first()).toBeVisible();
+  // The percentage only grows.
+  const seen: number[] = [];
+  for (let i = 0; i < 6; i++) {
+    seen.push(Number(await bar.getAttribute('aria-valuenow')));
+    await page.waitForTimeout(400);
+  }
+  expect(seen).toEqual([...seen].sort((a, b) => a - b));
+  expect(seen[seen.length - 1]).toBeGreaterThan(seen[0]);
+  await expect(page.getByRole('status', { name: 'Game status: Running · 0 min' })).toBeVisible({ timeout: 8000 });
+  await expect(bar).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop game' })).toBeVisible();
+});
+
+test('Esc cancels the start at once and Home says stopped', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(page.getByRole('progressbar', { name: 'Starting the game' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('status', { name: 'Game status: Stopped' })).toBeVisible();
+  expect(await calls(page, 'game_stop')).toBe(1);
+});
+
+test('a slow start gets the note, and a start that fails shows the step and can be retried', async ({ page }) => {
+  await page.goto('/?slowstart=1');
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(page.getByText('This is taking longer than usual.')).toBeVisible({ timeout: 8000 });
+  await expect(page.getByText('Still working…')).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).last().click();
+  await expect(page.getByRole('status', { name: 'Game status: Stopped' })).toBeVisible();
+
+  await page.goto('/?bootcrash=1');
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('The game couldn’t start', { timeout: 10_000 });
+  await expect(page.getByRole('status', { name: 'Game status: Didn’t start' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try again' })).toBeFocused();
+  await page.getByRole('button', { name: 'Back to Home' }).click();
+  await expect(page.getByRole('alert')).toContainText('The game closed unexpectedly');
+});

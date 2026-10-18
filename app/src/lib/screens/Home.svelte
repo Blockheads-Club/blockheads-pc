@@ -64,9 +64,9 @@
 
         {#if state === 'ready'}
           <PlayButton size={compact ? 'md' : 'lg'} onclick={() => store.play()}>{t('home.play')}</PlayButton>
-        {:else if state === 'launching'}
+        {:else if state === 'starting'}
           <PlayButton size={compact ? 'md' : 'lg'} disabled busy>{t('home.starting')}</PlayButton>
-          <div class="prog"><Progress stage label={t('home.startingLabel')} /><p class="sub">{t('home.startingHint')}</p></div>
+          <div class="prog"><Progress stage label={t('home.startingLabel')} value={g.progress ? Math.floor(g.progress.percent) : undefined} /><p class="sub">{t('home.startingHint')}</p></div>
         {:else if state === 'running'}
           {#if !compact}<p class="lead">{t('home.runningLead')}</p>{/if}
           <div class="row">

@@ -414,7 +414,7 @@ describe('import', () => {
 
 describe('playing', () => {
   it('starts the game and shows the playing screen', async () => {
-    mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'launching', running_secs: 0 }));
+    mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'starting', running_secs: 0 }));
     await store.play();
     expect(mock.api.gameStart).toHaveBeenCalled();
     expect(store.screen).toBe('playing');

@@ -8,6 +8,7 @@ export const ICONS = {
   'chev-d': '<path d="M6 9l6 6 6-6"/>',
   'chev-l': '<path d="M15 6l-6 6 6 6"/>',
   'chev-r': '<path d="M9 6l6 6-6 6"/>',
+  'clock': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   'code': '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/>',
   'copy': '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
   'dot': '<circle cx="12" cy="12" r="2.5"/>',

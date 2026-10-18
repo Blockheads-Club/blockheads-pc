@@ -27,9 +27,13 @@ mod imp {
     use std::collections::HashSet;
     use std::rc::Rc;
     use std::sync::mpsc::{channel, Sender};
+    use std::time::{Duration, Instant};
     use tauri::{AppHandle, Emitter, WebviewWindow};
 
     pub const SUPPORTED: bool = true;
+
+    /// How long the game fades in over the loading screen.
+    const FADE: Duration = Duration::from_millis(240);
 
     /// What the view needs from the launcher.
     pub struct Opts {
@@ -51,6 +55,9 @@ mod imp {
     }
 
     struct Paint {
+        /// When the first game frame arrived: before it the view draws nothing (the page's loading screen shows
+        /// through and gets the mouse), then it fades in over [`FADE`].
+        first: Option<Instant>,
         reader: Option<FrameReader>,
         buf: Vec<u8>,
         surface: Option<ImageSurface>,
@@ -112,7 +119,8 @@ mod imp {
                     | EventMask::KEY_RELEASE_MASK
                     | EventMask::FOCUS_CHANGE_MASK,
             );
-            let paint = Rc::new(RefCell::new(Paint { reader: Some(opts.frame), buf: Vec::new(), surface: None }));
+            let paint =
+                Rc::new(RefCell::new(Paint { first: None, reader: Some(opts.frame), buf: Vec::new(), surface: None }));
             wire_paint(&area, &paint);
             wire_input(&area, opts.input, opts.fullscreen_key, win.clone(), opts.app);
             area.set_halign(gtk::Align::Fill);
@@ -122,6 +130,8 @@ mod imp {
             vbox.remove(&webview);
             overlay.add(&webview);
             overlay.add_overlay(&area);
+            // Until the first frame the page shows its loading screen and must get the mouse (Cancel).
+            overlay.set_overlay_pass_through(&area, true);
             vbox.pack_start(&overlay, true, true, 0);
             overlay.show();
             // Hidden until the page has reported where the stage starts (`layout`): the runner sizes its first frame
@@ -135,7 +145,7 @@ mod imp {
         let p = paint.clone();
         area.add_tick_callback(move |w, _| {
             let mut p = p.borrow_mut();
-            let Paint { reader, buf, surface } = &mut *p;
+            let Paint { first, reader, buf, surface } = &mut *p;
             if let Some(info) = reader.as_mut().and_then(|r| r.read(buf).ok().flatten()) {
                 let (iw, ih) = (info.width as i32, info.height as i32);
                 let fits = surface.as_ref().is_some_and(|s| s.width() == iw && s.height() == ih);
@@ -150,17 +160,31 @@ mod imp {
                         data.copy_from_slice(buf);
                     }
                 }
+                if first.is_none() {
+                    *first = Some(Instant::now());
+                    if let Some(o) = w.parent().and_then(|p| p.downcast::<gtk::Overlay>().ok()) {
+                        o.set_overlay_pass_through(w, false);
+                    }
+                    w.grab_focus();
+                }
+                w.queue_draw();
+            } else if first.is_some_and(|f| f.elapsed() < FADE) {
                 w.queue_draw();
             }
             glib::ControlFlow::Continue
         });
         let p = paint.clone();
         area.connect_draw(move |_, cr| {
-            cr.set_source_rgb(0.0, 0.0, 0.0);
+            let p = p.borrow();
+            let Some(first) = p.first else { return Propagation::Stop };
+            // Without animations (the desktop's setting) the game appears at once.
+            let animate = gtk::Settings::default().is_some_and(|s| s.is_gtk_enable_animations());
+            let alpha = if animate { (first.elapsed().as_secs_f64() / FADE.as_secs_f64()).min(1.0) } else { 1.0 };
+            cr.set_source_rgba(0.0, 0.0, 0.0, alpha);
             let _ = cr.paint();
-            if let Some(s) = p.borrow().surface.as_ref() {
+            if let Some(s) = p.surface.as_ref() {
                 let _ = cr.set_source_surface(s, 0.0, 0.0);
-                let _ = cr.paint();
+                let _ = cr.paint_with_alpha(alpha);
             }
             Propagation::Stop
         });
@@ -336,7 +360,8 @@ mod imp {
                 if !v.area.is_visible() {
                     v.area.show();
                 }
-                if !v.area.has_focus() {
+                // Before the first frame the page's loading screen keeps the keyboard (Esc cancels).
+                if v.paint.borrow().first.is_some() && !v.area.has_focus() {
                     v.area.grab_focus();
                 }
             });

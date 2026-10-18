@@ -1,7 +1,7 @@
 /** Shapes shared with the Tauri backend (src-tauri/src/lib.rs, crates/bhpc-launcher). Field names are snake_case. */
 export type ThemeChoice = 'system' | 'light' | 'dark';
 export type Os = 'windows' | 'macos' | 'linux';
-export type GameState = 'ready' | 'launching' | 'running' | 'stopped' | 'crashed' | 'missing';
+export type GameState = 'ready' | 'starting' | 'running' | 'stopped' | 'crashed' | 'missing';
 
 export interface WindowOptions {
   width: number;
@@ -73,6 +73,25 @@ export interface Started {
   embedded: boolean;
 }
 
+/** Start-up progress of the game runner (see `crates/bhpc-launcher/src/progress.rs`). */
+export interface BootProgress {
+  /** 0 to 100, never decreasing. */
+  percent: number;
+  /** Protocol name of the current step. */
+  phase: string;
+  /** 1 to 6. */
+  step: number;
+  elapsed_secs: number;
+  /** Seconds left once 3 s and 15 % are reached. */
+  eta_secs: number | null;
+  slow: boolean;
+  stalled: boolean;
+  /** Seconds each finished step took. */
+  step_secs: (number | null)[];
+  /** The first frame is up. */
+  ready: boolean;
+}
+
 export interface Snapshot {
   state: GameState;
   running_secs: number | null;
@@ -81,6 +100,8 @@ export interface Snapshot {
   signal: number | null;
   lines: string[];
   next: number;
+  /** Start-up progress of the running game, or where the last one got to. */
+  progress?: BootProgress | null;
   /** The game is drawn inside the launcher window. */
   embedded?: boolean;
 }

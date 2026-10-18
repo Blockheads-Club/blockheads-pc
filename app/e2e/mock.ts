@@ -32,29 +32,47 @@ export async function mockTauri(page: Page) {
       pick: '/home/mira/Downloads/TheBlockheads.apk',
       updateStage: 'idle',
       installStart: 0,
-      missingApk: false
+      missingApk: false,
+      bootFail: 0
     };
     (window as any).__mock = s;
     (window as any).__calls = [];
     const log = (l: string) => s.lines.push(l);
+    // A scripted start: six steps over 3 s, the first frame at 3.2 s (`?slowstart` stays on step 5).
+    const bounds = [0, 10, 28, 50, 72, 92];
+    const progress = (at: number) => {
+      const t = at - s.startedAt;
+      const slow = !!q.get('slowstart');
+      const ready = !slow && t >= 3200 && s.game !== 'crashed';
+      const percent = ready ? 100 : slow ? Math.min(81, (t / 3000) * 100) : Math.min(99, (t / 3000) * 100);
+      const step = Math.max(1, bounds.filter((b) => percent >= b).length);
+      return {
+        percent, phase: ['apk', 'libraries', 'constructors', 'runtime', 'launch', 'frame'][step - 1], step,
+        elapsed_secs: t / 1000, eta_secs: t > 3000 && percent >= 15 && !ready ? ((100 - percent) * t) / percent / 1000 : null,
+        slow: slow && t > 3000, stalled: false,
+        step_secs: bounds.map((_, i) => (i + 1 < step || ready ? 0.5 + i / 2 : null)), ready
+      };
+    };
     const snapshot = (since: number) => {
-      const running = ['launching', 'running'].includes(s.game);
-      if (s.game === 'launching' && Date.now() - s.startedAt > 1500) s.game = 'running';
+      const running = ['starting', 'running'].includes(s.game);
+      if (s.game === 'starting' && !q.get('slowstart') && Date.now() - s.startedAt > 3200) s.game = 'running';
       if (running && s.crashAt && Date.now() > s.crashAt) {
         s.game = 'crashed';
         s.exit = 139;
+        if (q.get('bootcrash')) s.bootFail = Date.now();
         log('20:14:07  ERROR    native crash in libgame.so (SIGSEGV)');
         s.crashAt = 0;
       }
       const lines = s.lines.slice(since);
       return {
         state: s.game,
-        running_secs: ['launching', 'running'].includes(s.game) ? (s.game === 'running' && !s.startedAt ? 720 : Math.floor((Date.now() - s.startedAt) / 1000)) : null,
+        running_secs: ['starting', 'running'].includes(s.game) ? (s.game === 'running' && !s.startedAt ? 720 : Math.floor((Date.now() - s.startedAt) / 1000)) : null,
         last_session_secs: ['stopped', 'crashed'].includes(s.game) ? s.lastSecs : null,
         exit_code: s.game === 'crashed' ? s.exit : null,
         signal: null,
         lines,
-        next: s.lines.length
+        next: s.lines.length,
+        progress: s.game === 'starting' || s.bootFail ? progress(s.bootFail || Date.now()) : s.game === 'running' ? progress(s.startedAt || 0) : null
       };
     };
     if (['crashed'].includes(s.game)) {
@@ -114,11 +132,13 @@ export async function mockTauri(page: Page) {
       game_start: () => {
         if (q.get('failstart')) throw 'cannot start the game: /opt/bhpc-run: No such file or directory';
         s.lines = [];
-        s.game = 'launching';
+        s.game = 'starting';
         s.startedAt = Date.now();
+        s.bootFail = 0;
         log('[play] window 1600x900');
         log('[play] first frame presented');
-        if (q.get('crash')) s.crashAt = Date.now() + 2500;
+        if (q.get('crash')) s.crashAt = Date.now() + 5500;
+        if (q.get('bootcrash')) s.crashAt = Date.now() + 1800;
         return { embedded: false };
       },
       embed_layout: () => undefined,

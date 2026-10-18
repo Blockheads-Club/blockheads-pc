@@ -8,12 +8,14 @@
     minutes?: number;
     /** Announce changes (the Home pill); the small copy on the strip does not. */
     live?: boolean;
+    /** Replaces the state's own text (the strip's "Didn't start"). */
+    label?: string;
   }
-  let { state, minutes = 0, live = true }: Props = $props();
+  let { state, minutes = 0, live = true, label: custom }: Props = $props();
   const label = $derived(
-    state === 'running' ? t('status.runningFor', { m: minutes }) : t(`status.${state}` as 'status.ready')
+    custom ? custom : state === 'running' ? t('status.runningFor', { m: minutes }) : t(`status.${state}` as 'status.ready')
   );
-  const pulse = $derived(state === 'launching' || state === 'running');
+  const pulse = $derived(state === 'starting' || state === 'running');
 </script>
 
 <span
@@ -38,7 +40,7 @@
   .pulse { animation: pulse 2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.35; } }
   .ready, .running { background: var(--stage-ok-bg); color: var(--stage-ok); }
-  .launching, .missing { background: var(--stage-warn-bg); color: var(--stage-warn); }
+  .starting, .missing { background: var(--stage-warn-bg); color: var(--stage-warn); }
   .stopped { background: var(--stage-neutral-bg); color: var(--stage-text-2); }
   .crashed { background: var(--stage-bad-bg); color: var(--stage-danger); }
 </style>

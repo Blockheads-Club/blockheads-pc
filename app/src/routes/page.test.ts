@@ -102,7 +102,7 @@ describe('page', () => {
     mock.api.boot = vi.fn(async () => makeBoot());
     let started = false;
     mock.api.gameStart = vi.fn(async () => { started = true; });
-    mock.api.gamePoll = vi.fn(async () => (started ? makeSnap({ state: 'launching', running_secs: 0 }) : makeSnap()));
+    mock.api.gamePoll = vi.fn(async () => (started ? makeSnap({ state: 'starting', running_secs: 0 }) : makeSnap()));
     render(Page);
     await screen.findByRole('heading', { name: /The Blockheads/ });
     // F1 and Ctrl+L open dialogs, Ctrl+L again closes the log.

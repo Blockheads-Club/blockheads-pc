@@ -72,6 +72,7 @@ export class AppStore {
   focusAction = $state<ActionId | null>(null);
   private logNext = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private fast: ReturnType<typeof setInterval> | undefined;
   private slow: ReturnType<typeof setTimeout> | undefined;
   private updTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -89,8 +90,19 @@ export class AppStore {
     return this.active && this.game.embedded === true;
   }
 
+  /** The game is booting: the loading screen shows until its first frame. */
+  get starting(): boolean {
+    return this.state === 'starting';
+  }
+
+  /** The last start ended before the first frame (crash, or stuck for a minute): the loading screen shows the error. */
+  get bootFailed(): boolean {
+    const p = this.game.progress;
+    return this.state === 'crashed' && !!p && !p.ready;
+  }
+
   get active(): boolean {
-    return this.state === 'launching' || this.state === 'running';
+    return this.state === 'starting' || this.state === 'running';
   }
 
   get version(): string {
@@ -425,9 +437,20 @@ export class AppStore {
       this.logNext = s.next;
       if (s.lines.length) this.log = [...this.log, ...s.lines].slice(-MAX_LOG);
       this.game = s;
-      if (this.screen === 'playing' && !this.active) this.screen = 'home';
+      if (this.screen === 'playing' && !this.active && !this.bootFailed) this.screen = 'home';
+      this.speedPolling();
     } catch {
       // The backend may be busy shutting down; the next poll tries again.
+    }
+  }
+
+  /** Poll four times a second while the game boots so the percentage moves smoothly. */
+  private speedPolling() {
+    if (this.starting && !this.fast) {
+      this.fast = setInterval(() => void this.poll(), 250);
+    } else if (!this.starting && this.fast) {
+      clearInterval(this.fast);
+      this.fast = undefined;
     }
   }
 
@@ -439,7 +462,8 @@ export class AppStore {
   stopPolling() {
     clearInterval(this.timer);
     clearInterval(this.updTimer);
-    this.timer = this.updTimer = undefined;
+    clearInterval(this.fast);
+    this.timer = this.updTimer = this.fast = undefined;
   }
 
   async copyLog() {

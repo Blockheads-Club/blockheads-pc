@@ -22,3 +22,10 @@ export function bytes(n: number): string {
   const fmt = new Intl.NumberFormat(i18n.lang, { maximumFractionDigits: u < 1 ? 0 : 1 });
   return `${fmt.format(v)} ${units[u]}`;
 }
+
+/** Time left for the loading screen: 1 s steps under 10 s, 5 s steps above, never more than "about 1 min". */
+export function etaText(secs: number): string {
+  if (secs > 57.5) return t('load.etaMin');
+  const s = secs < 10 ? Math.max(1, Math.round(secs)) : Math.round(secs / 5) * 5;
+  return s >= 60 ? t('load.etaMin') : t('load.eta', { s });
+}

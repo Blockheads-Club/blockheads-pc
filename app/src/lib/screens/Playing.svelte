@@ -3,6 +3,7 @@
   import { api } from '../api';
   import { t } from '../i18n.svelte';
   import { store } from '../store.svelte';
+  import LoadingView from '../parts/LoadingView.svelte';
   import BindingChips from '../ui/BindingChips.svelte';
   import Icon from '../ui/Icon.svelte';
   import StatusPill from '../ui/StatusPill.svelte';
@@ -14,6 +15,45 @@
   let view = $state<HTMLElement>();
   const embedded = $derived(store.embedded);
   const hideBars = $derived(embedded && store.fullscreen);
+
+  /** The loading screen shows only if booting takes longer than this (a faster start goes straight to the game). */
+  const SHOW_AFTER_MS = 400;
+  /** The loader fades out over this long once the first frame is up (the CSS transition has the same length). */
+  const HANDOVER_MS = 240;
+  const starting = $derived(store.starting);
+  const failed = $derived(store.bootFailed);
+  const ready = $derived(store.state === 'running' && !!store.game.progress?.ready);
+  let shown = $state(false);
+  let handover = $state(false);
+  const loader = $derived((shown && starting) || failed || handover);
+  const logTail = $derived(store.log.slice(-3));
+
+  $effect(() => {
+    if (starting) {
+      const id = setTimeout(() => (shown = true), SHOW_AFTER_MS);
+      return () => clearTimeout(id);
+    }
+    if (!ready) shown = false;
+  });
+  // First frame: the loader fades out, the game (already rendering behind it) takes the focus.
+  $effect(() => {
+    if (!ready) {
+      handover = false;
+      return;
+    }
+    if (!shown) return;
+    handover = true;
+    const id = setTimeout(() => {
+      handover = false;
+      shown = false;
+      view?.focus();
+    }, HANDOVER_MS);
+    return () => clearTimeout(id);
+  });
+
+  function onkey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && starting && store.dialog === null) void store.stop();
+  }
 
   // Tell the backend where the stage starts: 0 when the bars are hidden (fullscreen), -1 while a dialog needs the
   // whole window (the game view steps aside).
@@ -28,15 +68,21 @@
   onMount(() => () => void api.embedLayout(-1).catch(() => {}));
 </script>
 
+<svelte:window onkeydown={onkey} />
+
 <div class="wrap">
   {#if !hideBars}
   <nav class="strip" aria-label={t('play.controls')}>
     <button class="sb" title={t('play.homeTitle')} onclick={() => store.go('home')}><Icon name="home" />{t('play.home')}</button>
-    <StatusPill state={store.game.state} {minutes} />
+    <StatusPill state={failed ? 'crashed' : store.game.state} label={failed ? t('status.failed') : undefined} {minutes} />
     <span class="sp"></span>
     <button class="sb ic" aria-label={t('home.q.join')} onclick={() => (store.dialog = 'join')}><Icon name="help" /></button>
     <button class="sb ic" aria-label={t('home.q.logs')} onclick={() => (store.dialog = 'logs')}><Icon name="terminal" /></button>
-    <button class="sb stop" onclick={() => store.stop()}><Icon name="stop" />{t('home.stop')}</button>
+    {#if starting}
+      <button class="sb cancel" onclick={() => store.stop()}><Icon name="x" />{t('common.cancel')}</button>
+    {:else if !failed}
+      <button class="sb stop" onclick={() => store.stop()}><Icon name="stop" />{t('home.stop')}</button>
+    {/if}
   </nav>
   {/if}
   <main class="view" id="main" tabindex="-1" aria-label={t('play.view')} bind:this={view}>
@@ -55,6 +101,20 @@
       <p class="d small">{t('play.focus')}</p>
     </div>
     {/if}
+    {#if loader}
+      <LoadingView
+        progress={store.game.progress}
+        version={store.version}
+        {failed}
+        {handover}
+        fullscreen={hideBars}
+        {logTail}
+        oncancel={() => store.stop()}
+        onretry={() => store.play()}
+        oncopylog={() => store.copyLog()}
+        onhome={() => store.go('home')}
+      />
+    {/if}
   </main>
 </div>
 
@@ -66,8 +126,9 @@
   .sb:hover { background: rgba(255, 255, 255, 0.1); }
   .sb:focus-visible { outline: 3px solid #86b9ff; outline-offset: 2px; }
   .sb.ic { width: 34px; padding: 0; justify-content: center; }
+  .sb.cancel { background: #3a312b; }
   .sb.stop { background: #ff8f80; color: #1c0d06; }
-  .view { flex: 1; min-height: 0; display: grid; place-items: center; background: #000; padding: 16px; outline: none; }
+  .view { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; background: #000; padding: 16px; outline: none; }
   .game {
     width: min(100%, 720px);
     background: repeating-linear-gradient(45deg, #16120f 0 14px, #1b1613 14px 28px);

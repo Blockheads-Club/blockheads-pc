@@ -35,7 +35,7 @@ afterEach(() => cleanup());
 
 describe('Home', () => {
   it('is ready to play: Play starts the game', async () => {
-    mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'launching', running_secs: 0 }));
+    mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'starting', running_secs: 0 }));
     render(Home);
     expect(screen.getByRole('heading', { name: /The Blockheads/ })).toHaveTextContent('1.7.6');
     expect(screen.getByRole('status', { name: 'Game status: Ready to play' })).toBeVisible();
@@ -45,7 +45,14 @@ describe('Home', () => {
   });
 
   it('shows the launch progress', () => {
-    store.game = makeSnap({ state: 'launching', running_secs: 0 });
+    store.game = makeSnap({ state: 'starting', running_secs: 0 });
+    const { unmount: u0 } = render(Home);
+    expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+    u0();
+    store.game = makeSnap({ state: 'starting', running_secs: 0, progress: { percent: 42.7, phase: 'constructors', step: 3, elapsed_secs: 4, eta_secs: null, slow: false, stalled: false, step_secs: [], ready: false } });
+    render(Home);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42');
+    cleanup();
     render(Home);
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
     expect(screen.getByRole('progressbar', { name: 'Starting the game' })).toBeVisible();
@@ -154,7 +161,7 @@ describe('Home', () => {
     expect(store.dialog).toBe('join');
     await click('Game file');
     cleanup();
-    for (const state of ['running', 'crashed', 'stopped', 'launching', 'missing'] as const) {
+    for (const state of ['running', 'crashed', 'stopped', 'starting', 'missing'] as const) {
       store.game = makeSnap({ state, running_secs: 5, exit_code: 1 });
       const { unmount } = render(Home);
       expect(screen.getByRole('status', { name: /Game status/ })).toBeVisible();

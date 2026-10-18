@@ -250,7 +250,7 @@ describe('progress, spinner and status', () => {
 
   it('names every game status', () => {
     for (const [state, label] of [
-      ['ready', 'Ready to play'], ['launching', 'Starting'], ['running', 'Running · 12 min'],
+      ['ready', 'Ready to play'], ['starting', 'Starting…'], ['running', 'Running · 12 min'],
       ['stopped', 'Stopped'], ['crashed', 'Crashed'], ['missing', 'Game file missing']
     ] as const) {
       const { unmount } = render(StatusPill, { state, minutes: 12 });
