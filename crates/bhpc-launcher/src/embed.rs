@@ -103,6 +103,27 @@ pub fn frame_path(dir: &Path, n: u32) -> PathBuf {
     dir.join(format!("bhpc-frame-{}-{n}", std::process::id()))
 }
 
+/// Deletes frame files in `dir` whose launcher process (the pid in the name) is gone, e.g. after a crash or kill.
+/// `alive` says whether a pid still runs. Returns how many files were removed.
+pub fn clean_stale(dir: &Path, alive: &dyn Fn(u32) -> bool) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let pid = name.strip_prefix("bhpc-frame-").and_then(|r| r.split('-').next()).and_then(|p| p.parse().ok());
+            pid.is_some_and(|p| !alive(p))
+        })
+        .filter(|e| std::fs::remove_file(e.path()).is_ok())
+        .count()
+}
+
+/// Whether a process with this pid runs (Linux: `/proc/<pid>`; elsewhere every pid counts as alive, so nothing is
+/// cleaned up).
+pub fn pid_alive(pid: u32) -> bool {
+    !cfg!(target_os = "linux") || Path::new(&format!("/proc/{pid}")).exists()
+}
+
 /// One frame as the reader sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameInfo {

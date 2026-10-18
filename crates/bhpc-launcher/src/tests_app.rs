@@ -461,7 +461,15 @@ mod ops_tests {
         c.save(&paths.config()).unwrap();
         let plan = launch_plan(&paths, exe).unwrap();
         assert!(plan.program.starts_with("/opt/app") && plan.env.is_empty());
-        assert_eq!(plan.args, ["--config", paths.config().to_str().unwrap()]);
+        assert_eq!(plan.args[..2], ["--config", paths.config().to_str().unwrap()]);
+        assert_eq!(plan.args[2], "--title");
+        assert_eq!(plan.title, "Blockheads PC · Playing The Blockheads (unknown build)");
+        assert_eq!(plan.args[3], plan.title);
+        assert_eq!(plan.window, c.window);
+        assert_eq!(plan.keys, c.keys);
+        assert_eq!(plan.args_for(None), plan.args);
+        let embedded = plan.args_for(Some(Path::new("/run/f")));
+        assert_eq!(embedded[plan.args.len()..], ["--embed", "/run/f"]);
         Prefs { game_sound: false, ..Prefs::default() }.save(&paths.prefs()).unwrap();
         assert_eq!(launch_plan(&paths, exe).unwrap().env, [("SDL_AUDIODRIVER".to_string(), "dummy".to_string())]);
         c.window.width = 1;
@@ -562,6 +570,22 @@ mod embed_tests {
         .unwrap();
         assert!(r.read(&mut Vec::new()).is_err(), "slot out of range");
         assert!(frame_dir().is_dir());
+    }
+
+    #[test]
+    fn frame_files_of_dead_launchers_are_cleaned_up() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in ["bhpc-frame-111-0", "bhpc-frame-222-3", "bhpc-frame-oops", "other-file"] {
+            std::fs::write(dir.path().join(n), b"x").unwrap();
+        }
+        assert_eq!(clean_stale(dir.path(), &|pid| pid == 222), 1);
+        assert!(!dir.path().join("bhpc-frame-111-0").exists());
+        for kept in ["bhpc-frame-222-3", "bhpc-frame-oops", "other-file"] {
+            assert!(dir.path().join(kept).exists(), "{kept}");
+        }
+        assert_eq!(clean_stale(&dir.path().join("missing"), &|_| false), 0);
+        assert!(pid_alive(std::process::id()));
+        assert_eq!(pid_alive(u32::MAX - 1), !cfg!(target_os = "linux"));
     }
 
     #[test]

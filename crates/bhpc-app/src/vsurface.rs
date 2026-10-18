@@ -137,6 +137,7 @@ gl_table! {
     glClear: fn(u32);
     glDrawArrays: fn(u32, i32, i32);
     glVertexAttribPointer: fn(u32, i32, u32, u8, i32, *const c_void);
+    glReadPixels: fn(i32, i32, i32, i32, u32, u32, *mut c_void);
     glEnableVertexAttribArray: fn(u32);
     glDisableVertexAttribArray: fn(u32);
     glGetVertexAttribiv: fn(u32, u32, *mut i32);
@@ -163,6 +164,11 @@ struct Shared {
     overlay_tex: u32,
     overlay_size: (u32, u32),
     overlay_serial: Option<u64>,
+    /// Colour texture of the pixel read-back target ([`VirtualSurface::compose_read`]), its size and a number that
+    /// changes when it was recreated.
+    out_tex: u32,
+    out_size: (u32, u32),
+    out_generation: u64,
 }
 
 #[derive(Default)]
@@ -170,6 +176,8 @@ struct State {
     shared: Shared,
     /// Framebuffer object and attached generation per host context.
     fbos: HashMap<usize, (u32, u64)>,
+    /// Read-back framebuffer and attached generation per host context.
+    out_fbos: HashMap<usize, (u32, u64)>,
     /// Giving up (no GL support or an incomplete framebuffer): the window is the target.
     broken: bool,
 }
@@ -252,9 +260,52 @@ impl VirtualSurface {
             // SAFETY: as in `framebuffer`; the original GL state is restored before returning.
             unsafe {
                 ensure(g, st, ctx, size);
-                draw(g, &mut st.shared, fit(size, drawable), overlay.as_ref().map(|o| (o, drawable)));
+                draw(g, &mut st.shared, fit(size, drawable), overlay.as_ref().map(|o| (o, drawable)), 0);
             }
         });
+    }
+
+    /// Like [`VirtualSurface::compose`], but into a texture of exactly `drawable` pixels instead of the window, and
+    /// returns its pixels (RGBA, bottom row first). The window's own framebuffer is never touched, so this works when
+    /// it has the wrong size (the offscreen video driver does not resize its surface with the window).
+    pub fn compose_read(
+        &self,
+        ctx: usize,
+        drawable: (u32, u32),
+        loader: &dyn Fn(&str) -> *const c_void,
+    ) -> Option<Vec<u8>> {
+        let size = self.size()?;
+        if drawable.0 == 0 || drawable.1 == 0 {
+            return None;
+        }
+        let overlay = self.overlay.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        self.with_gl(loader, |g, st| {
+            if !st.fbos.contains_key(&ctx) {
+                return None;
+            }
+            // SAFETY: as in `framebuffer`; the original GL state is restored before returning.
+            unsafe {
+                ensure(g, st, ctx, size);
+                let target = ensure_out(g, st, ctx, drawable)?;
+                draw(g, &mut st.shared, fit(size, drawable), overlay.as_ref().map(|o| (o, drawable)), target);
+                let mut prev = 0;
+                (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut prev);
+                (g.glBindFramebuffer)(FRAMEBUFFER, target);
+                let mut px = vec![0u8; drawable.0 as usize * drawable.1 as usize * 4];
+                (g.glReadPixels)(
+                    0,
+                    0,
+                    drawable.0 as i32,
+                    drawable.1 as i32,
+                    RGBA,
+                    UNSIGNED_BYTE,
+                    px.as_mut_ptr().cast(),
+                );
+                (g.glBindFramebuffer)(FRAMEBUFFER, prev as u32);
+                Some(px)
+            }
+        })
+        .flatten()
     }
 }
 
@@ -305,6 +356,56 @@ unsafe fn ensure(g: &Gl, st: &mut State, ctx: usize, size: (u32, u32)) -> u32 {
         eprintln!("[gl] offscreen surface {}x{} for context {ctx:#x}", size.0, size.1);
     }
     fbo
+}
+
+/// The read-back framebuffer of context `ctx`, with a colour texture of `size` (recreated when the size changes).
+/// Leaves the framebuffer and texture bindings as they were.
+unsafe fn ensure_out(g: &Gl, st: &mut State, ctx: usize, size: (u32, u32)) -> Option<u32> {
+    let (mut prev_fb, mut prev_tex) = (0, 0);
+    (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut prev_fb);
+    (g.glGetIntegerv)(TEXTURE_BINDING_2D, &mut prev_tex);
+    let sh = &mut st.shared;
+    if sh.out_size != size {
+        if sh.out_tex != 0 {
+            (g.glDeleteTextures)(1, &sh.out_tex);
+        }
+        (g.glGenTextures)(1, &mut sh.out_tex);
+        (g.glBindTexture)(TEXTURE_2D, sh.out_tex);
+        (g.glTexImage2D)(
+            TEXTURE_2D,
+            0,
+            RGBA as i32,
+            size.0 as i32,
+            size.1 as i32,
+            0,
+            RGBA,
+            UNSIGNED_BYTE,
+            std::ptr::null(),
+        );
+        for (p, v) in [(TEXTURE_MIN_FILTER, LINEAR), (TEXTURE_MAG_FILTER, LINEAR)] {
+            (g.glTexParameteri)(TEXTURE_2D, p, v);
+        }
+        (g.glBindTexture)(TEXTURE_2D, prev_tex as u32);
+        sh.out_size = size;
+        sh.out_generation += 1;
+    }
+    let entry = st.out_fbos.entry(ctx).or_insert_with(|| {
+        let mut f = 0u32;
+        (g.glGenFramebuffers)(1, &mut f);
+        (f, 0)
+    });
+    if entry.1 != st.shared.out_generation {
+        (g.glBindFramebuffer)(FRAMEBUFFER, entry.0);
+        (g.glFramebufferTexture2D)(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, st.shared.out_tex, 0);
+        let complete = (g.glCheckFramebufferStatus)(FRAMEBUFFER) == FRAMEBUFFER_COMPLETE;
+        (g.glBindFramebuffer)(FRAMEBUFFER, prev_fb as u32);
+        if !complete {
+            eprintln!("[gl] read-back framebuffer incomplete");
+            return None;
+        }
+        entry.1 = st.shared.out_generation;
+    }
+    Some(entry.0)
 }
 
 /// Attach the shared storage to `fbo` and report whether the result is complete; binds `restore` afterwards.
@@ -415,8 +516,14 @@ struct Attrib {
     pointer: usize,
 }
 
-/// Draw the surface texture into framebuffer 0 inside `vp`, restoring every piece of state it touches.
-unsafe fn draw(g: &Gl, sh: &mut Shared, vp: crate::surface::Viewport, overlay: Option<(&Overlay, (u32, u32))>) {
+/// Draw the surface texture into framebuffer `target` (0: the window) inside `vp`, restoring every piece of state it touches.
+unsafe fn draw(
+    g: &Gl,
+    sh: &mut Shared,
+    vp: crate::surface::Viewport,
+    overlay: Option<(&Overlay, (u32, u32))>,
+    target: u32,
+) {
     let (mut fb, mut prog, mut buf, mut tex, mut unit) = (0, 0, 0, 0, 0);
     let (mut view, mut mask, mut clear) = ([0i32; 4], [0u8; 4], [0f32; 4]);
     (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut fb);
@@ -443,7 +550,7 @@ unsafe fn draw(g: &Gl, sh: &mut Shared, vp: crate::surface::Viewport, overlay: O
     (g.glActiveTexture)(TEXTURE0);
     (g.glGetIntegerv)(TEXTURE_BINDING_2D, &mut tex);
 
-    (g.glBindFramebuffer)(FRAMEBUFFER, 0);
+    (g.glBindFramebuffer)(FRAMEBUFFER, target);
     for c in CAPS {
         (g.glDisable)(c);
     }

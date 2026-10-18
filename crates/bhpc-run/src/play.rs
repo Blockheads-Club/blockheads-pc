@@ -221,6 +221,8 @@ struct Hooks {
     overlay: crate::overlay::OverlayFeed,
     /// In-window mode: where finished frames go.
     embed: Option<Mutex<EmbedOut>>,
+    /// The SDL window, for the read-back that does not depend on the window's own surface (in-window mode).
+    sdl: Arc<bhpc_app::sdl::SdlGl>,
 }
 
 /// Frame file and scratch buffer of the in-window mode.
@@ -229,6 +231,12 @@ struct EmbedOut {
     last: Option<Instant>,
     bgra: Vec<u8>,
 }
+
+/// The smallest edge the first reported size may have.
+const MIN_FIRST_EDGE: u32 = 64;
+
+/// How long the runner waits for the launcher to say how big its view is.
+const FIRST_SIZE_WAIT: Duration = Duration::from_secs(5);
 
 /// At most this many frames per second go to the launcher.
 const EMBED_FRAME_GAP: Duration = Duration::from_millis(15);
@@ -283,7 +291,7 @@ impl Hooks {
         if e.last.is_some_and(|t| t.elapsed() < EMBED_FRAME_GAP) {
             return;
         }
-        let Some((w, h, rgba)) = self.capture_raw() else { return };
+        let Some((w, h, rgba)) = self.sdl.compose_read() else { return };
         let EmbedOut { writer, last, bgra } = &mut *e;
         rgba_bottom_up_to_bgra(w, h, &rgba, bgra);
         match writer.publish(w, h, bgra) {
@@ -444,10 +452,22 @@ impl Backend for Watched {
 
 /// Run the game. Blocks until the window closes, the game ends or a limit is reached.
 pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
+    let flags = Arc::new(Flags::default());
+    let (tx, rx) = channel();
+    let mut cfg = cfg.clone();
     if cfg.embed.is_some() {
         // No window of our own: SDL's offscreen driver gives the GL context, the launcher shows the frames.
         std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        // The game picks its content size from the screen size once, so start with the size of the launcher's view
+        // (its first `size` command) instead of a guess.
+        let (first_tx, first_rx) = channel();
+        spawn_commands(tx.clone(), flags.clone(), first_tx);
+        match first_rx.recv_timeout(FIRST_SIZE_WAIT) {
+            Ok(size) => cfg.window = size,
+            Err(_) => eprintln!("[play] no size from the launcher yet; starting with {:?}", cfg.window),
+        }
     }
+    let cfg = &cfg;
     let (mut backend, gl) =
         SdlBackend::new(&WindowConfig { title: cfg.title.clone(), size: cfg.window, ..WindowConfig::default() })
             .map_err(|e| no_window(cfg, e))?;
@@ -460,7 +480,6 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
     let mut cfg = cfg.clone();
     (cfg.window, cfg.drawable) = (m0.logical, m0.drawable);
     let cfg = &cfg;
-    let flags = Arc::new(Flags::default());
     let mixer = Mixer::new(44100);
     let m = mixer.clone();
     if let Err(e) = backend.open_audio(44100, move |out| m.fill(out)) {
@@ -474,10 +493,6 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
                 std::thread::sleep(Duration::from_millis(10));
             }
         });
-    }
-    let (tx, rx) = channel();
-    if cfg.embed.is_some() {
-        spawn_commands(tx.clone(), flags.clone());
     }
     if !cfg.script.is_empty() {
         let (script, tx, f, dir) = (cfg.script.clone(), tx.clone(), flags.clone(), cfg.shot_dir.clone());
@@ -511,12 +526,20 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
 
 /// In-window mode: read the launcher's commands from stdin. A size becomes a window resize, everything else a window
 /// event; end of input (the launcher is gone) or `quit` ends the run.
-fn spawn_commands(tx: std::sync::mpsc::Sender<Event>, flags: Arc<Flags>) {
+fn spawn_commands(
+    tx: std::sync::mpsc::Sender<Event>,
+    flags: Arc<Flags>,
+    first_size: std::sync::mpsc::Sender<(u32, u32)>,
+) {
     std::thread::spawn(move || {
         for line in std::io::BufRead::lines(std::io::stdin().lock()) {
             let Ok(line) = line else { break };
             match Cmd::parse(&line) {
                 Some(Cmd::Size { width, height }) => {
+                    // A view that is not laid out yet reports a sliver; the game must not start with that.
+                    if width >= MIN_FIRST_EDGE && height >= MIN_FIRST_EDGE {
+                        let _ = first_size.send((width, height));
+                    }
                     *flags.resize.lock().unwrap_or_else(PoisonError::into_inner) = Some((width.max(1), height.max(1)));
                 }
                 Some(Cmd::Quit) => break,
@@ -646,6 +669,7 @@ fn boot(
     flags: &Arc<Flags>,
     mixer: Mixer,
 ) -> Result<PlayReport, RunError> {
+    let sdl = gl.clone();
     let window: Arc<dyn GlWindow> = gl;
     let dl_slot: Arc<Mutex<Option<DlTable>>> = Arc::new(Mutex::new(None));
     let mut parts: Option<Parts> = None;
@@ -692,6 +716,7 @@ fn boot(
             shot: shot.clone(),
             shot_at,
             overlay: crate::overlay::OverlayFeed::default(),
+            sdl: sdl.clone(),
             embed: embed_out.lock().unwrap_or_else(PoisonError::into_inner).take().map(Mutex::new),
         });
         // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.

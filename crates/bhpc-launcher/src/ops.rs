@@ -127,11 +127,28 @@ pub fn move_data_dir(paths: &Paths, to: &Path) -> Result<LaunchConfig, LauncherE
 }
 
 /// A process to start: program, arguments and extra environment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LaunchPlan {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// Window title of the game: "Blockheads PC · Playing The Blockheads 1.7.4".
+    pub title: String,
+    /// The game window size and fullscreen setting, for the view inside the launcher.
+    pub window: crate::window::WindowOptions,
+    /// The key bindings (the launcher itself handles the fullscreen one in the in-window view).
+    pub keys: crate::keys::KeyBindings,
+}
+
+impl LaunchPlan {
+    /// The arguments for a game in a window of its own, or with `embed` (a frame file) for the launcher's window.
+    pub fn args_for(&self, embed: Option<&Path>) -> Vec<String> {
+        let mut a = self.args.clone();
+        if let Some(f) = embed {
+            a.extend(["--embed".to_string(), f.display().to_string()]);
+        }
+        a
+    }
 }
 
 /// What to run for "Play": the sidecar next to the launcher with `--config <launcher.toml>`. The game file is
@@ -140,7 +157,8 @@ pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, Launcher
     let config =
         LaunchConfig::load(&paths.config())?.ok_or_else(|| LauncherError::Io("setup is not finished".into()))?;
     config.window.validate().map_err(LauncherError::Window)?;
-    apk::validate(&config.apk, config.force).map_err(LauncherError::Apk)?;
+    let info = apk::validate(&config.apk, config.force).map_err(LauncherError::Apk)?;
+    let version = info.release.map(bhpc_loader::apk::Release::version).unwrap_or("(unknown build)");
     let prefs = Prefs::load(&paths.prefs())?;
     let mut env = Vec::new();
     if !prefs.game_sound {
@@ -148,7 +166,15 @@ pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, Launcher
     }
     Ok(LaunchPlan {
         program: sidecar_path(exe_dir),
-        args: vec!["--config".to_string(), paths.config().display().to_string()],
+        args: vec![
+            "--config".to_string(),
+            paths.config().display().to_string(),
+            "--title".to_string(),
+            format!("Blockheads PC · Playing The Blockheads {version}"),
+        ],
         env,
+        title: format!("Blockheads PC · Playing The Blockheads {version}"),
+        window: config.window,
+        keys: config.keys,
     })
 }
