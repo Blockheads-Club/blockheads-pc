@@ -8,7 +8,7 @@
   import Button from '../ui/Button.svelte';
 
   const ACTIONS: ActionId[] = ['touch', 'pan', 'zoom', 'pinch', 'back', 'fullscreen'];
-  /** Show the orange "changed" dot and per-row reset (Settings), not in setup. */
+  /** Show the orange "changed" dot and its legend (Settings), not in setup. Per-row reset shows in both. */
   let { marks = false }: { marks?: boolean } = $props();
 
   let listening = $state<ActionId | null>(null);
@@ -90,8 +90,8 @@
             <span data-cancel><Button size="sm" onclick={() => (listening = null)}>{t('common.cancel')}</Button></span>
           {:else}
             <Button size="sm" label={t('ctl.changeFor', { action: names(a) })} onclick={() => listen(a)}>{t('ctl.change')}</Button>
-            {#if marks && changed(a)}
-              <Button size="sm" variant="ghost" icon="reset" label={t('ctl.resetOne', { action: names(a) })} onclick={() => store.resetBinding(a)} />
+            {#if changed(a)}
+              <Button size="sm" variant="ghost" icon="reset" label={t('ctl.resetOne', { action: names(a) })} onclick={() => store.resetBinding(a)}>{t('ctl.reset')}</Button>
             {/if}
           {/if}
         </span>
