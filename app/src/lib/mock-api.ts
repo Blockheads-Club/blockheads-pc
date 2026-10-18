@@ -74,6 +74,7 @@ export function makeWin(over: Record<string, unknown> = {}) {
     toggleMaximize: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     isMaximized: vi.fn(async () => false),
+    isFullscreen: vi.fn(async () => false),
     onResized: vi.fn(async (cb: () => void) => {
       hooks.resize = cb;
       return () => {};

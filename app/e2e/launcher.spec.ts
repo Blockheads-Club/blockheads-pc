@@ -97,3 +97,15 @@ test('the window buttons talk to the window', async ({ page }) => {
   const calls = await page.evaluate(() => (window as any).__calls.map((c: unknown[]) => c[0]));
   expect(calls).toEqual(expect.arrayContaining(['plugin:window|minimize', 'plugin:window|toggle_maximize']));
 });
+
+test('rounded frame, and the title bar buttons call the window API', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.frame.round')).toBeVisible();
+  const called = (cmd: string) => page.evaluate((c) => (window as any).__calls.some((x: unknown[]) => x[0] === c), cmd);
+  await page.getByRole('button', { name: 'Minimize window' }).click();
+  await page.getByRole('button', { name: /Maximize window/ }).click();
+  await page.getByRole('button', { name: 'Close window' }).click();
+  expect(await called('plugin:window|minimize')).toBe(true);
+  expect(await called('plugin:window|toggle_maximize')).toBe(true);
+  expect(await called('plugin:window|close')).toBe(true);
+});

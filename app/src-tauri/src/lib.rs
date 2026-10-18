@@ -123,9 +123,7 @@ async fn import_saves(source: String, overwrite: bool, data_dir: String) -> Res<
 
 #[tauri::command]
 async fn data_size(path: String) -> u64 {
-    tauri::async_runtime::spawn_blocking(move || bhpc_launcher::datadir::dir_size(Path::new(&path)))
-        .await
-        .unwrap_or(0)
+    tauri::async_runtime::spawn_blocking(move || bhpc_launcher::datadir::dir_size(Path::new(&path))).await.unwrap_or(0)
 }
 
 #[tauri::command]
@@ -198,6 +196,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(App::default())
+        .setup(|app| {
+            // Created hidden (tauri.conf.json): GTK warns when the frameless window gets its client-side
+            // title bar after it was already realized, which showing it first would do.
+            if let Some(w) = app.get_webview_window("main") {
+                w.show()?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             boot,

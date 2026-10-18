@@ -53,6 +53,7 @@ export const win = {
   toggleMaximize: () => getCurrentWindow().toggleMaximize(),
   close: () => getCurrentWindow().close(),
   isMaximized: () => getCurrentWindow().isMaximized(),
+  isFullscreen: () => getCurrentWindow().isFullscreen(),
   onResized: (cb: () => void) => getCurrentWindow().onResized(cb),
   onFocus: (cb: (focused: boolean) => void) => getCurrentWindow().onFocusChanged((e) => cb(e.payload)),
   onCloseRequested: (cb: (prevent: () => void) => void) =>

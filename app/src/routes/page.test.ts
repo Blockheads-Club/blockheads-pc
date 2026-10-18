@@ -190,8 +190,28 @@ describe('page', () => {
     expect(await screen.findByRole('alertdialog')).toBeVisible();
   });
 
+  it('rounds the window except maximized, fullscreen or native (macOS)', async () => {
+    mock.api.boot = vi.fn(async () => makeBoot());
+    const { container } = render(Page);
+    const frame = () => container.querySelector('.frame') as HTMLElement;
+    await waitFor(() => expect(mock.win.isFullscreen).toHaveBeenCalled());
+    expect(frame().classList.contains('round')).toBe(true);
+    mock.win.isMaximized = vi.fn(async () => true);
+    hooks.resize?.();
+    await waitFor(() => expect(frame().classList.contains('round')).toBe(false));
+    mock.win.isMaximized = vi.fn(async () => false);
+    mock.win.isFullscreen = vi.fn(async () => true);
+    hooks.resize?.();
+    await waitFor(() => expect(frame().classList.contains('round')).toBe(false));
+    mock.win.isFullscreen = vi.fn(async () => { throw new Error('no window'); });
+    hooks.resize?.();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(frame().classList.contains('round')).toBe(false);
+  });
+
   it('survives a window without close events and picks the OS from the user agent', async () => {
     mock.win.onCloseRequested = vi.fn(async () => { throw new Error('no window'); });
+    mock.win.onResized = vi.fn(async () => { throw new Error('no window'); });
     mock.api.boot = vi.fn(async () => makeBoot());
     mock.api.appInfo = vi.fn(async () => { throw 'denied'; });
     const ua = vi.spyOn(navigator, 'userAgent', 'get');

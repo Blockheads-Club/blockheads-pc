@@ -133,6 +133,12 @@ export async function mockTauri(page: Page) {
       'plugin:window|minimize': () => undefined,
       'plugin:window|toggle_maximize': () => undefined,
       'plugin:window|close': () => undefined,
+      'plugin:window|is_maximized': () => false,
+      'plugin:window|is_fullscreen': () => false,
+      'plugin:window|minimize': () => undefined,
+      'plugin:window|toggle_maximize': () => undefined,
+      'plugin:window|close': () => undefined,
+      'plugin:window|destroy': () => undefined,
       'plugin:event|listen': () => 1,
       'plugin:event|unlisten': () => undefined
     };

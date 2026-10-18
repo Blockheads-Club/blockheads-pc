@@ -53,8 +53,16 @@
     shown = key;
   });
 
+  /** Maximized or fullscreen: the window fills the screen, so no rounded corners. */
+  let square = $state(false);
+  const round = $derived(os !== 'macos' && !square);
+
   onMount(() => {
     initTheme();
+    const sync = () => void Promise.all([win.isMaximized(), win.isFullscreen()]).then(([m, f]) => (square = m || f)).catch(() => {});
+    sync();
+    let offResize: (() => void) | undefined;
+    void win.onResized(sync).then((u) => (offResize = u)).catch(() => {});
     const unwatch = watchViewport();
     let off: (() => void) | undefined;
     void win.onCloseRequested((prevent) => store.requestClose(prevent)).then((u) => (off = u)).catch(() => {});
@@ -62,6 +70,7 @@
     return () => {
       unwatch();
       off?.();
+      offResize?.();
       store.stopPolling();
     };
   });
@@ -98,6 +107,7 @@
 <svelte:window onkeydown={keydown} />
 
 <a class="skip" href="#main">{t('common.skipContent')}</a>
+<div class={['frame', round && 'round']}>
 <div class="win">
   <TitleBar {os} {ctx} {onStage} native={store.info?.native_controls ?? false} />
   <div class="content">
@@ -130,8 +140,17 @@
 {#if store.dialog === 'import'}<ImportDialog />{/if}
 {#if store.dialog === 'close'}<CloseDialog />{/if}
 <Toasts />
+</div>
 
 <style>
-  .win { height: 100vh; height: 100dvh; display: flex; flex-direction: column; background: var(--bg); }
+  /* The native window is transparent on Windows and Linux; this frame draws the rounded window (design: 12px).
+     clip-path also clips the fixed dialogs and their scrim to the corners. */
+  .frame { position: relative; height: 100vh; height: 100dvh; }
+  .frame.round { clip-path: inset(0 round 12px); }
+  .frame.round::after {
+    content: ''; position: fixed; inset: 0; border: 1px solid var(--line-strong); border-radius: 12px;
+    pointer-events: none; z-index: 1000;
+  }
+  .win { height: 100%; display: flex; flex-direction: column; background: var(--bg); }
   .content { flex: 1; min-height: 0; overflow: auto; position: relative; }
 </style>
