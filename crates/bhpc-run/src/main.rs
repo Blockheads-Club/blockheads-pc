@@ -155,6 +155,19 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
     if let Some((w, h)) = opt(args, "--window").and_then(|v| v.split_once('x')) {
         cfg.window = (w.parse().unwrap_or(1024), h.parse().unwrap_or(768));
     }
+    match bhpc_run::embed::parse_play_flags(args) {
+        Ok(f) => {
+            cfg.fullscreen = f.fullscreen;
+            cfg.vsync = f.vsync;
+            cfg.title = f.title.unwrap_or(cfg.title);
+            cfg.bindings = f.bindings;
+            cfg.embed = f.embed;
+        }
+        Err(e) => {
+            let _ = writeln!(stderr, "bhpc-run: {e}");
+            return 2;
+        }
+    }
     cfg.shot = opt(args, "--shot").map(Into::into);
     if let Some(n) = opt(args, "--shot-at").and_then(|v| v.parse().ok()) {
         cfg.shot_at = n;
@@ -230,7 +243,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
         }
         Err(e) => {
             let _ = writeln!(stderr, "bhpc-run: {e}");
-            1
+            e.exit_code()
         }
     }
 }

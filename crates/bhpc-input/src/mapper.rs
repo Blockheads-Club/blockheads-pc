@@ -1,6 +1,8 @@
 //! The stateful host-to-guest mapping.
 
-use crate::event::{EventSink, GuestEvent, HostAction, HostEvent, HostKey, Lifecycle, Mods, MouseButton};
+use crate::event::{
+    Bindings, EventSink, GuestEvent, HostAction, HostEvent, HostKey, Input, Lifecycle, Mods, MouseButton,
+};
 use crate::keymap;
 use crate::text::TextModel;
 
@@ -61,6 +63,8 @@ pub struct Config {
     pub pinch_max_radius: f32,
     /// A wheel pinch ends when no wheel event arrived for this long.
     pub pinch_idle_ms: i64,
+    /// What the buttons, wheel and keys do.
+    pub bindings: Bindings,
 }
 
 impl Default for Config {
@@ -74,6 +78,7 @@ impl Default for Config {
             pinch_min_radius: 20.0,
             pinch_max_radius: 400.0,
             pinch_idle_ms: 150,
+            bindings: Bindings::default(),
         }
     }
 }
@@ -181,7 +186,7 @@ impl InputMapper {
                     self.end_gesture(now_ms, sink);
                 }
             }
-            HostEvent::Wheel { dy, x, y } => self.wheel(dy, self.to_content(x, y), now_ms, sink),
+            HostEvent::Wheel { dy, x, y, mods } => self.wheel(dy, self.to_content(x, y), mods, now_ms, sink),
             HostEvent::Key { key, pressed, repeat, mods } => self.key(key, pressed, repeat, mods, now_ms, sink),
             HostEvent::TextInput(s) => self.insert_text(&s, sink),
             // A desktop game keeps running unfocused. Android's resign-active would pause the game (it shows its pause
@@ -265,15 +270,26 @@ impl InputMapper {
             return;
         }
         self.pos = p;
-        match button {
-            MouseButton::Left if mods.ctrl => {
+        let b = &self.cfg.bindings;
+        let input = Input::Mouse(button);
+        // The most specific binding that fires wins; on a tie the order pinch, touch, pan decides.
+        let picked = [(0, &b.pinch), (1, &b.touch), (2, &b.pan)]
+            .into_iter()
+            .filter(|(_, t)| t.fires(input, mods))
+            .fold(None, |best: Option<(usize, usize)>, (i, t)| match best {
+                Some((_, w)) if w >= t.weight() => best,
+                _ => Some((i, t.weight())),
+            })
+            .map(|(i, _)| i);
+        match picked {
+            Some(0) => {
                 let r = self.cfg.pinch_start_radius;
                 let g = Gesture::Pinch { center: p, radius: r, anchor: Some((p, r)), last_wheel_ms: now_ms };
                 self.begin_gesture(g, Some(button), now_ms, sink);
             }
-            MouseButton::Left => self.begin_gesture(Gesture::Touch, Some(button), now_ms, sink),
-            MouseButton::Right => self.begin_gesture(Gesture::Pan, Some(button), now_ms, sink),
-            MouseButton::Middle => {}
+            Some(1) => self.begin_gesture(Gesture::Touch, Some(button), now_ms, sink),
+            Some(_) => self.begin_gesture(Gesture::Pan, Some(button), now_ms, sink),
+            None => {}
         }
     }
 
@@ -295,7 +311,10 @@ impl InputMapper {
         }
     }
 
-    fn wheel(&mut self, dy: f32, p: Pt, now_ms: i64, sink: &mut dyn EventSink) {
+    fn wheel(&mut self, dy: f32, p: Pt, mods: Mods, now_ms: i64, sink: &mut dyn EventSink) {
+        if !self.cfg.bindings.zoom.fires(Input::Wheel, mods) {
+            return;
+        }
         if matches!(self.gesture, Gesture::None) {
             self.pos = p;
             let g =
@@ -315,12 +334,21 @@ impl InputMapper {
     // ---------- keyboard and text ----------
 
     fn key(&mut self, key: HostKey, pressed: bool, repeat: bool, mods: Mods, now_ms: i64, sink: &mut dyn EventSink) {
-        if key == HostKey::F11 {
+        let b = self.cfg.bindings;
+        if b.fullscreen.fires(Input::Key(key), mods) {
             if pressed && !repeat {
                 sink.host_action(HostAction::ToggleFullscreen);
             }
             return;
         }
+        // The back binding stands for the Android back key; the Escape key itself is only that when it is bound.
+        let key = if b.back.fires(Input::Key(key), mods) {
+            HostKey::Escape
+        } else if key == HostKey::Escape {
+            return;
+        } else {
+            key
+        };
         if key == HostKey::Escape && repeat {
             return;
         }

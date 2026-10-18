@@ -10,11 +10,13 @@
 //! * [`prefs`]: launcher preferences (language, theme, ...) and the config directory layout.
 //! * [`datadir`]: data folder size and copy.
 //! * [`ops`]: the operations behind the app's commands.
+//! * [`embed`]: playing inside the launcher window (frame file, input commands).
 //! * [`session`]: spawn and supervise `bhpc-run`, keep its log.
 
 pub mod apk;
 pub mod config;
 pub mod datadir;
+pub mod embed;
 pub mod import;
 pub mod keys;
 pub mod ops;

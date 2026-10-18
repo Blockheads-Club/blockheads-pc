@@ -17,7 +17,7 @@
 //! | focus lost | cancels a touch in progress (no lifecycle: the game keeps running unfocused) |
 //! | minimise / restore | the `Lifecycle` natives (resign active + background / foreground + become active) |
 //! | resize | `SurfaceChanged` (`nativeOnSurfaceChanged` + `nativeRootGeometryChanged`) |
-//! | F11 / window close | [`HostAction::ToggleFullscreen`] / [`HostAction::Quit`] |
+//! | fullscreen binding (F11) / window close | [`HostAction::ToggleFullscreen`] / [`HostAction::Quit`] |
 //!
 //! The long press of the game is a held left button; it needs no mapping.
 
@@ -27,7 +27,8 @@ mod mapper;
 pub mod text;
 
 pub use event::{
-    EventSink, GuestEvent, HostAction, HostEvent, HostKey, Lifecycle, Mods, MouseButton, Recorder, Target, KEYCODE_BACK,
+    Bindings, EventSink, GuestEvent, HostAction, HostEvent, HostKey, Input, Lifecycle, Mods, MouseButton, Recorder,
+    Target, Trigger, KEYCODE_BACK,
 };
 pub use mapper::{Config, Geometry, InputMapper};
 

@@ -34,7 +34,7 @@ pub fn host_event(ev: &Event) -> Option<HostEvent> {
             };
             HostEvent::MouseButton { button, pressed: *pressed, x: *x, y: *y, mods: Mods::default() }
         }
-        Event::Wheel { dy, .. } => HostEvent::Wheel { dy: *dy, x: 0.0, y: 0.0 },
+        Event::Wheel { dy, .. } => HostEvent::Wheel { dy: *dy, x: 0.0, y: 0.0, mods: Mods::default() },
         Event::Key { key, pressed, repeat, mods: m } => {
             HostEvent::Key { key: host_key(*key), pressed: *pressed, repeat: *repeat, mods: mods(m) }
         }
@@ -60,25 +60,7 @@ pub fn coalesce_moves(events: Vec<Event>) -> Vec<Event> {
 
 /// HID usage id (SDL scancode) to the keys the mapper knows.
 pub fn host_key(k: Key) -> HostKey {
-    match k.0 {
-        n @ 4..=29 => HostKey::Char((b'a' + (n - 4) as u8) as char),
-        n @ 30..=38 => HostKey::Char((b'1' + (n - 30) as u8) as char),
-        39 => HostKey::Char('0'),
-        40 => HostKey::Enter,
-        41 => HostKey::Escape,
-        42 => HostKey::Backspace,
-        43 => HostKey::Tab,
-        44 => HostKey::Space,
-        68 => HostKey::F11,
-        74 => HostKey::Home,
-        76 => HostKey::Delete,
-        77 => HostKey::End,
-        79 => HostKey::Right,
-        80 => HostKey::Left,
-        81 => HostKey::Down,
-        82 => HostKey::Up,
-        _ => HostKey::Other,
-    }
+    bhpc_input::keymap::host_key_from_hid(k.0)
 }
 
 /// A position in content pixels (what touches carry) as a position in the screen pixels the Java views are laid out

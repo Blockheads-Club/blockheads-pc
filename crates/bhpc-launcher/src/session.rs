@@ -2,9 +2,10 @@
 
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -108,6 +109,8 @@ struct Running {
     child: Child,
     started: Instant,
     readers: Vec<JoinHandle<()>>,
+    /// Lines for the game's stdin (see [`Session::input`]).
+    input: Option<Sender<String>>,
     stopping: bool,
 }
 
@@ -142,6 +145,20 @@ fn pump(source: impl Read + Send + 'static, log: Arc<Mutex<LogBuffer>>) -> JoinH
             buf.clear();
         }
     })
+}
+
+/// Writes every line sent to the returned handle to `sink`, until the handle (and its clones) are dropped or the
+/// sink fails. Closing the sink is how the game learns that the launcher is gone.
+fn feed(mut sink: impl Write + Send + 'static) -> Sender<String> {
+    let (tx, rx) = channel::<String>();
+    std::thread::spawn(move || {
+        for line in rx {
+            if writeln!(sink, "{line}").and_then(|()| sink.flush()).is_err() {
+                break;
+            }
+        }
+    });
+    tx
 }
 
 /// The game runner is a console program: do not flash a console window when the (windowed) launcher starts it.
@@ -179,7 +196,7 @@ impl Session {
         command
             .args(args)
             .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         hide_console(&mut command);
@@ -188,8 +205,16 @@ impl Session {
         let mut readers = Vec::new();
         readers.extend(child.stdout.take().map(|s| pump(s, self.log.clone())));
         readers.extend(child.stderr.take().map(|s| pump(s, self.log.clone())));
-        self.run = Some(Running { child, started: Instant::now(), readers, stopping: false });
+        let input = child.stdin.take().map(feed);
+        self.run = Some(Running { child, started: Instant::now(), readers, input, stopping: false });
         Ok(())
+    }
+
+    /// A handle for sending lines to the running game's stdin (input events of the in-window view, see
+    /// `embed::Cmd`). Lines are written by a thread of their own, so sending never blocks; they are dropped once the
+    /// game is gone.
+    pub fn input(&self) -> Option<Sender<String>> {
+        self.run.as_ref().and_then(|r| r.input.clone())
     }
 
     /// Kills the game if it runs; the session then counts as stopped by the user.

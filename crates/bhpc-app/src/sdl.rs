@@ -109,6 +109,8 @@ impl sdl2::audio::AudioCallback for AudioOut {
 pub struct SdlGl {
     window: *mut sys::SDL_Window,
     alive: Arc<AtomicBool>,
+    /// False: every swap interval the game asks for becomes 0 (the vsync setting is off).
+    vsync: AtomicBool,
     surface: crate::vsurface::VirtualSurface,
 }
 
@@ -146,6 +148,7 @@ impl SdlBackend {
         let gl = Arc::new(SdlGl {
             window: window.raw(),
             alive: alive.clone(),
+            vsync: AtomicBool::new(true),
             surface: crate::vsurface::VirtualSurface::new(),
         });
         Ok((SdlBackend { _sdl: sdl, audio: None, video, window, pump, alive }, gl))
@@ -159,6 +162,18 @@ impl SdlBackend {
         dev.resume();
         self.audio = Some(dev);
         Ok(())
+    }
+
+    /// Set the window icon from RGBA pixels (`width` x `height`, 4 bytes each).
+    pub fn set_icon(&mut self, rgba: &mut [u8], width: u32, height: u32) -> bool {
+        let fmt = sdl2::pixels::PixelFormatEnum::ABGR8888;
+        match sdl2::surface::Surface::from_data(rgba, width, height, width * 4, fmt) {
+            Ok(icon) => {
+                self.window.set_icon(icon);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Resize the window (logical pixels); the window system answers with a `Resized` event.
@@ -213,6 +228,11 @@ fn ctx_nonzero(ctx: usize) -> Option<usize> {
 }
 
 impl SdlGl {
+    /// Whether the game may turn vsync on (the launcher's vsync setting). Applies to later swap-interval requests.
+    pub fn set_vsync_allowed(&self, allowed: bool) {
+        self.vsync.store(allowed, Ordering::SeqCst);
+    }
+
     fn live(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
     }
@@ -256,7 +276,13 @@ impl GlWindow for SdlGl {
         }
         let c = ctx.map_or(std::ptr::null_mut(), |c| c as usize as sys::SDL_GLContext);
         // SAFETY: valid window, context pointer from `create_context` or null.
-        unsafe { sys::SDL_GL_MakeCurrent(self.window, c) == 0 }
+        let ok = unsafe { sys::SDL_GL_MakeCurrent(self.window, c) == 0 };
+        if ok && !c.is_null() && !self.vsync.load(Ordering::SeqCst) {
+            // The EGL default is vsync on; the setting is off.
+            // SAFETY: plain SDL call with the context just made current.
+            unsafe { sys::SDL_GL_SetSwapInterval(0) };
+        }
+        ok
     }
 
     fn swap_buffers(&self) {
@@ -300,6 +326,7 @@ impl GlWindow for SdlGl {
     }
 
     fn set_swap_interval(&self, interval: i32) -> bool {
+        let interval = if self.vsync.load(Ordering::SeqCst) { interval } else { 0 };
         // SAFETY: plain SDL call.
         self.live() && unsafe { sys::SDL_GL_SetSwapInterval(interval) == 0 }
     }

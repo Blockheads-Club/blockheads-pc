@@ -99,6 +99,7 @@ fn run_error_display_and_conversions() {
         RunError::NoEntry("e".into()),
         RunError::Guest(Stop::Nested),
         RunError::Watchdog { pc: 0x10, lr: 0x20 },
+        RunError::EmbedUnavailable("no EGL".into()),
     ];
     let text: Vec<String> = all.iter().map(|e| e.to_string()).collect();
     assert!(text[0].starts_with("io:") && text[0].contains("disk"));
@@ -111,6 +112,8 @@ fn run_error_display_and_conversions() {
     assert!(text[7].contains("does not export `e`"));
     assert!(text[8].contains("guest stopped"));
     assert!(text[9].contains("0x00000010") && text[9].contains("0x00000020"));
+    assert_eq!(text[10], "[embed] unavailable: no EGL");
+    assert_eq!((all[0].exit_code(), all[10].exit_code()), (1, 3));
     let _: &dyn std::error::Error = &all[0];
 }
 

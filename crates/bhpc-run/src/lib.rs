@@ -3,6 +3,7 @@
 pub mod apkrun;
 pub mod bench;
 pub mod dl;
+pub mod embed;
 pub mod framestats;
 pub mod input;
 pub mod mainq;
@@ -50,6 +51,19 @@ pub enum RunError {
         pc: u32,
         lr: u32,
     },
+    /// In-window mode (`--embed`) could not get a GL context without a window of its own; the launcher then falls
+    /// back to a separate game window.
+    EmbedUnavailable(String),
+}
+
+impl RunError {
+    /// The process exit code of a run that failed with this error.
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            RunError::EmbedUnavailable(_) => bhpc_launcher::embed::EMBED_UNAVAILABLE_EXIT as u8,
+            _ => 1,
+        }
+    }
 }
 
 impl fmt::Display for RunError {
@@ -65,6 +79,7 @@ impl fmt::Display for RunError {
             RunError::NoEntry(s) => write!(f, "module does not export `{s}`"),
             RunError::Guest(s) => write!(f, "guest stopped: {s}"),
             RunError::Watchdog { pc, lr } => write!(f, "watchdog expired at pc {pc:#010x} (lr {lr:#010x})"),
+            RunError::EmbedUnavailable(e) => write!(f, "[embed] unavailable: {e}"),
         }
     }
 }
@@ -197,6 +212,8 @@ pub fn run_shared_object(
 mod tests;
 #[cfg(test)]
 mod tests_dl;
+#[cfg(test)]
+mod tests_embed;
 #[cfg(test)]
 mod tests_input;
 #[cfg(test)]

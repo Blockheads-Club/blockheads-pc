@@ -244,6 +244,28 @@ mod unix {
     }
 
     #[test]
+    fn lines_reach_the_childs_stdin_and_a_dead_child_drops_them() {
+        let mut s = Session::new(Duration::ZERO);
+        assert!(s.input().is_none(), "nothing runs");
+        let (prog, args) = sh("read a; read b; echo \"got $a $b\"");
+        s.start(&prog, &args, &[]).unwrap();
+        let tx = s.input().unwrap();
+        tx.send("one".into()).unwrap();
+        tx.send("two".into()).unwrap();
+        assert_eq!(until_done(&mut s, true).lines, ["got one two"]);
+        assert!(s.input().is_none(), "the finished session has no input");
+        // The child is gone: the writer thread stops at the first failed write and later sends fail.
+        for _ in 0..200 {
+            let _ = tx.send("late".into());
+            std::thread::sleep(Duration::from_millis(5));
+            if tx.send("later".into()).is_err() {
+                return;
+            }
+        }
+        panic!("lines to a dead child were not dropped");
+    }
+
+    #[test]
     fn environment_reaches_the_child() {
         let mut s = Session::new(Duration::ZERO);
         let (prog, args) = sh("echo \"$BHPC_TEST_VAR\"");
@@ -453,5 +475,197 @@ mod ops_tests {
         c.save(&paths.config()).unwrap();
         std::fs::write(paths.prefs(), "language = 1").unwrap();
         assert!(matches!(launch_plan(&paths, exe), Err(LauncherError::Parse(_))));
+    }
+}
+
+mod embed_tests {
+    use crate::embed::overwritten;
+    use crate::embed::*;
+
+    fn bgra(w: u32, h: u32, v: u8) -> Vec<u8> {
+        vec![v; (w * h * 4) as usize]
+    }
+
+    #[test]
+    fn frames_travel_through_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = frame_path(dir.path(), 7);
+        assert!(path.to_string_lossy().contains("bhpc-frame-"));
+        let mut r = FrameReader::create(&path).unwrap();
+        let mut buf = Vec::new();
+        assert_eq!(r.seq().unwrap(), 0);
+        assert_eq!(r.read(&mut buf).unwrap(), None, "no frame yet");
+        let mut w = FrameWriter::open(&path).unwrap();
+        assert!(w.publish(4, 2, &bgra(4, 2, 9)).unwrap());
+        assert_eq!(r.seq().unwrap(), 1);
+        let info = r.read(&mut buf).unwrap().unwrap();
+        assert_eq!(info, FrameInfo { width: 4, height: 2, seq: 1 });
+        assert_eq!(buf, bgra(4, 2, 9));
+        assert_eq!(r.read(&mut buf).unwrap(), None, "already seen");
+        // A different size, then the writer runs ahead by several frames while the reader sleeps.
+        for i in 0..5 {
+            assert!(w.publish(3, 3, &bgra(3, 3, i)).unwrap());
+        }
+        let info = r.read(&mut buf).unwrap().unwrap();
+        assert_eq!((info.width, info.height, info.seq), (3, 3, 6));
+        assert_eq!(buf, bgra(3, 3, 4));
+        // Wrong length, empty and oversized frames are refused.
+        assert!(!w.publish(2, 2, &[0; 3]).unwrap());
+        assert!(!w.publish(0, 2, &[]).unwrap());
+        assert!(!w.publish(9000, 5000, &[]).unwrap());
+        // A writer that reopens the file carries on counting.
+        let mut w2 = FrameWriter::open(&path).unwrap();
+        w2.publish(1, 1, &[1, 2, 3, 255]).unwrap();
+        assert_eq!(r.read(&mut buf).unwrap().unwrap().seq, 7);
+        r.remove();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_frame_is_overwritten_when_the_writer_comes_round() {
+        assert!(!overwritten(5, 5));
+        assert!(!overwritten(5, 6));
+        assert!(overwritten(5, 7));
+        assert!(overwritten(5, 90));
+    }
+
+    #[test]
+    fn broken_files_are_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let junk = dir.path().join("junk");
+        std::fs::write(&junk, vec![0u8; 200]).unwrap();
+        assert!(FrameWriter::open(&junk).is_err());
+        assert!(FrameWriter::open(&dir.path().join("missing")).is_err());
+        let path = dir.path().join("f");
+        let mut r = FrameReader::create(&path).unwrap();
+        // A header that claims a frame bigger than the file allows.
+        let mut raw = std::fs::read(&path).unwrap()[..64].to_vec();
+        raw[16..24].copy_from_slice(&1u64.to_le_bytes());
+        raw[24..28].copy_from_slice(&60000u32.to_le_bytes());
+        raw[28..32].copy_from_slice(&60000u32.to_le_bytes());
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        std::os::unix::fs::FileExt::write_all_at(
+            &std::fs::OpenOptions::new().write(true).open(&path).unwrap(),
+            &raw,
+            0,
+        )
+        .unwrap();
+        assert_eq!(r.read(&mut Vec::new()).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        raw[24..28].copy_from_slice(&2u32.to_le_bytes());
+        raw[28..32].copy_from_slice(&2u32.to_le_bytes());
+        raw[32..36].copy_from_slice(&9u32.to_le_bytes());
+        std::os::unix::fs::FileExt::write_all_at(
+            &std::fs::OpenOptions::new().write(true).open(&path).unwrap(),
+            &raw,
+            0,
+        )
+        .unwrap();
+        assert!(r.read(&mut Vec::new()).is_err(), "slot out of range");
+        assert!(frame_dir().is_dir());
+    }
+
+    #[test]
+    fn commands_round_trip_as_lines() {
+        let all = [
+            Cmd::Size { width: 1280, height: 720 },
+            Cmd::Move { x: 1.5, y: -2.0 },
+            Cmd::Button { button: 2, pressed: true, x: 10.0, y: 20.25, mods: MOD_CTRL | MOD_ALT },
+            Cmd::Button { button: 0, pressed: false, x: 0.0, y: 0.0, mods: 0 },
+            Cmd::Wheel { dx: 0.0, dy: -1.0, x: 3.0, y: 4.0, mods: MOD_SHIFT },
+            Cmd::Key { hid: 68, pressed: true, repeat: false, mods: 0 },
+            Cmd::Key { hid: 4, pressed: false, repeat: true, mods: 7 },
+            Cmd::Text("héllo wörld\nline\\two\r".into()),
+            Cmd::Text(String::new()),
+            Cmd::Focus(true),
+            Cmd::Focus(false),
+            Cmd::Visible(false),
+            Cmd::Quit,
+        ];
+        for c in all {
+            let line = c.encode();
+            assert!(!line.contains('\n') && !line.contains('\r'), "{line:?}");
+            assert_eq!(Cmd::parse(&line), Some(c.clone()), "{line}");
+            assert_eq!(Cmd::parse(&format!("{line}\n")), Some(c));
+        }
+        for bad in [
+            "",
+            "dance",
+            "size 1",
+            "size a b",
+            "move 1",
+            "button 1 1 1 1",
+            "key 1 1",
+            "wheel 1 2 3 4",
+            "text bad\\q",
+            "text trailing\\",
+            "focus",
+            "focus 2",
+            "key 1 x 0 0",
+        ] {
+            assert_eq!(Cmd::parse(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn evdev_codes_map_to_hid_usages() {
+        // Physical positions: letters, digits, editing keys, function keys and modifiers.
+        let table = [
+            (1, 41),
+            (2, 30),
+            (10, 38),
+            (11, 39),
+            (12, 45),
+            (13, 46),
+            (14, 42),
+            (15, 43),
+            (16, 20),
+            (25, 19),
+            (26, 47),
+            (27, 48),
+            (28, 40),
+            (29, 224),
+            (30, 4),
+            (38, 15),
+            (39, 51),
+            (40, 52),
+            (41, 53),
+            (42, 225),
+            (43, 49),
+            (44, 29),
+            (50, 16),
+            (51, 54),
+            (52, 55),
+            (53, 56),
+            (54, 229),
+            (56, 226),
+            (57, 44),
+            (58, 57),
+            (59, 58),
+            (68, 67),
+            (87, 68),
+            (88, 69),
+            (97, 228),
+            (100, 230),
+            (102, 74),
+            (103, 82),
+            (104, 75),
+            (105, 80),
+            (106, 79),
+            (107, 77),
+            (108, 81),
+            (109, 78),
+            (110, 73),
+            (111, 76),
+        ];
+        for (evdev, hid) in table {
+            assert_eq!(hid_from_evdev(evdev), Some(hid), "evdev {evdev}");
+        }
+        assert_eq!(hid_from_evdev(0), None);
+        assert_eq!(hid_from_evdev(55), None);
+        assert_eq!(hid_from_evdev(500), None);
+        // Every letter of the alphabet is reachable exactly once.
+        let letters: std::collections::BTreeSet<u32> =
+            (0..128).filter_map(hid_from_evdev).filter(|h| (4..=29).contains(h)).collect();
+        assert_eq!(letters.len(), 26);
     }
 }

@@ -185,8 +185,8 @@ fn ctrl_drag_pinches_around_the_press_point() {
 fn wheel_pinches_and_ends_on_idle() {
     let mut m = InputMapper::new(cfg()); // step 20, idle 150
     let mut r = Recorder::new();
-    m.handle(HostEvent::Wheel { dy: 1.0, x: 300.0, y: 200.0 }, 0, &mut r);
-    m.handle(HostEvent::Wheel { dy: -2.0, x: 300.0, y: 200.0 }, 50, &mut r);
+    m.handle(HostEvent::Wheel { dy: 1.0, x: 300.0, y: 200.0, mods: Mods::default() }, 0, &mut r);
+    m.handle(HostEvent::Wheel { dy: -2.0, x: 300.0, y: 200.0, mods: Mods::default() }, 50, &mut r);
     m.handle(mv(310.0, 210.0), 60, &mut r); // cursor motion does not move a wheel pinch
     m.tick(100, &mut r); // not idle yet
     assert!(m.gesture_active());
@@ -210,9 +210,9 @@ fn wheel_pinches_and_ends_on_idle() {
 fn wheel_radius_is_clamped_and_unchanged_radius_sends_nothing() {
     let mut m = InputMapper::new(cfg());
     let mut r = Recorder::new();
-    m.handle(HostEvent::Wheel { dy: 100.0, x: 0.0, y: 0.0 }, 0, &mut r); // to max 400
-    m.handle(HostEvent::Wheel { dy: 100.0, x: 0.0, y: 0.0 }, 1, &mut r); // already at max: no move
-    m.handle(HostEvent::Wheel { dy: -100.0, x: 0.0, y: 0.0 }, 2, &mut r); // to min 20
+    m.handle(HostEvent::Wheel { dy: 100.0, x: 0.0, y: 0.0, mods: Mods::default() }, 0, &mut r); // to max 400
+    m.handle(HostEvent::Wheel { dy: 100.0, x: 0.0, y: 0.0, mods: Mods::default() }, 1, &mut r); // already at max: no move
+    m.handle(HostEvent::Wheel { dy: -100.0, x: 0.0, y: 0.0, mods: Mods::default() }, 2, &mut r); // to min 20
     let moves: Vec<_> = r.events.iter().filter(|e| matches!(e, GuestEvent::TouchMove { .. })).collect();
     assert_eq!(moves.len(), 2);
     assert_eq!(*moves[0], moved(&[0, 1], &[-400.0, 400.0], &[0.0, 0.0], 0));
@@ -226,10 +226,10 @@ fn wheel_is_ignored_during_other_gestures_and_click_ends_a_wheel_pinch() {
         &mut m,
         vec![
             (down(MouseButton::Left, 1.0, 1.0), 0),
-            (HostEvent::Wheel { dy: 1.0, x: 1.0, y: 1.0 }, 1),
+            (HostEvent::Wheel { dy: 1.0, x: 1.0, y: 1.0, mods: Mods::default() }, 1),
             (up(MouseButton::Left, 1.0, 1.0), 2),
             // wheel pinch interrupted by a click: pinch ends first, then the touch begins
-            (HostEvent::Wheel { dy: 0.0, x: 50.0, y: 50.0 }, 3),
+            (HostEvent::Wheel { dy: 0.0, x: 50.0, y: 50.0, mods: Mods::default() }, 3),
             (down(MouseButton::Left, 60.0, 60.0), 4),
         ],
     );
@@ -292,7 +292,7 @@ fn keymap_covers_every_key() {
         .map(keymap::key_code)
         .collect();
     assert_eq!(codes, [66, 67, 112, 61, 19, 20, 21, 22, 122, 123, 54, 7].map(Some));
-    assert_eq!(keymap::key_code(F11), None);
+    assert_eq!(keymap::key_code(F(11)), None);
     assert_eq!(keymap::key_code(Other), None);
     assert_eq!(keymap::unicode(Char('q'), Mods::default()), 'q' as i32);
     assert_eq!(keymap::unicode(Enter, Mods::default()), 0);
@@ -302,9 +302,11 @@ fn keymap_covers_every_key() {
 #[test]
 fn f11_and_quit_are_host_actions() {
     let mut m = InputMapper::new(cfg());
-    let rep = HostEvent::Key { key: HostKey::F11, pressed: true, repeat: true, mods: Mods::default() };
-    let r =
-        run(&mut m, vec![(key(HostKey::F11, true), 0), (rep, 1), (key(HostKey::F11, false), 2), (HostEvent::Quit, 3)]);
+    let rep = HostEvent::Key { key: HostKey::F(11), pressed: true, repeat: true, mods: Mods::default() };
+    let r = run(
+        &mut m,
+        vec![(key(HostKey::F(11), true), 0), (rep, 1), (key(HostKey::F(11), false), 2), (HostEvent::Quit, 3)],
+    );
     assert!(r.events.is_empty());
     assert_eq!(r.actions, [HostAction::ToggleFullscreen, HostAction::Quit]);
 }
@@ -500,4 +502,88 @@ fn touch_positions_can_be_mapped_and_other_events_pass_through() {
         GuestEvent::TouchCancel { ids: vec![0], xs: vec![2.0], ys: vec![2.0], time_ms: 3 }
     );
     assert_eq!(GuestEvent::WindowFocus(true).map_points(&f), GuestEvent::WindowFocus(true));
+}
+
+fn bound(b: Bindings) -> InputMapper {
+    InputMapper::new(Config { bindings: b, ..cfg() })
+}
+
+fn with(ctrl: bool, shift: bool, alt: bool) -> Mods {
+    Mods { ctrl, shift, alt }
+}
+
+fn click(b: MouseButton, mods: Mods) -> HostEvent {
+    HostEvent::MouseButton { button: b, pressed: true, x: 10.0, y: 10.0, mods }
+}
+
+#[test]
+fn trigger_needs_its_modifiers_and_counts_them() {
+    let t = Trigger { mods: with(true, false, true), input: Input::Wheel };
+    assert_eq!(t.weight(), 2);
+    assert_eq!(Trigger::plain(Input::Wheel).weight(), 0);
+    assert_eq!(Trigger { mods: with(false, true, false), input: Input::Wheel }.weight(), 1);
+    assert!(t.fires(Input::Wheel, with(true, true, true)));
+    assert!(!t.fires(Input::Wheel, with(true, false, false)));
+    assert!(!t.fires(Input::Wheel, with(false, false, true)));
+    assert!(!t.fires(Input::Mouse(MouseButton::Left), with(true, false, true)));
+    let s = Trigger { mods: with(false, true, false), input: Input::Wheel };
+    assert!(!s.fires(Input::Wheel, Mods::default()));
+    assert!(s.fires(Input::Wheel, with(false, true, false)));
+}
+
+#[test]
+fn remapped_mouse_buttons_pick_the_most_specific_gesture() {
+    // Touch on the right button, pan on the middle one with shift, pinch on shift + right.
+    let b = Bindings {
+        touch: Trigger::plain(Input::Mouse(MouseButton::Right)),
+        pan: Trigger { mods: with(false, true, false), input: Input::Mouse(MouseButton::Middle) },
+        pinch: Trigger { mods: with(false, true, false), input: Input::Mouse(MouseButton::Right) },
+        ..Bindings::default()
+    };
+    let first = |ev: HostEvent| {
+        let mut m = bound(b);
+        run(&mut m, vec![(ev, 0)]).events.len()
+    };
+    assert_eq!(first(click(MouseButton::Left, Mods::default())), 0, "nothing is bound to the left button");
+    assert_eq!(first(click(MouseButton::Right, Mods::default())), 1, "touch");
+    assert_eq!(first(click(MouseButton::Right, with(false, true, false))), 2, "pinch beats touch with shift");
+    assert_eq!(first(click(MouseButton::Middle, with(false, true, false))), 2, "pan");
+    assert_eq!(first(click(MouseButton::Middle, Mods::default())), 0, "pan needs shift");
+}
+
+#[test]
+fn zoom_binding_decides_about_the_wheel() {
+    let b = Bindings { zoom: Trigger { mods: with(true, false, false), input: Input::Wheel }, ..Bindings::default() };
+    let wheel = |mods| HostEvent::Wheel { dy: 1.0, x: 5.0, y: 5.0, mods };
+    let mut m = bound(b);
+    assert!(run(&mut m, vec![(wheel(Mods::default()), 0)]).events.is_empty());
+    assert!(!run(&mut m, vec![(wheel(with(true, false, false)), 1)]).events.is_empty());
+}
+
+#[test]
+fn fullscreen_and_back_follow_their_bindings() {
+    let b = Bindings {
+        fullscreen: Trigger { mods: with(false, false, true), input: Input::Key(HostKey::Char('f')) },
+        back: Trigger::plain(Input::Key(HostKey::Char('b'))),
+        ..Bindings::default()
+    };
+    let alt_f =
+        |pressed, repeat| HostEvent::Key { key: HostKey::Char('f'), pressed, repeat, mods: with(false, false, true) };
+    let mut m = bound(b);
+    let r = run(&mut m, vec![(alt_f(true, false), 0), (alt_f(true, true), 1), (alt_f(false, false), 2)]);
+    assert_eq!(r.actions, vec![HostAction::ToggleFullscreen]);
+    assert!(r.events.is_empty());
+    // F11 is an ordinary (unmapped) key now, plain F is not Alt+F, Escape is no longer Back.
+    let r = run(&mut m, vec![(key(HostKey::F(11), true), 3), (key(HostKey::Char('f'), true), 4)]);
+    assert!(r.actions.is_empty());
+    assert_eq!(r.events.len(), 1, "only the letter reaches the game");
+    assert!(run(&mut m, vec![(key(HostKey::Escape, true), 5)]).events.is_empty());
+    let r = run(&mut m, vec![(key(HostKey::Char('b'), true), 6), (key(HostKey::Char('b'), false), 7)]);
+    assert_eq!(
+        r.events,
+        vec![
+            GuestEvent::KeyDown { key_code: KEYCODE_BACK, unicode: 0, meta: 0, time_ms: 6 },
+            GuestEvent::KeyUp { key_code: KEYCODE_BACK, unicode: 0, meta: 0, time_ms: 7 }
+        ]
+    );
 }

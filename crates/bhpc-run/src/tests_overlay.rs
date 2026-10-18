@@ -3,8 +3,8 @@
 use crate::overlay::OverlayFeed;
 use bhpc_gles::{GlWindow, Overlay};
 use bhpc_jni::UiFrame;
-use std::sync::{Arc, Mutex};
 use std::ffi::c_void;
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct Window(Mutex<Vec<Option<u64>>>);

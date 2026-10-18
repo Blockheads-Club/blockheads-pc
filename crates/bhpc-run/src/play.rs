@@ -9,7 +9,8 @@
 
 use crate::apkrun::{backtrace_lines, HostHooks, InitConfig, Session};
 use crate::dl::{self, DlTable};
-use crate::input::{host_event, JniSink};
+use crate::embed::{cmd_event, rgba_bottom_up_to_bgra, InputTracker};
+use crate::input::{host_key, JniSink};
 use crate::script::{click_events, Action, Step, WAIT_TIMEOUT_MS};
 use crate::tracks::Tracks;
 use crate::{framestats, png, RunError};
@@ -19,8 +20,9 @@ use bhpc_audio::{Mixer, Sles};
 use bhpc_bionic::{lock, sched};
 use bhpc_cpu::Cpu;
 use bhpc_gles::{GlWindow, Gles, GlesConfig};
-use bhpc_input::{Config as InputConfig, Geometry, HostAction, InputMapper};
+use bhpc_input::{Bindings, Config as InputConfig, Geometry, HostAction, Input, InputMapper};
 use bhpc_jni::{GfxHooks, Stage, Throw, Vm};
+use bhpc_launcher::embed::{Cmd, FrameWriter};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::path::PathBuf;
@@ -69,6 +71,18 @@ pub struct PlayConfig {
     pub shot_dir: PathBuf,
     /// Write the full list of Java members the guest looked up (`host`, `native`, `STUB`, call counts) here.
     pub jni_report: Option<PathBuf>,
+    /// Start in fullscreen.
+    pub fullscreen: bool,
+    /// The game may use vsync.
+    pub vsync: bool,
+    /// Window title.
+    pub title: String,
+    /// What the buttons, wheel and keys do.
+    pub bindings: Bindings,
+    /// Render for the launcher's window instead of one of our own: the frame file the launcher created. The video
+    /// driver is forced to SDL's offscreen one, input arrives as `bhpc_launcher::embed::Cmd` lines on stdin and the
+    /// run ends when stdin closes.
+    pub embed: Option<PathBuf>,
 }
 
 impl PlayConfig {
@@ -89,6 +103,11 @@ impl PlayConfig {
             alert_choice: None,
             script: Vec::new(),
             shot_dir: PathBuf::from("."),
+            fullscreen: false,
+            vsync: true,
+            title: "The Blockheads".into(),
+            bindings: Bindings::default(),
+            embed: None,
         }
     }
 }
@@ -163,12 +182,24 @@ struct Flags {
     geometry: Mutex<Option<Geometry>>,
     /// A script asked for this window size (logical pixels); the host main thread applies it.
     resize: Mutex<Option<(u32, u32)>>,
+    /// The fullscreen binding was used; the host main thread switches.
+    toggle_fullscreen: AtomicBool,
     /// The UI thread finished the Java start-up stages that must precede `nativeRun`.
     startup_done: AtomicBool,
     /// Why the UI thread ended (set when it ends normally).
     ui_stop: Mutex<Option<String>>,
     /// Registers of the faulting guest thread.
     fail: Mutex<Option<(String, [u32; 16])>>,
+}
+
+/// A failure to get a window or GL context: in-window mode reports that it cannot work here (the launcher falls back
+/// to a window of our own), a normal run just fails.
+fn no_window(cfg: &PlayConfig, e: String) -> RunError {
+    if cfg.embed.is_some() {
+        RunError::EmbedUnavailable(e)
+    } else {
+        other(e)
+    }
 }
 
 fn other<E: std::fmt::Display>(e: E) -> RunError {
@@ -188,7 +219,19 @@ struct Hooks {
     shot: Option<PathBuf>,
     shot_at: u64,
     overlay: crate::overlay::OverlayFeed,
+    /// In-window mode: where finished frames go.
+    embed: Option<Mutex<EmbedOut>>,
 }
+
+/// Frame file and scratch buffer of the in-window mode.
+struct EmbedOut {
+    writer: FrameWriter,
+    last: Option<Instant>,
+    bgra: Vec<u8>,
+}
+
+/// At most this many frames per second go to the launcher.
+const EMBED_FRAME_GAP: Duration = Duration::from_millis(15);
 
 type ReadPixels = unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void);
 type GetIntegerv = unsafe extern "C" fn(u32, *mut i32);
@@ -200,6 +243,11 @@ impl Hooks {
 
     /// Read the default framebuffer back (RGBA, top row first). The context must be current on this thread.
     fn capture(&self) -> Option<(u32, u32, Vec<u8>)> {
+        self.capture_raw().map(|(w, h, buf)| (w, h, png::flip_rows(w, h, &buf)))
+    }
+
+    /// Like `capture`, rows as OpenGL returns them (bottom row first).
+    fn capture_raw(&self) -> Option<(u32, u32, Vec<u8>)> {
         let (w, h) = self.window.drawable_size();
         let (rp, gi) = (self.window.proc_address("glReadPixels"), self.window.proc_address("glGetIntegerv"));
         if rp.is_null() || gi.is_null() || w == 0 || h == 0 {
@@ -224,7 +272,24 @@ impl Hooks {
             let mut buf = vec![0u8; w as usize * h as usize * 4];
             rp(0, 0, w as i32, h as i32, 0x1908, 0x1401, buf.as_mut_ptr().cast());
             bind(0x8D40, fbo as u32);
-            Some((w, h, png::flip_rows(w, h, &buf)))
+            Some((w, h, buf))
+        }
+    }
+
+    /// Hand the frame to the launcher (in-window mode), at most about 60 times a second.
+    fn publish_frame(&self) {
+        let Some(embed) = &self.embed else { return };
+        let mut e = embed.lock().unwrap_or_else(PoisonError::into_inner);
+        if e.last.is_some_and(|t| t.elapsed() < EMBED_FRAME_GAP) {
+            return;
+        }
+        let Some((w, h, rgba)) = self.capture_raw() else { return };
+        let EmbedOut { writer, last, bgra } = &mut *e;
+        rgba_bottom_up_to_bgra(w, h, &rgba, bgra);
+        match writer.publish(w, h, bgra) {
+            Ok(true) => *last = Some(Instant::now()),
+            Ok(false) => eprintln!("[play] a {w}x{h} frame does not fit the frame file"),
+            Err(e) => eprintln!("[play] cannot write the frame file: {e}"),
         }
     }
 
@@ -235,6 +300,7 @@ impl Hooks {
         if let Some(vm) = vm {
             self.overlay.update(&*self.window, vm.render_ui());
         }
+        self.publish_frame();
         let n = self.flags.swaps.fetch_add(1, Ordering::SeqCst) + 1;
         self.flags.swap_times.lock().unwrap_or_else(PoisonError::into_inner).push(Instant::now());
         let wanted: Vec<PathBuf> =
@@ -334,6 +400,7 @@ impl GfxHooks for Hooks {
 struct Watched {
     inner: SdlBackend,
     flags: Arc<Flags>,
+    fullscreen: bool,
 }
 
 impl Backend for Watched {
@@ -345,13 +412,24 @@ impl Backend for Watched {
         if let Some((w, h)) = self.flags.resize.lock().unwrap_or_else(PoisonError::into_inner).take() {
             eprintln!("[play] resizing the window to {w}x{h}: {}", self.inner.set_size(w, h));
         }
+        if self.flags.toggle_fullscreen.swap(false, Ordering::SeqCst) {
+            let want = !self.fullscreen;
+            if self.inner.set_fullscreen(want) {
+                self.fullscreen = want;
+            }
+            eprintln!("[play] fullscreen {}", if self.fullscreen { "on" } else { "off" });
+        }
         self.inner.poll_event(timeout)
     }
     fn metrics(&self) -> Metrics {
         self.inner.metrics()
     }
     fn set_fullscreen(&mut self, on: bool) -> bool {
-        self.inner.set_fullscreen(on)
+        let ok = self.inner.set_fullscreen(on);
+        if ok {
+            self.fullscreen = on;
+        }
+        ok
     }
     fn present(&mut self) {
         self.inner.present();
@@ -366,8 +444,16 @@ impl Backend for Watched {
 
 /// Run the game. Blocks until the window closes, the game ends or a limit is reached.
 pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
+    if cfg.embed.is_some() {
+        // No window of our own: SDL's offscreen driver gives the GL context, the launcher shows the frames.
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    }
     let (mut backend, gl) =
-        SdlBackend::new(&WindowConfig { size: cfg.window, ..WindowConfig::default() }).map_err(other)?;
+        SdlBackend::new(&WindowConfig { title: cfg.title.clone(), size: cfg.window, ..WindowConfig::default() })
+            .map_err(|e| no_window(cfg, e))?;
+    gl.set_vsync_allowed(cfg.vsync);
+    let mut icon = include_bytes!("../assets/icon-32.rgba").to_vec();
+    backend.set_icon(&mut icon, 32, 32);
     let m0 = backend.metrics();
     eprintln!("[play] video driver {}, window {:?}, drawable {:?}", backend.driver(), m0.logical, m0.drawable);
     // What the window system really gave us is what the game sees (a compositor may ignore the requested size).
@@ -390,6 +476,9 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
         });
     }
     let (tx, rx) = channel();
+    if cfg.embed.is_some() {
+        spawn_commands(tx.clone(), flags.clone());
+    }
     if !cfg.script.is_empty() {
         let (script, tx, f, dir) = (cfg.script.clone(), tx.clone(), flags.clone(), cfg.shot_dir.clone());
         std::thread::spawn(move || run_script(&script, &tx, &f, &dir));
@@ -400,15 +489,47 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
         .stack_size(256 << 20)
         .spawn(move || guest_main(&c, gl, rx, f, mx))?;
     let mut app = App::new(
-        Watched { inner: backend, flags: flags.clone() },
+        Watched { inner: backend, flags: flags.clone(), fullscreen: false },
         SystemClock::new(),
-        AppOptions { render_in_loop: false, vsync: false, fallback_fps: None, ..AppOptions::default() },
+        // The fullscreen key is a binding now (`HostAction::ToggleFullscreen` from the input mapper). The game's
+        // swap interval is set through the GL window (`set_vsync_allowed`); the loop itself does not render.
+        AppOptions {
+            render_in_loop: false,
+            vsync: false,
+            fallback_fps: None,
+            fullscreen: cfg.fullscreen && cfg.embed.is_none(),
+            fullscreen_keys: false,
+            ..AppOptions::default()
+        },
     );
     app.run(&mut ForwardHandler::new(tx));
     flags.done.store(true, Ordering::SeqCst);
     let report = guest.join().map_err(|_| other("the guest main thread panicked"))?;
     drop(app);
     report
+}
+
+/// In-window mode: read the launcher's commands from stdin. A size becomes a window resize, everything else a window
+/// event; end of input (the launcher is gone) or `quit` ends the run.
+fn spawn_commands(tx: std::sync::mpsc::Sender<Event>, flags: Arc<Flags>) {
+    std::thread::spawn(move || {
+        for line in std::io::BufRead::lines(std::io::stdin().lock()) {
+            let Ok(line) = line else { break };
+            match Cmd::parse(&line) {
+                Some(Cmd::Size { width, height }) => {
+                    *flags.resize.lock().unwrap_or_else(PoisonError::into_inner) = Some((width.max(1), height.max(1)));
+                }
+                Some(Cmd::Quit) => break,
+                Some(cmd) => {
+                    if cmd_event(&cmd).is_some_and(|ev| tx.send(ev).is_err()) {
+                        break;
+                    }
+                }
+                None => eprintln!("[play] unknown command from the launcher: {line:?}"),
+            }
+        }
+        flags.done.store(true, Ordering::SeqCst);
+    });
 }
 
 /// Play a script in real time: events go to the window's event channel, the rest to the shared flags.
@@ -535,9 +656,19 @@ fn boot(
     let screen = if cfg.drawable.0 > 0 && cfg.drawable.1 > 0 { cfg.drawable } else { cfg.window };
     icfg.screen = Some((screen.0 as i32, screen.1 as i32));
     let hooks_flags = flags.clone();
+    let embed_cfg = cfg.clone();
+    let embed_out: Mutex<Option<EmbedOut>> = Mutex::new(match &cfg.embed {
+        Some(path) => {
+            let writer = FrameWriter::open(path).map_err(|e| other(format!("frame file {}: {e}", path.display())))?;
+            Some(EmbedOut { writer, last: None, bgra: Vec::new() })
+        }
+        None => None,
+    });
     let (shot, shot_at, check_gl) = (cfg.shot.clone(), cfg.shot_at, cfg.check_gl);
     let mut sess = Session::open_setup(&icfg, Box::new(std::io::stdout()), None, &mut |cpu, st| {
-        let primary = window.create_context(None).ok_or_else(|| other("cannot create a GLES2 context"))?;
+        let primary = window
+            .create_context(None)
+            .ok_or_else(|| no_window(&embed_cfg, "cannot create a GLES2 context".to_string()))?;
         if !window.make_current(Some(primary)) {
             return Err(other("cannot make the GL context current"));
         }
@@ -561,6 +692,7 @@ fn boot(
             shot: shot.clone(),
             shot_at,
             overlay: crate::overlay::OverlayFeed::default(),
+            embed: embed_out.lock().unwrap_or_else(PoisonError::into_inner).take().map(Mutex::new),
         });
         // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.
         if let Some(inner) = bhpc_gles::builtin("eglSwapBuffers", &gles) {
@@ -765,7 +897,11 @@ impl UiThread {
             run_stage(c, vm, s)?;
         }
         let rx = self.rx.lock().unwrap_or_else(PoisonError::into_inner).take();
-        let mut mapper = InputMapper::new(InputConfig { window: self.cfg.window, ..InputConfig::default() });
+        let mut mapper = InputMapper::new(InputConfig {
+            window: self.cfg.window,
+            bindings: self.cfg.bindings,
+            ..InputConfig::default()
+        });
         Ok(self.ui_loop(c, &mut mapper, rx.as_ref()))
     }
 
@@ -791,6 +927,7 @@ impl UiThread {
     fn ui_loop(&self, c: &mut Cpu, mapper: &mut InputMapper, rx: Option<&Receiver<Event>>) -> String {
         let (vm, flags, cfg, st) = (&self.vm, &self.flags, &self.cfg, &self.st);
         let begun = Instant::now();
+        let mut tracker = InputTracker::default();
         let mut text_alert: Option<bhpc_jni::Alert> = None;
         let mut focused: Option<bhpc_jni::Obj> = None;
         loop {
@@ -889,13 +1026,16 @@ impl UiThread {
             }
             let pending: Vec<Event> = std::iter::from_fn(|| rx.and_then(|r| r.try_recv().ok())).collect();
             for ev in crate::input::coalesce_moves(pending) {
-                escape |= matches!(&ev, Event::Key { key, pressed: true, .. } if *key == bhpc_app::Key::ESCAPE);
+                if let Event::Key { key, pressed: true, mods, .. } = &ev {
+                    let held = bhpc_input::Mods { ctrl: mods.ctrl, shift: mods.shift, alt: mods.alt };
+                    escape |= cfg.bindings.back.fires(Input::Key(host_key(*key)), held);
+                }
                 if let Event::Resized(m) = &ev {
                     // The display of the game follows the window; `SurfaceChanged` below tells the game.
                     vm.set_screen_size(m.drawable.0 as i32, m.drawable.1 as i32);
                     eprintln!("[play] window {:?}, drawable {:?}", m.logical, m.drawable);
                 }
-                if let Some(h) = host_event(&ev) {
+                if let Some(h) = tracker.map(&ev) {
                     mapper.handle(h, now, &mut sink);
                 }
             }
@@ -907,6 +1047,9 @@ impl UiThread {
             let (returned, actions) = (sink.returned, std::mem::take(&mut sink.actions));
             if actions.contains(&HostAction::Quit) {
                 return "quit requested".into();
+            }
+            if actions.contains(&HostAction::ToggleFullscreen) && cfg.embed.is_none() {
+                flags.toggle_fullscreen.store(true, Ordering::SeqCst);
             }
             if let Some(alert) = text_alert.take_if(|_| returned || escape) {
                 let pick = if returned { None } else { Some(alert.cancel.as_ref().map_or(0, |b| b.1)) };

@@ -103,8 +103,8 @@ fn host_keys() {
     assert_eq!(k("Down"), H::Down);
     assert_eq!(k("Home"), H::Home);
     assert_eq!(k("End"), H::End);
-    assert_eq!(k("F11"), H::F11);
-    assert_eq!(k("F2"), H::Other);
+    assert_eq!(k("F11"), H::F(11));
+    assert_eq!(k("F2"), H::F(2));
     assert_eq!(k("Q"), H::Char('q'));
 }
 
@@ -355,4 +355,40 @@ fn wizard_flow() {
     assert!(bad.error.is_some());
     let again = Wizard::new(Some(bad.config.clone()), t.path().join("x"), PathBuf::new());
     assert_eq!(again.step, Step::Done);
+}
+
+#[test]
+fn bindings_become_input_triggers_and_flags() {
+    use bhpc_input::{Input as I, MouseButton as M};
+    let d = KeyBindings::default();
+    assert_eq!(d.to_bindings(), bhpc_input::Bindings::default(), "the defaults are the hard-wired mapping");
+    assert!(d.bind_flags().is_empty());
+    let mut k = d.clone();
+    k.set(Action::Touch, Binding::parse("Middle").unwrap());
+    k.set(Action::Pan, Binding::parse("Shift+Right").unwrap());
+    k.set(Action::Zoom, Binding::parse("Ctrl+Wheel").unwrap());
+    k.set(Action::Back, Binding::parse("Q").unwrap());
+    let b = k.to_bindings();
+    assert_eq!(b.touch.input, I::Mouse(M::Middle));
+    assert!(b.pan.mods.shift && b.zoom.mods.ctrl && !b.zoom.mods.alt);
+    assert_eq!(b.back.input, I::Key(bhpc_input::HostKey::Char('q')));
+    let flags = k.bind_flags();
+    assert_eq!(
+        flags,
+        ["--bind", "touch=Middle", "--bind", "pan=Shift+Right", "--bind", "zoom=Ctrl+Wheel", "--bind", "back=Q"]
+    );
+    // The runner reads them back, one at a time.
+    let mut back = KeyBindings::default();
+    for f in flags.iter().filter(|f| *f != "--bind") {
+        back.apply_flag(f).unwrap();
+    }
+    assert_eq!(back, k);
+    assert_eq!(Action::from_name("pinch"), Some(Action::Pinch));
+    assert_eq!(Action::from_name("jump"), None);
+    for a in Action::ALL {
+        assert_eq!(Action::from_name(a.name()), Some(a));
+    }
+    assert!(back.apply_flag("touch").unwrap_err().contains("ACTION=BINDING"));
+    assert!(back.apply_flag("jump=Q").unwrap_err().contains("unknown action"));
+    assert!(back.apply_flag("touch=Hyper+Q").unwrap_err().contains("invalid binding"));
 }

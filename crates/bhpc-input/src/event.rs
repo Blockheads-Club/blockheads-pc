@@ -34,7 +34,8 @@ pub enum HostKey {
     Down,
     Home,
     End,
-    F11,
+    /// A function key, `F(11)` is F11.
+    F(u8),
     /// A letter (case-insensitive) or ASCII digit.
     Char(char),
     Other,
@@ -59,6 +60,7 @@ pub enum HostEvent {
         dy: f32,
         x: f32,
         y: f32,
+        mods: Mods,
     },
     Key {
         key: HostKey,
@@ -299,5 +301,71 @@ impl EventSink for Recorder {
     }
     fn host_action(&mut self, action: HostAction) {
         self.actions.push(action);
+    }
+}
+
+/// The thing a binding is made of: a mouse button, the wheel or a key.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Input {
+    Mouse(MouseButton),
+    Wheel,
+    Key(HostKey),
+}
+
+/// Modifiers plus an input. It fires when the input happens with at least these modifiers held, and of several
+/// matching bindings the one with the most modifiers wins (so `Ctrl+Left` beats `Left`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Trigger {
+    pub mods: Mods,
+    pub input: Input,
+}
+
+impl Trigger {
+    /// A trigger without modifiers.
+    pub fn plain(input: Input) -> Trigger {
+        Trigger { mods: Mods::default(), input }
+    }
+
+    /// Number of modifiers the trigger asks for.
+    pub fn weight(&self) -> usize {
+        usize::from(self.mods.ctrl) + usize::from(self.mods.shift) + usize::from(self.mods.alt)
+    }
+
+    /// True when `input` happened with (at least) the trigger's modifiers held.
+    pub fn fires(&self, input: Input, held: Mods) -> bool {
+        self.input == input
+            && (held.ctrl || !self.mods.ctrl)
+            && (held.shift || !self.mods.shift)
+            && (held.alt || !self.mods.alt)
+    }
+}
+
+/// What each mapped action is bound to. The default is the hard-wired desktop mapping.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bindings {
+    /// One-finger touch / drag.
+    pub touch: Trigger,
+    /// Two-finger pan.
+    pub pan: Trigger,
+    /// Wheel pinch (zoom).
+    pub zoom: Trigger,
+    /// Drag pinch.
+    pub pinch: Trigger,
+    /// Android back key.
+    pub back: Trigger,
+    /// Toggle fullscreen (a host action, not for the guest).
+    pub fullscreen: Trigger,
+}
+
+impl Default for Bindings {
+    fn default() -> Bindings {
+        Bindings {
+            touch: Trigger::plain(Input::Mouse(MouseButton::Left)),
+            pan: Trigger::plain(Input::Mouse(MouseButton::Right)),
+            zoom: Trigger::plain(Input::Wheel),
+            pinch: Trigger { mods: Mods { ctrl: true, ..Mods::default() }, input: Input::Mouse(MouseButton::Left) },
+            back: Trigger::plain(Input::Key(HostKey::Escape)),
+            fullscreen: Trigger::plain(Input::Key(HostKey::F(11))),
+        }
     }
 }

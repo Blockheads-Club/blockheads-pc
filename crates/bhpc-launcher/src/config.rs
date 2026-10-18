@@ -116,10 +116,8 @@ impl LaunchConfig {
         crate::apk::validate(&self.apk, self.force).map_err(LauncherError::Apk)
     }
 
-    /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--force`, `--window WxH`, `--fullscreen`, `--no-vsync`.
-    ///
-    /// `bhpc-run` applies the first four today; fullscreen and vsync are accepted and ignored until the play
-    /// loop reads them (see `docs/launcher.md`).
+    /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--force`, `--fullscreen`, `--no-vsync`
+    /// and a `--bind ACTION=BINDING` for every key binding that is not the default.
     pub fn run_args(&self) -> Vec<String> {
         let mut a = vec![
             "--apk".to_string(),
@@ -136,6 +134,7 @@ impl LaunchConfig {
                 a.push(flag.to_string());
             }
         }
+        a.extend(self.keys.bind_flags());
         a
     }
 }

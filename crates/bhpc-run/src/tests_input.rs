@@ -28,7 +28,10 @@ fn window_events_are_translated() {
         );
     }
     assert_eq!(host_event(&Event::MouseButton { button: AB::Other(4), pressed: true, x: 0.0, y: 0.0 }), None);
-    assert_eq!(host_event(&Event::Wheel { dx: 0.0, dy: 2.0 }), Some(HostEvent::Wheel { dy: 2.0, x: 0.0, y: 0.0 }));
+    assert_eq!(
+        host_event(&Event::Wheel { dx: 0.0, dy: 2.0 }),
+        Some(HostEvent::Wheel { dy: 2.0, x: 0.0, y: 0.0, mods: bhpc_input::Mods::default() })
+    );
     let key =
         Event::Key { key: Key(4), pressed: true, repeat: false, mods: AppMods { shift: true, ctrl: false, alt: true } };
     assert_eq!(
@@ -58,7 +61,7 @@ fn hid_codes_map_to_keys() {
             HostKey::Backspace,
             HostKey::Tab,
             HostKey::Space,
-            HostKey::F11,
+            HostKey::F(11),
             HostKey::Home,
             HostKey::Delete,
             HostKey::End,

@@ -28,6 +28,23 @@ impl Action {
     pub const ALL: [Action; 6] =
         [Action::Touch, Action::Pan, Action::Zoom, Action::Pinch, Action::Back, Action::Fullscreen];
 
+    /// Name used in `--bind NAME=BINDING` flags.
+    pub fn name(self) -> &'static str {
+        match self {
+            Action::Touch => "touch",
+            Action::Pan => "pan",
+            Action::Zoom => "zoom",
+            Action::Pinch => "pinch",
+            Action::Back => "back",
+            Action::Fullscreen => "fullscreen",
+        }
+    }
+
+    /// The action called `name` (see [`Action::name`]).
+    pub fn from_name(name: &str) -> Option<Action> {
+        Action::ALL.into_iter().find(|a| a.name() == name)
+    }
+
     /// Label for the UI.
     pub fn label(self) -> &'static str {
         match self {
@@ -84,7 +101,7 @@ const NAMED: [(&str, Key); 12] = [
 ];
 
 impl Key {
-    /// The `bhpc-input` key, `Other` for keys it does not know (it only special-cases F11).
+    /// The `bhpc-input` key, `Other` for keys it does not know (function keys are `F(n)`).
     pub fn host_key(self) -> HostKey {
         match self {
             Key::Escape => HostKey::Escape,
@@ -99,8 +116,7 @@ impl Key {
             Key::Down => HostKey::Down,
             Key::Home => HostKey::Home,
             Key::End => HostKey::End,
-            Key::F(11) => HostKey::F11,
-            Key::F(_) => HostKey::Other,
+            Key::F(n) => HostKey::F(n),
             Key::Char(c) => HostKey::Char(c.to_ascii_lowercase()),
         }
     }
@@ -221,6 +237,21 @@ impl fmt::Display for Binding {
     }
 }
 
+impl Binding {
+    /// The same binding as `bhpc-input` understands it.
+    pub fn trigger(&self) -> bhpc_input::Trigger {
+        let mods = bhpc_input::Mods { ctrl: self.mods.ctrl, shift: self.mods.shift, alt: self.mods.alt };
+        let input = match self.input {
+            Input::Mouse(Button::Left) => bhpc_input::Input::Mouse(bhpc_input::MouseButton::Left),
+            Input::Mouse(Button::Right) => bhpc_input::Input::Mouse(bhpc_input::MouseButton::Right),
+            Input::Mouse(Button::Middle) => bhpc_input::Input::Mouse(bhpc_input::MouseButton::Middle),
+            Input::Wheel => bhpc_input::Input::Wheel,
+            Input::Key(k) => bhpc_input::Input::Key(k.host_key()),
+        };
+        bhpc_input::Trigger { mods, input }
+    }
+}
+
 impl Serialize for Binding {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.collect_str(self)
@@ -296,5 +327,41 @@ impl KeyBindings {
             }
         }
         out
+    }
+}
+
+impl KeyBindings {
+    /// The mapping `bhpc-input` applies.
+    pub fn to_bindings(&self) -> bhpc_input::Bindings {
+        bhpc_input::Bindings {
+            touch: self.touch.trigger(),
+            pan: self.pan.trigger(),
+            zoom: self.zoom.trigger(),
+            pinch: self.pinch.trigger(),
+            back: self.back.trigger(),
+            fullscreen: self.fullscreen.trigger(),
+        }
+    }
+
+    /// `--bind ACTION=BINDING` flags for the actions that differ from the defaults.
+    pub fn bind_flags(&self) -> Vec<String> {
+        let default = KeyBindings::default();
+        let mut out = Vec::new();
+        for a in Action::ALL {
+            if self.get(a) != default.get(a) {
+                out.push("--bind".to_string());
+                out.push(format!("{}={}", a.name(), self.get(a)));
+            }
+        }
+        out
+    }
+
+    /// Applies one `ACTION=BINDING` value of a `--bind` flag.
+    pub fn apply_flag(&mut self, flag: &str) -> Result<(), String> {
+        let (name, text) = flag.split_once('=').ok_or_else(|| format!("--bind wants ACTION=BINDING, got {flag:?}"))?;
+        let action = Action::from_name(name).ok_or_else(|| format!("unknown action {name:?}"))?;
+        let binding = Binding::parse(text).map_err(|e| e.to_string())?;
+        self.set(action, binding);
+        Ok(())
     }
 }
