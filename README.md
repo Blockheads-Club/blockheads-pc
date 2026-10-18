@@ -158,6 +158,9 @@ BHPC_APK="$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk" cargo test -p bhpc-r
 - No gamepad support, no DPI scaling of the content size, and the on-screen keyboard is replaced by host text input.
 - `bhpc-run` ignores the launcher's config file (see above).
 - Gameplay has been exercised only briefly; expect rough edges and report what you find.
+- The game can freeze when entering a world. The last log line before the freeze is "Connection to server to
+  retrieve mission list failed ... Bad file descriptor" (an HTTP request through the guest socket layer). Not yet
+  investigated.
 
 Rebuilding the fixture needs the Android NDK (r27, `ANDROID_NDK_HOME` or `~/Android/Sdk/ndk/27.2.12479018`):
 `fixtures/build.sh`.
