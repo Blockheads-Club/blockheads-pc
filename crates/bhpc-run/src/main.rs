@@ -155,19 +155,40 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
     cfg.exit_after_shot = args.iter().any(|a| a == "--exit-after-shot");
     cfg.seconds = opt(args, "--seconds").and_then(|v| v.parse().ok());
     cfg.check_gl = args.iter().any(|a| a == "--check-gl");
+    let mut clicks = Vec::new();
     for (i, a) in args.iter().enumerate() {
         if a == "--click" {
             // X,Y@MS
-            let parsed = args.get(i + 1).and_then(|v| {
+            clicks.extend(args.get(i + 1).and_then(|v| {
                 let (xy, ms) = v.split_once('@')?;
                 let (x, y) = xy.split_once(',')?;
                 Some((x.parse().ok()?, y.parse().ok()?, ms.parse().ok()?))
-            });
-            cfg.clicks.extend(parsed);
+            }));
         }
+    }
+    let file = opt(args, "--script").map(std::fs::read_to_string);
+    let file = match file.transpose() {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = writeln!(stderr, "bhpc-run: cannot read the script: {e}");
+            return 2;
+        }
+    };
+    cfg.script = match bhpc_run::script::build(file.as_deref(), &clicks) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = writeln!(stderr, "bhpc-run: bad script: {e}");
+            return 2;
+        }
+    };
+    if let Some(d) = opt(args, "--shot-dir") {
+        cfg.shot_dir = d.into();
     }
     cfg.alert_choice = opt(args, "--alert-choice").and_then(|v| v.parse().ok());
     cfg.trace_objc = args.iter().any(|a| a == "--trace-objc");
+    if let Some(list) = opt(args, "--trace-fn") {
+        cfg.trace_fn = list.split(',').map(str::to_string).collect();
+    }
     cfg.jni_report = opt(args, "--jni-report").map(Into::into);
     if let Some(list) = opt(args, "--symbolize") {
         cfg.symbolize =

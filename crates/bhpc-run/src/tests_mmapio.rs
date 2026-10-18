@@ -131,3 +131,52 @@ fn failures_are_reported() {
     assert!(private != NEG1);
     assert_eq!(r.call("munmap", &[anon, 4096]), 0);
 }
+
+#[test]
+fn sequential_writes_refresh_maps() {
+    let mut r = rig();
+    let fd = r.open_file();
+    let map = r.call("mmap", &[0, 8192, 3, 1, fd, 0]);
+    // write(2) at the current position
+    let a = r.put(100, b"hello");
+    assert_eq!(r.call("write", &[fd, a, 5]), 5);
+    assert_eq!(r.cpu.mem().read_bytes(map, 5).unwrap(), b"hello");
+    // lseek + writev (what LMDB's page flush does)
+    assert_eq!(r.call("lseek", &[fd, 4096, 0]), 4096);
+    let (x, y) = (r.put(200, b"AB"), r.put(210, b"CDE"));
+    let iov = r.put(300, &[x.to_le_bytes(), 2u32.to_le_bytes(), y.to_le_bytes(), 3u32.to_le_bytes()].concat());
+    assert_eq!(r.call("writev", &[fd, iov, 2]), 5);
+    assert_eq!(r.cpu.mem().read_bytes(map + 4096, 5).unwrap(), b"ABCDE");
+    // a failing write changes nothing; writes to descriptors without maps are plain bionic
+    assert_eq!(r.call("write", &[999, a, 5]), NEG1);
+    let p = r.put(400, b"/tmp/bhpc-mmapio-other\0");
+    let other = r.call("open", &[p, 0x42, 0o644]);
+    assert_eq!(r.call("write", &[other, a, 5]), 5);
+}
+
+#[test]
+fn maps_follow_the_file_not_the_descriptor() {
+    let mut r = rig();
+    let fd = r.open_file();
+    let a = r.put(100, b"AAAA");
+    assert_eq!(r.call("write", &[fd, a, 4]), 4);
+    let map = r.call("mmap", &[0, 4096, 3, 1, fd, 0]);
+    // A second descriptor of the same file (LMDB's meta descriptor) updates the map...
+    let fd2 = r.open_file();
+    assert_ne!(fd2, fd);
+    let b = r.put(200, b"BBBB");
+    assert_eq!(r.call("pwrite", &[fd2, b, 4, 0]), 4);
+    assert_eq!(r.cpu.mem().read_bytes(map, 4).unwrap(), b"BBBB");
+    // ...also after the mapping descriptor was closed, and writes to other files leave it alone.
+    assert_eq!(r.call("close", &[fd]), 0);
+    let c = r.put(300, b"CCCC");
+    assert_eq!(r.call("pwrite", &[fd2, c, 4, 0]), 4);
+    assert_eq!(r.cpu.mem().read_bytes(map, 4).unwrap(), b"CCCC");
+    let p = r.put(400, b"/tmp/bhpc-mmapio-other\0");
+    let other = r.call("open", &[p, 0x42, 0o644]);
+    let d = r.put(500, b"DDDD");
+    assert_eq!(r.call("pwrite", &[other, d, 4, 0]), 4);
+    assert_eq!(r.call("write", &[other, d, 4]), 4);
+    assert_eq!(r.cpu.mem().read_bytes(map, 4).unwrap(), b"CCCC");
+    assert_eq!(r.call("munmap", &[map, 4096]), 0);
+}

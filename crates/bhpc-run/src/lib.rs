@@ -3,11 +3,13 @@
 pub mod apkrun;
 pub mod bench;
 pub mod dl;
+pub mod framestats;
 pub mod input;
 pub mod mmapio;
 #[cfg(feature = "play")]
 pub mod play;
 pub mod png;
+pub mod script;
 pub mod tracks;
 pub mod vfd;
 
@@ -197,6 +199,8 @@ mod tests_dl;
 mod tests_input;
 #[cfg(test)]
 mod tests_mmapio;
+#[cfg(test)]
+mod tests_script;
 #[cfg(test)]
 mod tests_tracks;
 #[cfg(test)]

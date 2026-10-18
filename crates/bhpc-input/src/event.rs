@@ -202,6 +202,16 @@ const fn t(class: &'static str, method: &'static str, signature: &'static str) -
 }
 
 impl GuestEvent {
+    /// The field handle of the `TextField` events (they go to the focused field object), `None` for the others.
+    pub fn text_field(&self) -> Option<i32> {
+        match self {
+            GuestEvent::TextShouldChange { field, .. }
+            | GuestEvent::TextDidChange { field }
+            | GuestEvent::TextShouldReturn { field } => Some(*field),
+            _ => None,
+        }
+    }
+
     /// The Java natives this event is delivered to, in call order. `SurfaceChanged` is the only
     /// event that fans out to two natives; the `TextField` natives are instance methods whose
     /// first int argument is the field handle, all others are static.

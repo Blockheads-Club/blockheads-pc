@@ -236,6 +236,11 @@ fn install_widgets(vm: &Vm) {
             for o in [Some(c.this), c.obj(0)].into_iter().flatten() {
                 c.vm.mark_layout(o);
             }
+            // A text field added to an alert is the alert's input line.
+            if let Some(f) = c.obj(0).filter(|f| c.vm.instance_of(*f, "com/apportable/ui/TextField")) {
+                let alert = c.this;
+                c.vm.with_alert(alert, |a| a.field = Some(f));
+            }
             void()
         });
     drop(view);
@@ -285,6 +290,9 @@ fn install_widgets(vm: &Vm) {
                 .method("show", "()V", |c| {
                     let a = c.vm.with_alert(c.this, |a| a.clone());
                     c.vm.log(&format!("alert shown: {} / {} buttons", a.title, a.buttons.len()));
+                    if let Some(f) = a.field {
+                        c.vm.set_text_focus(Some(f));
+                    }
                     c.vm.st().shown_alerts.push(a);
                     void()
                 })
@@ -294,6 +302,29 @@ fn install_widgets(vm: &Vm) {
                     ("nativeOnClick", "(II)V", false),
                     ("nativeOnDismiss", "(I)V", false),
                 ]);
+        }
+        if w == "TextField" || w == "TextView" {
+            b = b
+                .field("mText", "Ljava/lang/String;")
+                .method("setText", "(Ljava/lang/String;)V", |c| {
+                    let t = c.string(0).unwrap_or_default();
+                    c.vm.set_text_of(c.this, &t);
+                    void()
+                })
+                .method("getText", "()Ljava/lang/String;", |c| {
+                    let t = c.vm.text_of(c.this);
+                    string(c, &t)
+                })
+                .method("becomeFirstResponder", "()V", |c| {
+                    c.vm.set_text_focus(Some(c.this));
+                    void()
+                })
+                .method("resignFirstResponder", "()V", |c| {
+                    if c.vm.text_focus() == Some(c.this) {
+                        c.vm.set_text_focus(None);
+                    }
+                    void()
+                });
         }
         let make = |c: &mut Call| {
             let o = c.vm.alloc_object(c.class);

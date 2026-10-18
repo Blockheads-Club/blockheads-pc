@@ -190,6 +190,8 @@ pub(crate) struct State {
     pub singletons: HashMap<String, Obj>,
     pub thread_objs: HashMap<usize, Obj>,
     pub ticks: Vec<Obj>,
+    /// The `TextField`/`TextView` that is first responder (receives the keyboard), see `Vm::text_focus`.
+    pub text_focus: Option<Obj>,
 }
 
 /// Resolver for exported native symbols: name -> guest address.
@@ -881,6 +883,8 @@ pub struct Alert {
     pub buttons: Vec<(String, i32)>,
     /// Title and index of the cancel button, if any.
     pub cancel: Option<(String, i32)>,
+    /// The `TextField` of an alert with a text input line (`addSubview` of a text field).
+    pub field: Option<Obj>,
 }
 
 /// How a looked-up member is implemented.

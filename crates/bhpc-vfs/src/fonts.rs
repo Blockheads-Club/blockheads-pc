@@ -33,6 +33,20 @@ static ITALIC: &[u8] = include_bytes!("../fonts/LiberationSans-Italic.ttf");
 /// Zip directory (inside the APK) that holds Apportable's own system fonts.
 pub const APK_FONT_DIR: &str = "com.apportable.system/fonts";
 
+/// The stand-in for the Android font file `name`: the bundled font of its style carrying that file's font names
+/// (PostScript `Roboto-Regular`, family `Roboto`, ...), see `fontname`. Built once per name.
+pub fn stand_in(name: &str) -> Arc<[u8]> {
+    static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Arc<[u8]>>>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache
+        .entry(name.to_string())
+        .or_insert_with(|| {
+            let base = bundled(Style::of(name));
+            crate::fontname::rename(&base, &crate::fontname::Names::for_file(name)).map_or(base, Into::into)
+        })
+        .clone()
+}
+
 /// Every file name the guest may ask for under `/system/fonts/`.
 pub const FONT_NAMES: &[&str] = &[
     "DroidSans.ttf",
@@ -199,7 +213,7 @@ impl FontFs {
         }
         self.user_file(name)
             .or_else(|| self.apk_file(name))
-            .or_else(|| FONT_NAMES.contains(&name).then(|| bundled(Style::of(name))))
+            .or_else(|| FONT_NAMES.contains(&name).then(|| stand_in(name)))
     }
 
     /// Every name that [`FontFs::resolve`] can answer.

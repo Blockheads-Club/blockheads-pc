@@ -64,6 +64,8 @@ pub struct JniSink<'a> {
     pub actions: Vec<HostAction>,
     /// Java exceptions and guest stops met while delivering.
     pub errors: Vec<String>,
+    /// The guest was told the return key was pressed in the focused text field.
+    pub returned: bool,
 }
 
 fn int_array(vm: &Vm, v: &[i32]) -> Value {
@@ -109,11 +111,19 @@ pub fn args_for(vm: &Vm, ev: &GuestEvent, i: usize) -> Vec<Value> {
 impl EventSink for JniSink<'_> {
     fn deliver(&mut self, ev: &GuestEvent) -> bool {
         let mut result = true;
+        let text_target = ev.text_field().is_some();
+        let focus = self.vm.text_focus();
+        if text_target && focus.is_none() {
+            return false;
+        }
         for (i, t) in ev.targets().iter().enumerate() {
             let args = args_for(self.vm, ev, i);
             let r = if t.method == "nativeRootGeometryChanged" {
                 let a = self.vm.activity();
                 self.vm.call_method(self.cpu, a, t.method, t.signature, &args)
+            } else if let (true, Some(field)) = (text_target, focus) {
+                // The TextField natives are instance methods.
+                self.vm.call_method(self.cpu, field, t.method, t.signature, &args)
             } else {
                 self.vm.call_static(self.cpu, t.class, t.method, t.signature, &args)
             };
@@ -121,6 +131,14 @@ impl EventSink for JniSink<'_> {
                 Ok(v) => result = !matches!(v, Value::Int(0)),
                 Err(e) => self.errors.push(format!("{}.{}: {e:?}", t.class, t.method)),
             }
+        }
+        if let (GuestEvent::TextShouldChange { location, length, replacement, .. }, true, Some(field)) =
+            (ev, result, focus)
+        {
+            self.vm.replace_text(field, *location as usize, *length as usize, replacement);
+        }
+        if matches!(ev, GuestEvent::TextShouldReturn { .. }) {
+            self.returned = true;
         }
         result
     }
