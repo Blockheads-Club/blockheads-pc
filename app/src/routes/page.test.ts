@@ -84,6 +84,17 @@ describe('page', () => {
     }
   });
 
+  it('moves focus to the main region when the screen or step changes', async () => {
+    mock.api.boot = vi.fn(async () => makeBoot({ config: null }));
+    render(Page);
+    await screen.findByRole('heading', { name: 'Play The Blockheads on your computer' });
+    expect(document.getElementById('main')).not.toHaveFocus();
+    store.legalOk = true;
+    store.next();
+    await screen.findByRole('heading', { name: 'Choose your game file' });
+    await waitFor(() => expect(document.getElementById('main')).toHaveFocus());
+  });
+
   it('uses the shortcuts of the design', async () => {
     mock.api.boot = vi.fn(async () => makeBoot());
     let started = false;

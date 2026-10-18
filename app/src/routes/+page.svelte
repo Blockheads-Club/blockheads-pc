@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { win } from '$lib/api';
   import { t } from '$lib/i18n.svelte';
   import TitleBar from '$lib/layout/TitleBar.svelte';
@@ -43,6 +43,14 @@
   });
   $effect(() => {
     document.title = ctx ? `${t('app.title')} · ${ctx}` : t('app.title');
+  });
+
+  /** Screen readers: after a step or screen change, focus moves to the new page's main region. */
+  let shown = '';
+  $effect(() => {
+    const key = `${s}/${store.step}/${store.section}`;
+    if (shown && key !== shown && s !== 'splash') void tick().then(() => document.getElementById('main')?.focus({ preventScroll: true }));
+    shown = key;
   });
 
   onMount(() => {

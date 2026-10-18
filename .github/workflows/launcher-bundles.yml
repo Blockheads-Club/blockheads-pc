@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Builds the "Blockheads PC" launcher installers (Tauri 2) on Linux, Windows and macOS: the game runner `bhpc-run`
+# goes in as a sidecar (scripts/build-sidecar.sh), then `tauri build` makes
+#   Linux: AppImage, deb, rpm   Windows: NSIS, MSI   macOS: .app, dmg
+# Bundles hold the launcher, the sidecar and icons only; the Linux job checks that no game file slipped in.
+# Written like ci-crossplat.yml and, like it, never run yet: treat the first failures on Windows and macOS as
+# expected and fix forward (see docs/launcher.md).
+name: launcher-bundles
+
+on:
+  push:
+    branches: [dev, main]
+    paths: ["app/**", "crates/**", "scripts/build-sidecar.sh", "scripts/check-bundle.sh", ".github/workflows/launcher-bundles.yml"]
+  pull_request:
+    paths: ["app/**", "scripts/build-sidecar.sh", ".github/workflows/launcher-bundles.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: launcher-bundles-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { name: macos-x86_64, os: macos-13, target: x86_64-apple-darwin }
+          - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            app/src-tauri -> target
+          key: ${{ matrix.target }}
+      - uses: oven-sh/setup-bun@v2
+
+      # WebKitGTK and friends for Tauri, the build tools for rpm, and what dynarmic and a static SDL2 need.
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf rpm file xdg-utils \
+            cmake g++ libboost-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxkbcommon-dev libwayland-dev \
+            libasound2-dev libpulse-dev libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev libdbus-1-dev
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake boost
+          echo "BHPC_BOOST_ROOT=$(brew --prefix boost)" >> "$GITHUB_ENV"
+      - name: Boost (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          root="$(env | grep -E '^BOOST_ROOT_[0-9_]+=' | sort | tail -n1 | cut -d= -f2-)"
+          if [ -z "$root" ]; then choco install boost-msvc-14.3 -y; root="C:/local/boost_1_87_0"; fi
+          echo "BHPC_BOOST_ROOT=${root//\\//}" >> "$GITHUB_ENV"
+
+      - name: Interface tests
+        working-directory: app
+        run: |
+          bun install --frozen-lockfile
+          bun run check
+          bun run test
+
+      - name: Game runner sidecar
+        shell: bash
+        run: scripts/build-sidecar.sh ${{ matrix.target }}
+
+      - name: Bundle
+        working-directory: app
+        run: bun run tauri build --target ${{ matrix.target }}
+
+      - name: No game files in the bundles
+        if: runner.os == 'Linux'
+        run: scripts/check-bundle.sh app/src-tauri/target/${{ matrix.target }}/release/bundle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blockheads-pc-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
