@@ -3,10 +3,14 @@
 pub mod apkrun;
 pub mod bench;
 pub mod dl;
+pub mod extras;
 pub mod input;
+pub mod mmapio;
 #[cfg(feature = "play")]
 pub mod play;
 pub mod png;
+pub mod tracks;
+pub mod vfd;
 
 use bhpc_cpu::{Cpu, CpuError, CpuOptions, Stop};
 use bhpc_loader::{Linker, LoadError};
@@ -190,5 +194,7 @@ pub fn run_shared_object(
 mod tests;
 #[cfg(test)]
 mod tests_dl;
+#[cfg(test)]
+mod tests_extras;
 #[cfg(test)]
 mod tests_input;

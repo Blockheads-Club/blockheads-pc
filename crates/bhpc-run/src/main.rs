@@ -155,6 +155,8 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
     cfg.exit_after_shot = args.iter().any(|a| a == "--exit-after-shot");
     cfg.seconds = opt(args, "--seconds").and_then(|v| v.parse().ok());
     cfg.check_gl = args.iter().any(|a| a == "--check-gl");
+    cfg.alert_choice = opt(args, "--alert-choice").and_then(|v| v.parse().ok());
+    cfg.trace_objc = args.iter().any(|a| a == "--trace-objc");
     cfg.jni_report = opt(args, "--jni-report").map(Into::into);
     if let Some(list) = opt(args, "--symbolize") {
         cfg.symbolize =
@@ -175,7 +177,14 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             for n in &r.unimplemented_hits {
                 let _ = writeln!(stderr, "  unimplemented import hit: {n}");
             }
-            for (n, c) in &r.top_thunks {
+            for (n, c) in r.top_thunks.iter().take(15).chain(r.top_thunks.iter().skip(15).filter(|(n, _)| {
+                [
+                    "sock", "connect", "getaddr", "gethost", "select", "poll", "epoll", "send", "recv", "bind",
+                    "listen", "fcntl", "pipe", "kqueue", "open", "stat",
+                ]
+                .iter()
+                .any(|k| n.contains(k))
+            })) {
                 let _ = writeln!(stderr, "  thunk {c:>10}  {n}");
             }
             u8::from(r.swaps == 0)

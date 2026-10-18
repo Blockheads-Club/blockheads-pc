@@ -5,7 +5,7 @@
 //! guest (nested calls) freely.
 
 use crate::mutf8;
-use crate::platform::{Assets, GfxHooks, NoGfx, Platform};
+use crate::platform::{Assets, AudioHooks, GfxHooks, NoAudio, NoGfx, Platform};
 use crate::value::{parse_field_ty, parse_sig, ClassId, Obj, Sig, Ty, Value};
 use bhpc_cpu::{Cpu, Stop};
 use bhpc_mem::GuestMemory;
@@ -182,6 +182,9 @@ pub(crate) struct State {
     pub dirty_views: Vec<Obj>,
     /// `makeKeyAndOrderFront` was called: the window gains focus on the next layout pass.
     pub focus_pending: bool,
+    /// `AlertView` contents being built / shown (see `Vm::take_alerts`).
+    pub alerts: Vec<Alert>,
+    pub shown_alerts: Vec<Alert>,
     pub stubbed_classes: Vec<String>,
     /// Named long-lived objects of the fake library (class loader, locale, display, ...).
     pub singletons: HashMap<String, Obj>,
@@ -221,6 +224,8 @@ pub struct VmConfig {
     pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     /// Display/EGL callbacks of `VerdeActivity` (swap buffers, contexts, content size).
     pub gfx: Arc<dyn GfxHooks>,
+    /// `android.media.AudioTrack` back end.
+    pub audio: Arc<dyn AudioHooks>,
 }
 
 impl VmConfig {
@@ -232,6 +237,7 @@ impl VmConfig {
             lenient: true,
             clock: Arc::new(move || start.elapsed().as_millis() as u64),
             gfx: Arc::new(NoGfx),
+            audio: Arc::new(NoAudio),
         }
     }
 }
@@ -245,6 +251,7 @@ pub(crate) struct Inner {
     pub lenient: bool,
     pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     pub gfx: Arc<dyn GfxHooks>,
+    pub audio: Arc<dyn AudioHooks>,
     pub layout: OnceLock<crate::jni::Layout>,
 }
 
@@ -266,6 +273,7 @@ impl Vm {
             lenient: cfg.lenient,
             clock: cfg.clock,
             gfx: cfg.gfx,
+            audio: cfg.audio,
             layout: OnceLock::new(),
         };
         let vm = Vm(Arc::new(inner));
@@ -861,6 +869,18 @@ impl Vm {
         r.members.sort_by(|a, b| (&a.class, &a.name, &a.sig).cmp(&(&b.class, &b.name, &b.sig)));
         r
     }
+}
+
+/// A UIKit alert the game built: title, message and buttons `(title, index)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alert {
+    /// The Java `AlertView` (its `mObject` is what the native click callbacks take).
+    pub view: Obj,
+    pub title: String,
+    pub message: String,
+    pub buttons: Vec<(String, i32)>,
+    /// Title and index of the cancel button, if any.
+    pub cancel: Option<(String, i32)>,
 }
 
 /// How a looked-up member is implemented.

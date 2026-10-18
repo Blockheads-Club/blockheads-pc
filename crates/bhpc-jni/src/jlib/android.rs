@@ -518,6 +518,7 @@ fn install_misc(vm: &Vm) {
         .field("packageName", "Ljava/lang/String;")
         .field("versionName", "Ljava/lang/String;")
         .field("versionCode", "I");
+    install_audio_track(vm);
     vm.define("android/media/AudioManager")
         .static_field("STREAM_MUSIC", "I", Value::Int(3))
         .method("getStreamVolume", "(I)I", |_| int(8))
@@ -561,4 +562,75 @@ fn log(c: &mut Call, level: char) -> JResult {
     let (tag, msg) = (c.string(0).unwrap_or_default(), c.string(1).unwrap_or_default());
     c.vm.log(&format!("{level}/{tag}: {msg}"));
     int(0)
+}
+
+/// `android.media.AudioTrack` (stream mode) over [`crate::AudioHooks`].
+fn install_audio_track(vm: &Vm) {
+    use crate::platform::TrackOp;
+    let op = |op: TrackOp| {
+        move |c: &mut Call| {
+            let id = c.vm.get_field(c.this, "id").as_int() as u32;
+            let r = c.vm.0.audio.control(id, op);
+            if matches!(op, TrackOp::Release) {
+                c.vm.set_field(c.this, "id", Value::Int(0));
+            }
+            int(r)
+        }
+    };
+    vm.define("android/media/AudioTrack")
+        .field("id", "I")
+        .static_method("getMinBufferSize", "(III)I", |c| {
+            int(c.vm.0.audio.min_buffer_size(c.int(0), c.int(1), c.int(2)))
+        })
+        .static_method("getNativeOutputSampleRate", "(I)I", |_| int(44100))
+        .method("<init>", "(IIIIII)V", |c| {
+            let (rate, ch, enc, buf) = (c.int(1), c.int(2), c.int(3), c.int(4));
+            let id = c.vm.0.audio.create(rate, ch, enc, buf);
+            c.vm.set_field(c.this, "id", Value::Int(id.unwrap_or(0) as i32));
+            void()
+        })
+        .method("getState", "()I", |c| int(i32::from(c.vm.get_field(c.this, "id").as_int() != 0)))
+        .method("play", "()V", {
+            let f = op(TrackOp::Play);
+            move |c| f(c).map(|_| Value::Void)
+        })
+        .method("pause", "()V", {
+            let f = op(TrackOp::Pause);
+            move |c| f(c).map(|_| Value::Void)
+        })
+        .method("stop", "()V", {
+            let f = op(TrackOp::Stop);
+            move |c| f(c).map(|_| Value::Void)
+        })
+        .method("flush", "()V", {
+            let f = op(TrackOp::Flush);
+            move |c| f(c).map(|_| Value::Void)
+        })
+        .method("release", "()V", {
+            let f = op(TrackOp::Release);
+            move |c| f(c).map(|_| Value::Void)
+        })
+        .method("setStereoVolume", "(FF)I", |c| {
+            let id = c.vm.get_field(c.this, "id").as_int() as u32;
+            int(c.vm.0.audio.control(id, TrackOp::Volume(c.float(0).max(c.float(1)))))
+        })
+        .method("setVolume", "(F)I", |c| {
+            let id = c.vm.get_field(c.this, "id").as_int() as u32;
+            int(c.vm.0.audio.control(id, TrackOp::Volume(c.float(0))))
+        })
+        .method("getPlaybackHeadPosition", "()I", |c| {
+            let id = c.vm.get_field(c.this, "id").as_int() as u32;
+            int(c.vm.0.audio.head_position(id))
+        })
+        .method("write", "([BII)I", |c| {
+            let id = c.vm.get_field(c.this, "id").as_int() as u32;
+            let (off, size) = (c.int(1).max(0) as usize, c.int(2).max(0) as usize);
+            let bytes = match c.obj(0).and_then(|a| c.vm.data(a)) {
+                Some(crate::vm::Data::Prim(_, b)) => b,
+                _ => return int(-2),
+            };
+            let end = (off + size).min(bytes.len());
+            let data = &bytes[off.min(end)..end];
+            int(c.vm.0.audio.write(c.cpu, id, data))
+        });
 }

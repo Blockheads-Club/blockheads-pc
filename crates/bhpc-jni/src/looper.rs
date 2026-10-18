@@ -423,3 +423,37 @@ impl Vm {
         Ok(views.len())
     }
 }
+
+impl Vm {
+    /// Run `f` on the alert record of `view` (created on first use).
+    pub fn with_alert<R>(&self, view: Obj, f: impl FnOnce(&mut crate::vm::Alert) -> R) -> R {
+        let mut st = self.st();
+        let i = match st.alerts.iter().position(|a| a.view == view) {
+            Some(i) => i,
+            None => {
+                st.alerts.push(crate::vm::Alert {
+                    view,
+                    title: String::new(),
+                    message: String::new(),
+                    buttons: Vec::new(),
+                    cancel: None,
+                });
+                st.alerts.len() - 1
+            }
+        };
+        f(&mut st.alerts[i])
+    }
+
+    /// Alerts the game showed since the last call.
+    pub fn take_alerts(&self) -> Vec<crate::vm::Alert> {
+        std::mem::take(&mut self.st().shown_alerts)
+    }
+
+    /// The user picked button `index` of `alert`: `nativeOnClick(mObject, index)`, then `nativeOnDismiss(mObject)`.
+    pub fn alert_click(&self, cpu: &mut Cpu, alert: &crate::vm::Alert, index: i32) -> Result<(), Throw> {
+        let id = self.get_field(alert.view, "mObject");
+        self.call_method(cpu, alert.view, "nativeOnClick", "(II)V", &[id, Value::Int(index)])?;
+        self.call_method(cpu, alert.view, "nativeOnDismiss", "(I)V", &[id])?;
+        Ok(())
+    }
+}

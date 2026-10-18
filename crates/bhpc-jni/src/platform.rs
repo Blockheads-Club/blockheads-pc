@@ -95,6 +95,56 @@ pub trait GfxHooks: Send + Sync {
     fn context_lost(&self) {}
 }
 
+/// What `android.media.AudioTrack` (MODE_STREAM) does on the host. Track ids are chosen by the implementation.
+pub trait AudioHooks: Send + Sync {
+    /// `AudioTrack.getMinBufferSize`; negative for an unsupported format.
+    fn min_buffer_size(&self, rate: i32, channel_config: i32, encoding: i32) -> i32;
+    /// `new AudioTrack(...)`: `None` makes the Java object report `STATE_UNINITIALIZED`.
+    fn create(&self, rate: i32, channel_config: i32, encoding: i32, buffer_bytes: i32) -> Option<u32>;
+    /// `play`/`pause`/`stop`/`flush`/`release` as [`TrackOp`]; 0 on success.
+    fn control(&self, id: u32, op: TrackOp) -> i32;
+    /// `write(byte[], off, size)`: may wait for room (and must give other guest threads the CPU while it does).
+    /// Returns the bytes consumed.
+    fn write(&self, cpu: &mut bhpc_cpu::Cpu, id: u32, data: &[u8]) -> i32;
+    /// `getPlaybackHeadPosition`.
+    fn head_position(&self, id: u32) -> i32;
+}
+
+/// Transport and volume commands of an `AudioTrack`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrackOp {
+    Play,
+    Pause,
+    Stop,
+    Flush,
+    Release,
+    Volume(f32),
+}
+
+/// [`AudioHooks`] that plays nothing but paces `write` like a real device would (so mixing threads do not spin).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoAudio;
+
+impl AudioHooks for NoAudio {
+    fn min_buffer_size(&self, rate: i32, _channel_config: i32, _encoding: i32) -> i32 {
+        rate / 25 * 4
+    }
+    fn create(&self, _rate: i32, _channel_config: i32, _encoding: i32, _buffer_bytes: i32) -> Option<u32> {
+        Some(1)
+    }
+    fn control(&self, _id: u32, _op: TrackOp) -> i32 {
+        0
+    }
+    fn write(&self, _cpu: &mut bhpc_cpu::Cpu, _id: u32, data: &[u8]) -> i32 {
+        // 44.1 kHz 16-bit stereo: 176400 bytes per second.
+        std::thread::sleep(std::time::Duration::from_micros(data.len() as u64 * 1_000_000 / 176_400));
+        data.len() as i32
+    }
+    fn head_position(&self, _id: u32) -> i32 {
+        0
+    }
+}
+
 /// [`GfxHooks`] with every default.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoGfx;

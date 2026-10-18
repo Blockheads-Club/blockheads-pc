@@ -77,6 +77,7 @@ fn mods(m: Mod) -> Mods {
 /// The SDL window, event pump and main-thread side of the GL window.
 pub struct SdlBackend {
     _sdl: sdl2::Sdl,
+    audio: Option<sdl2::audio::AudioDevice<AudioOut>>,
     video: sdl2::VideoSubsystem,
     window: sdl2::video::Window,
     pump: sdl2::EventPump,
@@ -86,6 +87,16 @@ pub struct SdlBackend {
 impl Drop for SdlBackend {
     fn drop(&mut self) {
         self.alive.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Audio callback: fills interleaved stereo `i16` frames.
+pub struct AudioOut(Box<dyn FnMut(&mut [i16]) + Send>);
+
+impl sdl2::audio::AudioCallback for AudioOut {
+    type Channel = i16;
+    fn callback(&mut self, out: &mut [i16]) {
+        (self.0)(out);
     }
 }
 
@@ -127,7 +138,17 @@ impl SdlBackend {
         video.text_input().start();
         let alive = Arc::new(AtomicBool::new(true));
         let gl = Arc::new(SdlGl { window: window.raw(), alive: alive.clone() });
-        Ok((SdlBackend { _sdl: sdl, video, window, pump, alive }, gl))
+        Ok((SdlBackend { _sdl: sdl, audio: None, video, window, pump, alive }, gl))
+    }
+
+    /// Open the default audio device (stereo `i16`, `rate` Hz) and start pulling samples from `fill`.
+    pub fn open_audio(&mut self, rate: i32, fill: impl FnMut(&mut [i16]) + Send + 'static) -> Result<(), String> {
+        let audio = self._sdl.audio()?;
+        let spec = sdl2::audio::AudioSpecDesired { freq: Some(rate), channels: Some(2), samples: Some(1024) };
+        let dev = audio.open_playback(None, &spec, |_| AudioOut(Box::new(fill)))?;
+        dev.resume();
+        self.audio = Some(dev);
+        Ok(())
     }
 
     /// Name of the active video driver (for logs).

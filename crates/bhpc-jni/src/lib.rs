@@ -23,10 +23,10 @@ pub use build::ClassBuilder;
 pub use host::{install, Jni, JniError, Usage};
 pub use invoke::Recv;
 pub use jni::{Layout, JNI_VERSION, TABLE_SLOTS};
-pub use platform::{Assets, GfxHooks, MemAssets, NoAssets, NoGfx, Platform};
+pub use platform::{Assets, AudioHooks, GfxHooks, MemAssets, NoAssets, NoAudio, NoGfx, Platform, TrackOp};
 pub use startup::{native_env, Stage};
 pub use value::{ClassId, Obj, Sig, Ty, Value};
-pub use vm::{Call, Data, GuestAlloc, JResult, Kind, MemberReport, Report, Throw, Vm, VmConfig};
+pub use vm::{Alert, Call, Data, GuestAlloc, JResult, Kind, MemberReport, Report, Throw, Vm, VmConfig};
 
 use bhpc_mem::GuestMemory;
 use std::sync::Arc;

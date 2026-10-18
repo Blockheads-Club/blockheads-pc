@@ -248,8 +248,14 @@ impl bhpc_jni::vm::GuestAlloc for BionicHeap {
 }
 
 /// Hook run by [`Session::open_setup`] before linking.
-pub type Setup<'a> =
-    dyn FnMut(&mut Cpu, &Shared) -> Result<Option<std::sync::Arc<dyn bhpc_jni::GfxHooks>>, RunError> + 'a;
+pub type Setup<'a> = dyn FnMut(&mut Cpu, &Shared) -> Result<HostHooks, RunError> + 'a;
+
+/// Window-system and audio back ends a setup hook can give the fake `VerdeActivity` / `AudioTrack`.
+#[derive(Default)]
+pub struct HostHooks {
+    pub gfx: Option<std::sync::Arc<dyn bhpc_jni::GfxHooks>>,
+    pub audio: Option<std::sync::Arc<dyn bhpc_jni::AudioHooks>>,
+}
 
 /// A loaded APK: guest memory, CPU, bionic state and the linked modules.
 pub struct Session {
@@ -278,7 +284,7 @@ impl Session {
         out: Box<dyn Write + Send>,
         log: Option<bhpc_bionic::state::LogSink>,
     ) -> Result<Session, RunError> {
-        Self::open_setup(cfg, out, log, &mut |_, _| Ok(None))
+        Self::open_setup(cfg, out, log, &mut |_, _| Ok(HostHooks::default()))
     }
 
     /// Like [`Session::open_with`]; `setup` runs after the CPU exists and before the libraries are linked, so it
@@ -303,7 +309,7 @@ impl Session {
         let (mut cpu, st) = new_env_with(bcfg, Some(cfg.watchdog_cycles))?;
         cpu.set_trace_thunks(cfg.trace_thunks);
         lock(&st).vfs.trace = cfg.trace_fs;
-        let gfx = setup(&mut cpu, &st)?;
+        let hooks = setup(&mut cpu, &st)?;
         let mut linker = Linker::new(cpu.mem().clone());
         let summary = {
             let mut hle = Hle::new(&mut cpu, st.clone());
@@ -316,8 +322,11 @@ impl Session {
         }
         let mem = cpu.mem().clone();
         let mut jcfg = bhpc_jni::VmConfig::new(platform.clone(), Box::new(storage.assets));
-        if let Some(g) = gfx {
+        if let Some(g) = hooks.gfx {
             jcfg.gfx = g;
+        }
+        if let Some(a) = hooks.audio {
+            jcfg.audio = a;
         }
         let jni = bhpc_jni::install(&cpu, mem, Box::new(BionicHeap(st.clone())), jcfg)?;
         jni.set_trace(cfg.trace_jni);

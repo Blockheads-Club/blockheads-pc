@@ -255,13 +255,45 @@ fn install_widgets(vm: &Vm) {
         if w == "AlertView" {
             b = b
                 .method("setTitle", "(Ljava/lang/String;)V", |c| {
-                    c.vm.log(&format!("alert title: {:?}", c.string(0)));
+                    let t = c.string(0).unwrap_or_default();
+                    c.vm.log(&format!("alert title: {t:?}"));
+                    c.vm.with_alert(c.this, |a| a.title = t);
                     void()
                 })
                 .method("setMessage", "(Ljava/lang/String;)V", |c| {
-                    c.vm.log(&format!("alert message: {:?}", c.string(0)));
+                    let m = c.string(0).unwrap_or_default();
+                    c.vm.log(&format!("alert message: {m:?}"));
+                    c.vm.with_alert(c.this, |a| a.message = m);
                     void()
-                });
+                })
+                .method("addButtonWithTitle", "(Ljava/lang/String;I)V", |c| {
+                    let (t, i) = (c.string(0).unwrap_or_default(), c.int(1));
+                    c.vm.log(&format!("alert button {i}: {t:?}"));
+                    c.vm.with_alert(c.this, |a| a.buttons.push((t, i)));
+                    void()
+                })
+                .method("setCancelButtonTitle", "(Ljava/lang/String;)V", |c| {
+                    let t = c.string(0).unwrap_or_default();
+                    c.vm.with_alert(c.this, |a| a.cancel = Some((t, a.cancel.as_ref().map_or(0, |x| x.1))));
+                    void()
+                })
+                .method("setCancelButtonIndex", "(I)V", |c| {
+                    let i = c.int(0);
+                    c.vm.with_alert(c.this, |a| a.cancel = Some((a.cancel.take().map(|x| x.0).unwrap_or_default(), i)));
+                    void()
+                })
+                .method("show", "()V", |c| {
+                    let a = c.vm.with_alert(c.this, |a| a.clone());
+                    c.vm.log(&format!("alert shown: {} / {} buttons", a.title, a.buttons.len()));
+                    c.vm.st().shown_alerts.push(a);
+                    void()
+                })
+                .method("dismiss", "()V", |_| void())
+                .natives(&[
+                    ("nativeOnCancel", "(I)V", false),
+                    ("nativeOnClick", "(II)V", false),
+                    ("nativeOnDismiss", "(I)V", false),
+                ]);
         }
         let make = |c: &mut Call| {
             let o = c.vm.alloc_object(c.class);

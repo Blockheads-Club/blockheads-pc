@@ -7,9 +7,10 @@
 //!
 //! Not part of the coverage gate (needs a display); the pieces with logic live in `png`, `input` and `dl`.
 
-use crate::apkrun::{backtrace_lines, InitConfig, Session};
+use crate::apkrun::{backtrace_lines, HostHooks, InitConfig, Session};
 use crate::dl::{self, DlTable};
 use crate::input::{host_event, JniSink};
+use crate::tracks::Tracks;
 use crate::{png, RunError};
 use bhpc_app::sdl::SdlBackend;
 use bhpc_app::{App, AppOptions, Backend, Event, ForwardHandler, Metrics, SystemClock, WindowConfig};
@@ -51,6 +52,11 @@ pub struct PlayConfig {
     pub check_gl: bool,
     /// Guest addresses to symbolise at the end of the run (debug aid).
     pub symbolize: Vec<u32>,
+    /// Log the selector of every Objective-C method-cache miss (`lookUpMethod` hook), a cheap trace of the game's
+    /// message flow: each (class, selector) pair is reported once.
+    pub trace_objc: bool,
+    /// Button index to press when the game shows an alert (default: the first button, else the cancel button).
+    pub alert_choice: Option<i32>,
     /// Write the full list of Java members the guest looked up (`host`, `native`, `STUB`, call counts) here.
     pub jni_report: Option<PathBuf>,
 }
@@ -67,6 +73,8 @@ impl PlayConfig {
             check_gl: false,
             symbolize: Vec::new(),
             jni_report: None,
+            trace_objc: false,
+            alert_choice: None,
         }
     }
 }
@@ -126,6 +134,10 @@ struct Flags {
     done: AtomicBool,
     swaps: AtomicU64,
     shot_taken: AtomicBool,
+    /// The UI thread finished the Java start-up stages that must precede `nativeRun`.
+    startup_done: AtomicBool,
+    /// Why the UI thread ended (set when it ends normally).
+    ui_stop: Mutex<Option<String>>,
     /// Registers of the faulting guest thread.
     fail: Mutex<Option<(String, [u32; 16])>>,
 }
@@ -180,6 +192,12 @@ impl Hooks {
         }
     }
 
+    /// Count a presented frame (and take the screenshot when it is due); call right before the swap.
+    fn before_swap(&self) {
+        let n = self.flags.swaps.fetch_add(1, Ordering::SeqCst) + 1;
+        self.snapshot(n);
+    }
+
     fn snapshot(&self, n: u64) {
         let Some(path) = &self.shot else { return };
         let target = if n == self.shot_at {
@@ -210,8 +228,7 @@ impl Hooks {
 
 impl GfxHooks for Hooks {
     fn swap_buffers(&self) -> bool {
-        let n = self.flags.swaps.fetch_add(1, Ordering::SeqCst) + 1;
-        self.snapshot(n);
+        self.before_swap();
         self.gles.egl_swap_buffers(self.surface).is_ok()
     }
 
@@ -282,16 +299,30 @@ impl<B: Backend> Backend for Watched<B> {
 
 /// Run the game. Blocks until the window closes, the game ends or a limit is reached.
 pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
-    let (backend, gl) =
+    let (mut backend, gl) =
         SdlBackend::new(&WindowConfig { size: cfg.window, ..WindowConfig::default() }).map_err(other)?;
     eprintln!("[play] video driver {}", backend.driver());
     let flags = Arc::new(Flags::default());
+    let mixer = Mixer::new(44100);
+    let m = mixer.clone();
+    if let Err(e) = backend.open_audio(44100, move |out| m.fill(out)) {
+        // No audio device: drain the mixer in real time so the game's writers still make progress.
+        eprintln!("[play] no audio device ({e}); audio is discarded");
+        let (m, f) = (mixer.clone(), flags.clone());
+        std::thread::spawn(move || {
+            let mut buf = vec![0i16; 2 * 441];
+            while !f.done.load(Ordering::SeqCst) {
+                m.fill(&mut buf);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+    }
     let (tx, rx) = channel();
-    let (c, f) = (cfg.clone(), flags.clone());
+    let (c, f, mx) = (cfg.clone(), flags.clone(), mixer);
     let guest = std::thread::Builder::new()
         .name("guest-main".into())
         .stack_size(256 << 20)
-        .spawn(move || guest_main(&c, gl, rx, f))?;
+        .spawn(move || guest_main(&c, gl, rx, f, mx))?;
     let mut app = App::new(
         Watched { inner: backend, flags: flags.clone() },
         SystemClock::new(),
@@ -308,8 +339,6 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
 struct Parts {
     gles: Gles,
     sles: Arc<Sles>,
-    primary: u32,
-    surface: u32,
 }
 
 fn guest_main(
@@ -317,8 +346,9 @@ fn guest_main(
     gl: Arc<bhpc_app::sdl::SdlGl>,
     rx: Receiver<Event>,
     flags: Arc<Flags>,
+    mixer: Mixer,
 ) -> Result<PlayReport, RunError> {
-    let result = boot(cfg, gl, rx, &flags);
+    let result = boot(cfg, gl, rx, &flags, mixer);
     flags.done.store(true, Ordering::SeqCst);
     result
 }
@@ -328,9 +358,9 @@ fn boot(
     gl: Arc<bhpc_app::sdl::SdlGl>,
     rx: Receiver<Event>,
     flags: &Arc<Flags>,
+    mixer: Mixer,
 ) -> Result<PlayReport, RunError> {
     let window: Arc<dyn GlWindow> = gl;
-    let mixer = Mixer::new(44100);
     let dl_slot: Arc<Mutex<Option<DlTable>>> = Arc::new(Mutex::new(None));
     let mut parts: Option<Parts> = None;
     let blocks: BlockLog = Arc::default();
@@ -350,14 +380,10 @@ fn boot(
         gles.egl_initialize();
         let pid = gles.egl_adopt_context(primary);
         let surface = gles.egl_create_surface();
-        bhpc_gles::register_all(cpu, &gles);
         window.make_current(None);
-        let sles = Sles::install(cpu, mixer.clone()).map_err(other)?;
-        dl::install(cpu, st, dl_slot.clone());
-        watch_blocking(cpu, st, &blocks);
         let mut ctxs = HashMap::new();
         ctxs.insert(1, pid);
-        let hooks = Hooks {
+        let hooks = Arc::new(Hooks {
             gles: gles.clone(),
             window: window.clone(),
             surface,
@@ -367,12 +393,31 @@ fn boot(
             flags: hooks_flags.clone(),
             shot: shot.clone(),
             shot_at,
-        };
-        parts = Some(Parts { gles, sles, primary: pid, surface });
-        let hooks: Arc<dyn GfxHooks> = Arc::new(hooks);
-        Ok(Some(hooks))
+        });
+        // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.
+        if let Some(inner) = bhpc_gles::builtin("eglSwapBuffers", &gles) {
+            let h = hooks.clone();
+            let _ = cpu.register_shared_thunk(
+                "eglSwapBuffers",
+                Arc::new(move |c: &mut Cpu| {
+                    h.before_swap();
+                    inner(c);
+                }),
+            );
+        }
+        bhpc_gles::register_all(cpu, &gles);
+        let sles = Sles::install(cpu, mixer.clone()).map_err(other)?;
+        let _vfd = crate::vfd::install(cpu, st);
+        crate::extras::install(cpu, st);
+        crate::mmapio::SharedMaps::default().install(cpu, st);
+        dl::install(cpu, st, dl_slot.clone());
+        watch_blocking(cpu, st, &blocks);
+        parts = Some(Parts { gles, sles });
+        let gfx: Arc<dyn GfxHooks> = hooks;
+        let audio: Arc<dyn bhpc_jni::AudioHooks> = Arc::new(Tracks::new(mixer.clone(), st.clone()));
+        Ok(HostHooks { gfx: Some(gfx), audio: Some(audio) })
     })?;
-    let Parts { gles, sles, primary, surface } = parts.ok_or_else(|| other("setup did not run"))?;
+    let Parts { gles, sles } = parts.ok_or_else(|| other("setup did not run"))?;
     let st = sess.st.clone();
     {
         let (g, s, b) = (gles.clone(), sles.clone(), st.clone());
@@ -385,6 +430,11 @@ fn boot(
         let mut table = DlTable::new(&sess.linker, &sess.host_libs, host);
         table.set_trace(cfg.init.trace_fs);
         *dl_slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(table);
+    }
+    if cfg.trace_objc {
+        if let Err(e) = hook_objc(&mut sess) {
+            eprintln!("[play] objc trace unavailable: {e}");
+        }
     }
     let mut report = PlayReport::default();
     let vm = sess.jni.vm.clone();
@@ -399,165 +449,232 @@ fn boot(
     }
     eprintln!("[play] constructors done");
 
-    // 2. Java start-up on this thread (the UI thread).
-    let run = |sess: &mut Session, stage: Stage| -> Result<(), String> {
-        sess.cpu.set_ticks(FOREVER);
-        eprintln!("[play] stage {stage:?} (bound: {})", vm.stage_bound(stage));
-        match vm.run_stage(&mut sess.cpu, stage) {
-            Ok(()) => Ok(()),
-            Err(Throw::Stop(s)) => {
-                let regs = sess.cpu.stop_regs();
-                let bt = regs.map(|r| backtrace_lines(&sess.linker, &sess.cpu, r)).unwrap_or_default();
-                Err(format!("{stage:?}: guest stopped: {s}\n  {}", bt.join("\n  ")))
+    if let Some(secs) = cfg.seconds {
+        // If a guest thread is stuck in a call that never returns (so the UI loop cannot look at the clock), stop
+        // the scheduler: every blocked thread wakes, the run ends and the report shows where each one waited.
+        let (sched, done) = (lock(&sess.st).sched.clone(), flags.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(secs + 5));
+            if !done.done.load(Ordering::SeqCst) {
+                eprintln!("[play] watchdog: stopping the scheduler");
+                sched.shutdown();
             }
-            Err(Throw::Exc(e)) => {
-                Err(format!("{stage:?}: Java exception {}", vm.exception_message(e).unwrap_or_default()))
-            }
-        }
-    };
-    let start = |sess: &mut Session| -> Result<(), String> {
-        run(sess, Stage::LibraryInit)?;
-        let env = bhpc_jni::native_env(&sess.platform);
-        sess.cpu.set_ticks(FOREVER);
-        vm.set_native_env(&mut sess.cpu, &env).map_err(|e| format!("setenv: {e:?}"))?;
-        vm.attach_main_looper(pid);
-        for s in [Stage::ActivityCreate, Stage::ActivityStart, Stage::ActivityResume, Stage::RootGeometry] {
-            run(sess, s)?;
-        }
-        // The GL context becomes valid on this thread; the game's own thread takes it over afterwards.
-        gles.egl_make_current(surface, surface, primary).map_err(|e| format!("eglMakeCurrent failed: {e:#x}"))?;
-        for s in [
-            Stage::SurfaceInit,
-            Stage::ContextValid,
-            Stage::SurfaceChanged,
-            Stage::WillEnterForeground,
-            Stage::DidBecomeActive,
-        ] {
-            run(sess, s)?;
-        }
-        let _ = gles.egl_make_current(0, 0, 0);
-        Ok(())
-    };
-    if let Err(e) = start(&mut sess) {
-        report.stop = e;
-        return Ok(finish(sess, &gles, report, flags, cfg, &blocks));
+        });
     }
 
-    // 3. Audio callbacks, then the game's main thread.
+    // 2. This thread is the game's main thread: libv recorded it as `pthread_main_thread_np` during `libv_init`, and
+    // `CFRunLoopGetMain` (where the Lifecycle callbacks queue their blocks) follows that. The Android UI thread
+    // (Java start-up stages, looper, layout, input) therefore becomes a guest thread of its own.
     let stack = sess.cpu.mem().map_anywhere(256 << 10, 4096)?;
     let _pump = sles.spawn_pump(&sess.cpu, stack + (256 << 10))?;
-    if let Err(e) = spawn_main_thread(&mut sess, &vm, flags) {
+    let ui = UiThread {
+        vm: vm.clone(),
+        flags: flags.clone(),
+        cfg: cfg.clone(),
+        platform: sess.platform.clone(),
+        main_pid: pid,
+        st: st.clone(),
+        rx: Mutex::new(Some(rx)),
+    };
+    if let Err(e) = spawn_ui_thread(&mut sess, ui) {
         report.stop = e;
         return Ok(finish(sess, &gles, report, flags, cfg, &blocks));
     }
+    while !flags.startup_done.load(Ordering::SeqCst) && !flags.done.load(Ordering::SeqCst) {
+        if flags.fail.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
+            break;
+        }
+        sched::sleep(&mut sess.cpu, &st, 2_000_000);
+    }
 
-    // 4. This thread is now the UI thread: hand the baton over and deliver input.
-    let begun = Instant::now();
-    let mut mapper = InputMapper::new(InputConfig { window: cfg.window, ..InputConfig::default() });
-    report.stop = ui_loop(cfg, &mut sess, &vm, &mut mapper, &rx, flags, begun);
+    // 3. `MainThread.nativeRun` -> `main` -> `UIApplicationMain`, on a big stack. It only returns when the app ends
+    // (or the UI thread shut the scheduler down).
+    if !flags.startup_done.load(Ordering::SeqCst) {
+        report.stop = "start-up failed".into();
+        return Ok(finish(sess, &gles, report, flags, cfg, &blocks));
+    }
+    let big = sess.cpu.mem().map_anywhere(MAIN_STACK, 4096)?;
+    sess.cpu.set_sp(big + MAIN_STACK);
+    sess.cpu.set_ticks(FOREVER);
+    eprintln!("[play] MainThread.nativeRun starts");
+    report.stop = match vm.run_stage(&mut sess.cpu, Stage::MainThreadRun) {
+        Ok(()) => "MainThread.nativeRun returned".to_string(),
+        Err(Throw::Stop(s)) => {
+            let bt = sess.cpu.stop_regs().map(|r| backtrace_lines(&sess.linker, &sess.cpu, r)).unwrap_or_default();
+            report.backtrace = bt;
+            format!("MainThread.nativeRun: guest stopped: {s}")
+        }
+        Err(Throw::Exc(e)) => {
+            format!("MainThread.nativeRun: Java exception {}", vm.exception_message(e).unwrap_or_default())
+        }
+    };
+    if let Some(why) = flags.ui_stop.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+        report.stop = why;
+        report.backtrace.clear();
+    }
     Ok(finish(sess, &gles, report, flags, cfg, &blocks))
 }
 
-/// Create the guest thread that runs `MainThread.nativeRun` (a thunk as the start routine).
-fn spawn_main_thread(sess: &mut Session, vm: &Vm, flags: &Arc<Flags>) -> Result<(), String> {
-    let (vm, flags) = (vm.clone(), flags.clone());
+/// What the Android UI thread needs (moved into its start routine).
+struct UiThread {
+    vm: Vm,
+    flags: Arc<Flags>,
+    cfg: PlayConfig,
+    platform: bhpc_jni::Platform,
+    main_pid: usize,
+    st: bhpc_bionic::Shared,
+    rx: Mutex<Option<Receiver<Event>>>,
+}
+
+type StageError = (String, [u32; 16]);
+
+fn run_stage(c: &mut Cpu, vm: &Vm, stage: Stage) -> Result<(), StageError> {
+    c.set_ticks(FOREVER);
+    eprintln!("[play] stage {stage:?} (bound: {})", vm.stage_bound(stage));
+    match vm.run_stage(c, stage) {
+        Ok(()) => Ok(()),
+        Err(Throw::Stop(s)) => Err((format!("{stage:?}: guest stopped: {s}"), c.stop_regs().unwrap_or([0; 16]))),
+        Err(Throw::Exc(e)) => {
+            Err((format!("{stage:?}: Java exception {}", vm.exception_message(e).unwrap_or_default()), [0; 16]))
+        }
+    }
+}
+
+impl UiThread {
+    /// Body of the UI thread: the Java start-up sequence, then looper, layout and input until the game ends.
+    fn main(&self, c: &mut Cpu) -> Result<String, StageError> {
+        let vm = &self.vm;
+        run_stage(c, vm, Stage::LibraryInit)?;
+        let env = bhpc_jni::native_env(&self.platform);
+        c.set_ticks(FOREVER);
+        vm.set_native_env(c, &env).map_err(|e| (format!("setenv: {e:?}"), [0; 16]))?;
+        vm.attach_main_looper(self.main_pid);
+        for s in [
+            Stage::ActivityCreate,
+            Stage::ActivityStart,
+            Stage::ActivityResume,
+            Stage::RootGeometry,
+            Stage::SurfaceInit,
+        ] {
+            run_stage(c, vm, s)?;
+        }
+        self.flags.startup_done.store(true, Ordering::SeqCst);
+        // These queue blocks on the main run loop, which starts once the main thread enters `nativeRun`.
+        for s in [Stage::ContextValid, Stage::SurfaceChanged, Stage::WillEnterForeground, Stage::DidBecomeActive] {
+            run_stage(c, vm, s)?;
+        }
+        let rx = self.rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let mut mapper = InputMapper::new(InputConfig { window: self.cfg.window, ..InputConfig::default() });
+        Ok(self.ui_loop(c, &mut mapper, rx.as_ref()))
+    }
+
+    fn ui_loop(&self, c: &mut Cpu, mapper: &mut InputMapper, rx: Option<&Receiver<Event>>) -> String {
+        let (vm, flags, cfg, st) = (&self.vm, &self.flags, &self.cfg, &self.st);
+        let begun = Instant::now();
+        loop {
+            if flags.done.load(Ordering::SeqCst) {
+                return "window closed".into();
+            }
+            if cfg.exit_after_shot && flags.shot_taken.load(Ordering::SeqCst) {
+                return "screenshot taken".into();
+            }
+            if cfg.seconds.is_some_and(|s| begun.elapsed() >= Duration::from_secs(s)) {
+                return format!("time limit reached after {} swaps", flags.swaps.load(Ordering::SeqCst));
+            }
+            if let Some(f) = lock(st).sched.failure() {
+                return format!("a guest thread failed: {f}");
+            }
+            sched::sleep(c, st, 4_000_000);
+            let now = begun.elapsed().as_millis() as i64;
+            // Runnables other threads posted to the Android main looper (`performSelectorOnMainThread` and friends).
+            c.set_ticks(FOREVER);
+            match vm.pump(c, vm.main_looper(), vm.now_ms()) {
+                Ok(_) => {}
+                Err(Throw::Stop(s)) => return format!("main looper: guest stopped: {s}"),
+                Err(Throw::Exc(e)) => {
+                    eprintln!("[play] main looper: Java exception {}", vm.exception_message(e).unwrap_or_default());
+                }
+            }
+            match vm.run_layout(c) {
+                Ok(_) => {}
+                Err(Throw::Stop(s)) => return format!("layout: guest stopped: {s}"),
+                Err(Throw::Exc(e)) => {
+                    eprintln!("[play] layout: Java exception {}", vm.exception_message(e).unwrap_or_default());
+                }
+            }
+            for alert in vm.take_alerts() {
+                let pick = cfg
+                    .alert_choice
+                    .or_else(|| alert.buttons.first().map(|b| b.1))
+                    .or_else(|| alert.cancel.as_ref().map(|b| b.1))
+                    .unwrap_or(0);
+                eprintln!(
+                    "[play] alert {:?}: {:?}; buttons {:?} cancel {:?} -> pressing {pick}",
+                    alert.title, alert.message, alert.buttons, alert.cancel
+                );
+                let id = vm.get_field(alert.view, "mObject").as_int() as u32;
+                let words: Vec<u32> = (0..24).map(|i| c.mem().read_u32(id + 4 * i).unwrap_or(0xdead)).collect();
+                eprintln!("[play] alert object {id:#x}: {words:x?}");
+                c.set_ticks(4_000_000_000);
+                if let Err(Throw::Stop(s)) = vm.alert_click(c, &alert, pick) {
+                    let msg = format!("alert: guest stopped: {s}");
+                    *flags.fail.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some((msg.clone(), c.stop_regs().unwrap_or([0; 16])));
+                    return msg;
+                }
+            }
+            let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new() };
+            while let Some(ev) = rx.and_then(|r| r.try_recv().ok()) {
+                if let Some(h) = host_event(&ev) {
+                    mapper.handle(h, now, &mut sink);
+                }
+            }
+            mapper.tick(now, &mut sink);
+            for e in sink.errors.drain(..) {
+                eprintln!("[play] input delivery: {e}");
+            }
+            if sink.actions.contains(&HostAction::Quit) {
+                return "quit requested".into();
+            }
+        }
+    }
+}
+
+/// Create the guest thread of the Android UI thread (a thunk as the start routine, a small stack).
+fn spawn_ui_thread(sess: &mut Session, ui: UiThread) -> Result<(), String> {
+    let (flags, st) = (ui.flags.clone(), ui.st.clone());
     let entry = sess
         .cpu
         .register_shared_thunk(
-            "bhpc:main_thread",
+            "bhpc:ui_thread",
             Arc::new(move |c: &mut Cpu| {
-                c.set_ticks(FOREVER);
-                eprintln!("[play] MainThread.nativeRun starts");
-                match vm.run_stage(c, Stage::MainThreadRun) {
-                    Ok(()) => eprintln!("[play] MainThread.nativeRun returned"),
-                    Err(Throw::Stop(s)) => {
-                        let regs = c.stop_regs().unwrap_or([0; 16]);
-                        *flags.fail.lock().unwrap_or_else(PoisonError::into_inner) =
-                            Some((format!("MainThread.nativeRun: guest stopped: {s}"), regs));
+                match ui.main(c) {
+                    Ok(why) => {
+                        *ui.flags.ui_stop.lock().unwrap_or_else(PoisonError::into_inner) = Some(why);
                     }
-                    Err(Throw::Exc(e)) => {
-                        let msg = format!(
-                            "MainThread.nativeRun: Java exception {}",
-                            vm.exception_message(e).unwrap_or_default()
-                        );
-                        *flags.fail.lock().unwrap_or_else(PoisonError::into_inner) = Some((msg, [0; 16]));
+                    Err((msg, regs)) => {
+                        *ui.flags.fail.lock().unwrap_or_else(PoisonError::into_inner) = Some((msg, regs));
                     }
                 }
+                // Wake the main thread out of its run loop so `nativeRun` returns and the process can end.
+                let sched = lock(&ui.st).sched.clone();
+                sched.shutdown();
                 c.ret_u32(0);
             }),
         )
         .map_err(|e| e.to_string())?;
+    let _ = (flags, st);
     let create = bhpc_bionic::resolve(&mut sess.cpu, &sess.st, "pthread_create").ok_or("no pthread_create")?;
     let area = lock(&sess.st).heap.calloc(1, 64);
     if area == 0 {
         return Err("guest heap exhausted".into());
     }
-    sess.cpu.mem().write_u32(area + 8 + 8, MAIN_STACK).map_err(|e| e.to_string())?;
+    sess.cpu.mem().write_u32(area + 8 + 8, 1 << 20).map_err(|e| e.to_string())?;
     sess.cpu.set_ticks(FOREVER);
     match sess.cpu.call(create, &[area, area + 8, entry, 0]) {
         Ok(r) if r.r0 == 0 => Ok(()),
         Ok(r) => Err(format!("pthread_create failed: {}", r.r0)),
         Err(s) => Err(format!("pthread_create stopped: {s}")),
-    }
-}
-
-fn ui_loop(
-    cfg: &PlayConfig,
-    sess: &mut Session,
-    vm: &Vm,
-    mapper: &mut InputMapper,
-    rx: &Receiver<Event>,
-    flags: &Arc<Flags>,
-    begun: Instant,
-) -> String {
-    let st = sess.st.clone();
-    loop {
-        if flags.done.load(Ordering::SeqCst) {
-            return "window closed".into();
-        }
-        if cfg.exit_after_shot && flags.shot_taken.load(Ordering::SeqCst) {
-            return "screenshot taken".into();
-        }
-        if cfg.seconds.is_some_and(|s| begun.elapsed() >= Duration::from_secs(s)) {
-            return format!("time limit reached after {} swaps", flags.swaps.load(Ordering::SeqCst));
-        }
-        if let Some((msg, _)) = flags.fail.lock().unwrap_or_else(PoisonError::into_inner).clone() {
-            return msg;
-        }
-        if let Some(f) = lock(&st).sched.failure() {
-            return format!("a guest thread failed: {f}");
-        }
-        sched::sleep(&mut sess.cpu, &st, 4_000_000);
-        let now = begun.elapsed().as_millis() as i64;
-        // Runnables other threads posted to the Android main looper (`performSelectorOnMainThread` and friends).
-        sess.cpu.set_ticks(FOREVER);
-        match vm.pump(&mut sess.cpu, vm.main_looper(), vm.now_ms()) {
-            Ok(_) => {}
-            Err(Throw::Stop(s)) => return format!("main looper: guest stopped: {s}"),
-            Err(Throw::Exc(e)) => {
-                eprintln!("[play] main looper: Java exception {}", vm.exception_message(e).unwrap_or_default())
-            }
-        }
-        match vm.run_layout(&mut sess.cpu) {
-            Ok(_) => {}
-            Err(Throw::Stop(s)) => return format!("layout: guest stopped: {s}"),
-            Err(Throw::Exc(e)) => {
-                eprintln!("[play] layout: Java exception {}", vm.exception_message(e).unwrap_or_default());
-            }
-        }
-        let mut sink = JniSink { vm, cpu: &mut sess.cpu, actions: Vec::new(), errors: Vec::new() };
-        while let Ok(ev) = rx.try_recv() {
-            if let Some(h) = host_event(&ev) {
-                mapper.handle(h, now, &mut sink);
-            }
-        }
-        mapper.tick(now, &mut sink);
-        for e in sink.errors.drain(..) {
-            eprintln!("[play] input delivery: {e}");
-        }
-        if sink.actions.contains(&HostAction::Quit) {
-            return "quit requested".into();
-        }
     }
 }
 
@@ -575,7 +692,7 @@ fn finish(
     }
     for (tid, (name, regs)) in blocks.lock().unwrap_or_else(PoisonError::into_inner).iter() {
         eprintln!("[blocked] guest thread {tid}: last blocking call {name}");
-        for l in backtrace_lines(&sess.linker, &sess.cpu, *regs).iter().take(12) {
+        for l in backtrace_lines(&sess.linker, &sess.cpu, *regs).iter().take(40) {
             eprintln!("    {l}");
         }
     }
@@ -601,7 +718,44 @@ fn finish(
     eprintln!("[play] GL calls handled: {}", stats.calls);
     r.gl_unsupported = stats.unsupported;
     r.unimplemented_hits = bhpc_bionic::lock(&sess.st).unimplemented_hits.clone();
-    r.top_thunks = bhpc_bionic::histogram(&sess.st).into_iter().filter(|(_, c)| *c > 0).take(20).collect();
+    eprintln!("[play] imports still bound to traps: {}", bhpc_bionic::lock(&sess.st).unimplemented_bound.join(" "));
+    r.top_thunks = bhpc_bionic::histogram(&sess.st).into_iter().filter(|(_, c)| *c > 0).collect();
     sess.shutdown();
     r
+}
+
+/// Patch `lookUpMethod` of the guest Objective-C runtime to log `selector` of every cache miss. The displaced first
+/// two instructions run in a trampoline, so the original function continues unchanged.
+fn hook_objc(sess: &mut Session) -> Result<(), String> {
+    let entry = sess.linker.modules().iter().find_map(|m| m.export("lookUpMethod")).ok_or("no lookUpMethod export")?;
+    if entry & 1 != 0 {
+        return Err("lookUpMethod is Thumb code".into());
+    }
+    let mem = sess.cpu.mem().clone();
+    let tramp = lock(&sess.st).heap.alloc(16);
+    let orig = mem.read_bytes(entry, 8).map_err(|e| e.to_string())?;
+    let mut code = orig.clone();
+    code.extend_from_slice(&0xE51F_F004u32.to_le_bytes()); // ldr pc, [pc, #-4]
+    code.extend_from_slice(&(entry + 8).to_le_bytes());
+    mem.write_bytes(tramp, &code).map_err(|e| e.to_string())?;
+    let seen = Mutex::new(std::collections::HashSet::new());
+    let hook = sess
+        .cpu
+        .register_shared_thunk(
+            "bhpc:objc_trace",
+            Arc::new(move |c: &mut Cpu| {
+                let (cls, sel) = (c.reg(0), c.reg(1));
+                let name = c.mem().read_cstr(sel).unwrap_or_default();
+                if seen.lock().unwrap_or_else(PoisonError::into_inner).insert((cls, sel)) {
+                    eprintln!("[objc] {cls:#x} {name}");
+                }
+                c.tail_call(tramp);
+            }),
+        )
+        .map_err(|e| e.to_string())?;
+    let mut patch = 0xE51F_F004u32.to_le_bytes().to_vec();
+    patch.extend_from_slice(&hook.to_le_bytes());
+    mem.write_bytes(entry, &patch).map_err(|e| e.to_string())?;
+    sess.cpu.clear_cache();
+    Ok(())
 }
