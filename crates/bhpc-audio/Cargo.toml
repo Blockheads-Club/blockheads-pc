@@ -9,3 +9,4 @@ description = "Audio for the Blockheads PC port: a PCM mixer, an OpenSL ES HLE f
 [dependencies]
 bhpc-mem.workspace = true
 bhpc-cpu.workspace = true
+symphonia = { version = "0.6.1", default-features = false, features = ["aac", "isomp4", "wav", "pcm", "mp3", "ogg", "vorbis", "flac"] }
