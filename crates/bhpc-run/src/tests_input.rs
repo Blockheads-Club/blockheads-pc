@@ -110,7 +110,7 @@ fn delivery_calls_natives_and_collects_errors() {
     let c = calls.clone();
     jni.vm.set_log(move |m| c.lock().unwrap().push(m.to_string()));
     jni.set_trace_calls(true);
-    let mut sink = JniSink { vm: &jni.vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new() };
+    let mut sink = JniSink { vm: &jni.vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false };
     // No guest is loaded, so the natives are reported stubs that answer 0/void.
     assert!(!sink.deliver(&GuestEvent::KeyDown { key_code: 4, unicode: 0, meta: 0, time_ms: 1 }), "boolean 0");
     assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 0.0, y: 0.0, time_ms: 1 }), "void is accepted");

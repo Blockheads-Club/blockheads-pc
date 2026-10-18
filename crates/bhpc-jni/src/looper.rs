@@ -437,6 +437,7 @@ impl Vm {
                     message: String::new(),
                     buttons: Vec::new(),
                     cancel: None,
+                    field: None,
                 });
                 st.alerts.len() - 1
             }
@@ -454,6 +455,40 @@ impl Vm {
         let id = self.get_field(alert.view, "mObject");
         self.call_method(cpu, alert.view, "nativeOnClick", "(II)V", &[id, Value::Int(index)])?;
         self.call_method(cpu, alert.view, "nativeOnDismiss", "(I)V", &[id])?;
+        if alert.field.is_some() && self.text_focus() == alert.field {
+            self.set_text_focus(None);
+        }
         Ok(())
+    }
+
+    /// The text field that has the keyboard focus (`becomeFirstResponder`, or the input line of a shown alert).
+    pub fn text_focus(&self) -> Option<Obj> {
+        self.st().text_focus
+    }
+
+    pub fn set_text_focus(&self, field: Option<Obj>) {
+        self.st().text_focus = field;
+    }
+
+    /// Current contents of a text field (what Java `getText` returns).
+    pub fn text_of(&self, field: Obj) -> String {
+        match self.get_field(field, "mText") {
+            Value::Ref(Some(s)) => self.string(s).unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
+    pub fn set_text_of(&self, field: Obj, text: &str) {
+        let s = self.new_string(text);
+        self.set_field(field, "mText", Value::Ref(Some(s)));
+    }
+
+    /// Replace `len` UTF-16 units at `location` of the field's text with `with` (clamped to the text).
+    pub fn replace_text(&self, field: Obj, location: usize, len: usize, with: &str) {
+        let mut units: Vec<u16> = self.text_of(field).encode_utf16().collect();
+        let start = location.min(units.len());
+        let end = start.saturating_add(len).min(units.len());
+        units.splice(start..end, with.encode_utf16());
+        self.set_text_of(field, &String::from_utf16_lossy(&units));
     }
 }

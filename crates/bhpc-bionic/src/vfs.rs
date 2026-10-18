@@ -156,6 +156,11 @@ impl Vfs {
         Ok(fd)
     }
 
+    /// The path `fd` was opened with (what tells two descriptors of one file apart from two files).
+    pub fn path_of(&self, fd: i32) -> Option<String> {
+        self.open.get(&fd).map(|o| o.path.clone())
+    }
+
     /// True if `fd` is an open descriptor.
     pub fn is_open(&self, fd: i32) -> bool {
         self.open.contains_key(&fd)

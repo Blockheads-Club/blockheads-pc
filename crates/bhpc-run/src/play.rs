@@ -10,8 +10,9 @@
 use crate::apkrun::{backtrace_lines, HostHooks, InitConfig, Session};
 use crate::dl::{self, DlTable};
 use crate::input::{host_event, JniSink};
+use crate::script::{Action, Step};
 use crate::tracks::Tracks;
-use crate::{png, RunError};
+use crate::{framestats, png, RunError};
 use bhpc_app::sdl::SdlBackend;
 use bhpc_app::{App, AppOptions, Backend, Event, ForwardHandler, Metrics, SystemClock, WindowConfig};
 use bhpc_audio::{Mixer, Sles};
@@ -55,10 +56,14 @@ pub struct PlayConfig {
     /// Log the selector of every Objective-C method-cache miss (`lookUpMethod` hook), a cheap trace of the game's
     /// message flow: each (class, selector) pair is reported once.
     pub trace_objc: bool,
+    /// Exported ARM functions whose calls are logged (`--trace-fn`).
+    pub trace_fn: Vec<String>,
     /// Button index to press when the game shows an alert (default: the first button, else the cancel button).
     pub alert_choice: Option<i32>,
-    /// Synthetic left clicks `(x, y, after_ms)` in window pixels (automation and smoke tests).
-    pub clicks: Vec<(f32, f32, u64)>,
+    /// Scripted input, screenshots and frame-time marks (see `script`).
+    pub script: Vec<Step>,
+    /// Directory of the screenshots a script asks for.
+    pub shot_dir: PathBuf,
     /// Write the full list of Java members the guest looked up (`host`, `native`, `STUB`, call counts) here.
     pub jni_report: Option<PathBuf>,
 }
@@ -76,8 +81,10 @@ impl PlayConfig {
             symbolize: Vec::new(),
             jni_report: None,
             trace_objc: false,
+            trace_fn: Vec::new(),
             alert_choice: None,
-            clicks: Vec::new(),
+            script: Vec::new(),
+            shot_dir: PathBuf::from("."),
         }
     }
 }
@@ -137,6 +144,13 @@ struct Flags {
     done: AtomicBool,
     swaps: AtomicU64,
     shot_taken: AtomicBool,
+    /// Screenshots a script asked for (written at the next presented frame).
+    shot_requests: Mutex<Vec<PathBuf>>,
+    /// Timestamp of every presented frame and the script marks (index of the next frame).
+    swap_times: Mutex<Vec<Instant>>,
+    marks: Mutex<Vec<(String, usize)>>,
+    /// A script asked to quit.
+    script_quit: AtomicBool,
     /// The UI thread finished the Java start-up stages that must precede `nativeRun`.
     startup_done: AtomicBool,
     /// Why the UI thread ended (set when it ends normally).
@@ -198,7 +212,28 @@ impl Hooks {
     /// Count a presented frame (and take the screenshot when it is due); call right before the swap.
     fn before_swap(&self) {
         let n = self.flags.swaps.fetch_add(1, Ordering::SeqCst) + 1;
+        self.flags.swap_times.lock().unwrap_or_else(PoisonError::into_inner).push(Instant::now());
+        let wanted: Vec<PathBuf> =
+            std::mem::take(&mut *self.flags.shot_requests.lock().unwrap_or_else(PoisonError::into_inner));
+        if !wanted.is_empty() {
+            self.write_shots(n, &wanted);
+        }
         self.snapshot(n);
+    }
+
+    fn write_shots(&self, n: u64, paths: &[PathBuf]) {
+        match self.capture() {
+            Some((w, h, px)) => {
+                for p in paths {
+                    let lit = px.chunks(4).filter(|p| p[0] | p[1] | p[2] != 0).count();
+                    eprintln!("[play] frame {n}: {w}x{h}, {lit} non-black pixels -> {}", p.display());
+                    if let Err(e) = png::write_file(p, w, h, &px) {
+                        eprintln!("[play] cannot write {}: {e}", p.display());
+                    }
+                }
+            }
+            None => eprintln!("[play] frame {n}: read-back not possible"),
+        }
     }
 
     fn snapshot(&self, n: u64) {
@@ -321,24 +356,9 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
         });
     }
     let (tx, rx) = channel();
-    if !cfg.clicks.is_empty() {
-        let (clicks, tx) = (cfg.clicks.clone(), tx.clone());
-        std::thread::spawn(move || {
-            let begun = Instant::now();
-            for (x, y, at) in clicks {
-                std::thread::sleep(Duration::from_millis(at).saturating_sub(begun.elapsed()));
-                let b = bhpc_app::MouseButton::Left;
-                let evs = [
-                    Event::MouseMove { x, y },
-                    Event::MouseButton { button: b, pressed: true, x, y },
-                    Event::MouseButton { button: b, pressed: false, x, y },
-                ];
-                for e in evs {
-                    let _ = tx.send(e);
-                    std::thread::sleep(Duration::from_millis(60));
-                }
-            }
-        });
+    if !cfg.script.is_empty() {
+        let (script, tx, f, dir) = (cfg.script.clone(), tx.clone(), flags.clone(), cfg.shot_dir.clone());
+        std::thread::spawn(move || run_script(&script, &tx, &f, &dir));
     }
     let (c, f, mx) = (cfg.clone(), flags.clone(), mixer);
     let guest = std::thread::Builder::new()
@@ -355,6 +375,39 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
     let report = guest.join().map_err(|_| other("the guest main thread panicked"))?;
     drop(app);
     report
+}
+
+/// Play a script in real time: events go to the window's event channel, the rest to the shared flags.
+fn run_script(script: &[Step], tx: &std::sync::mpsc::Sender<Event>, flags: &Flags, shot_dir: &std::path::Path) {
+    // The clock starts at the first presented frame: start-up time varies a lot between runs.
+    while flags.swaps.load(Ordering::SeqCst) == 0 {
+        if flags.done.load(Ordering::SeqCst) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let begun = Instant::now();
+    for (at, action) in script {
+        std::thread::sleep(Duration::from_millis(*at).saturating_sub(begun.elapsed()));
+        match action {
+            Action::Event(e) => {
+                let _ = tx.send(e.clone());
+            }
+            Action::Shot(name) => {
+                flags
+                    .shot_requests
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(shot_dir.join(format!("{name}.png")));
+            }
+            Action::Mark(label) => {
+                let at = flags.swap_times.lock().unwrap_or_else(PoisonError::into_inner).len();
+                eprintln!("[script] {} ms: mark {label} (frame {at})", begun.elapsed().as_millis());
+                flags.marks.lock().unwrap_or_else(PoisonError::into_inner).push((label.clone(), at));
+            }
+            Action::Quit => flags.script_quit.store(true, Ordering::SeqCst),
+        }
+    }
 }
 
 /// Pieces created while the session is being opened.
@@ -455,6 +508,11 @@ fn boot(
     if cfg.trace_objc {
         if let Err(e) = hook_objc(&mut sess) {
             eprintln!("[play] objc trace unavailable: {e}");
+        }
+    }
+    for f in &cfg.trace_fn {
+        if let Err(e) = hook_trace(&mut sess, f) {
+            eprintln!("[play] cannot trace {f}: {e}");
         }
     }
     let mut report = PlayReport::default();
@@ -594,12 +652,36 @@ impl UiThread {
         Ok(self.ui_loop(c, &mut mapper, rx.as_ref()))
     }
 
+    /// Press a button of `alert` (`None`: the configured or first button, else the cancel button).
+    fn answer(&self, c: &mut Cpu, alert: &bhpc_jni::Alert, pick: Option<i32>) {
+        let pick = pick
+            .or(self.cfg.alert_choice)
+            .or_else(|| alert.buttons.first().map(|b| b.1))
+            .or_else(|| alert.cancel.as_ref().map(|b| b.1))
+            .unwrap_or(0);
+        eprintln!(
+            "[play] alert {:?}: {:?}; buttons {:?} cancel {:?} -> pressing {pick}",
+            alert.title, alert.message, alert.buttons, alert.cancel
+        );
+        c.set_ticks(4_000_000_000);
+        if let Err(Throw::Stop(s)) = self.vm.alert_click(c, alert, pick) {
+            let msg = format!("alert: guest stopped: {s}");
+            *self.flags.fail.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some((msg, c.stop_regs().unwrap_or([0; 16])));
+        }
+    }
+
     fn ui_loop(&self, c: &mut Cpu, mapper: &mut InputMapper, rx: Option<&Receiver<Event>>) -> String {
         let (vm, flags, cfg, st) = (&self.vm, &self.flags, &self.cfg, &self.st);
         let begun = Instant::now();
+        let mut text_alert: Option<bhpc_jni::Alert> = None;
+        let mut focused: Option<bhpc_jni::Obj> = None;
         loop {
             if flags.done.load(Ordering::SeqCst) {
                 return "window closed".into();
+            }
+            if flags.script_quit.load(Ordering::SeqCst) {
+                return "script quit".into();
             }
             if cfg.exit_after_shot && flags.shot_taken.load(Ordering::SeqCst) {
                 return "screenshot taken".into();
@@ -629,28 +711,34 @@ impl UiThread {
                 }
             }
             for alert in vm.take_alerts() {
-                let pick = cfg
-                    .alert_choice
-                    .or_else(|| alert.buttons.first().map(|b| b.1))
-                    .or_else(|| alert.cancel.as_ref().map(|b| b.1))
-                    .unwrap_or(0);
-                eprintln!(
-                    "[play] alert {:?}: {:?}; buttons {:?} cancel {:?} -> pressing {pick}",
-                    alert.title, alert.message, alert.buttons, alert.cancel
-                );
-                let id = vm.get_field(alert.view, "mObject").as_int() as u32;
-                let words: Vec<u32> = (0..24).map(|i| c.mem().read_u32(id + 4 * i).unwrap_or(0xdead)).collect();
-                eprintln!("[play] alert object {id:#x}: {words:x?}");
-                c.set_ticks(4_000_000_000);
-                if let Err(Throw::Stop(s)) = vm.alert_click(c, &alert, pick) {
-                    let msg = format!("alert: guest stopped: {s}");
-                    *flags.fail.lock().unwrap_or_else(PoisonError::into_inner) =
-                        Some((msg.clone(), c.stop_regs().unwrap_or([0; 16])));
-                    return msg;
+                if alert.field.is_some() {
+                    // An alert with an input line waits for the typed text; Return answers it with the first button,
+                    // Escape with the cancel button.
+                    eprintln!("[play] alert {:?} with a text field: waiting for text input", alert.title);
+                    text_alert = Some(alert);
+                    continue;
+                }
+                self.answer(c, &alert, None);
+                if flags.fail.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
+                    return "alert: guest stopped".into();
                 }
             }
-            let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new() };
+            let focus = vm.text_focus();
+            if focus != focused {
+                focused = focus;
+                let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
+                match focus {
+                    Some(f) => {
+                        let (handle, text) = (vm.get_field(f, "mObject").as_int(), vm.text_of(f));
+                        mapper.set_text_focus(Some((handle, &text)), &mut sink);
+                    }
+                    None => mapper.set_text_focus(None, &mut sink),
+                }
+            }
+            let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
+            let mut escape = false;
             while let Some(ev) = rx.and_then(|r| r.try_recv().ok()) {
+                escape |= matches!(&ev, Event::Key { key, pressed: true, .. } if *key == bhpc_app::Key::ESCAPE);
                 if let Some(h) = host_event(&ev) {
                     mapper.handle(h, now, &mut sink);
                 }
@@ -659,8 +747,17 @@ impl UiThread {
             for e in sink.errors.drain(..) {
                 eprintln!("[play] input delivery: {e}");
             }
-            if sink.actions.contains(&HostAction::Quit) {
+            let (returned, actions) = (sink.returned, std::mem::take(&mut sink.actions));
+            if actions.contains(&HostAction::Quit) {
                 return "quit requested".into();
+            }
+            if let Some(alert) = text_alert.take_if(|_| returned || escape) {
+                let pick = if returned { None } else { Some(alert.cancel.as_ref().map_or(0, |b| b.1)) };
+                eprintln!("[play] text alert answered with {:?}: {:?}", pick, alert.field.map(|f| vm.text_of(f)));
+                self.answer(c, &alert, pick);
+                let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
+                mapper.set_text_focus(None, &mut sink);
+                focused = None;
             }
         }
     }
@@ -726,6 +823,13 @@ fn finish(
         eprintln!("[sym] {}", crate::apkrun::symbolize(&sess.linker, &sess.cpu, *a));
     }
     r.swaps = flags.swaps.load(Ordering::SeqCst);
+    {
+        let times = flags.swap_times.lock().unwrap_or_else(PoisonError::into_inner);
+        let marks = flags.marks.lock().unwrap_or_else(PoisonError::into_inner);
+        for l in framestats::report(&times, &marks) {
+            eprintln!("{l}");
+        }
+    }
     if let Some((msg, regs)) = flags.fail.lock().unwrap_or_else(PoisonError::into_inner).clone() {
         r.backtrace = backtrace_lines(&sess.linker, &sess.cpu, regs);
         if r.stop.is_empty() || r.stop == "window closed" {
@@ -750,12 +854,17 @@ fn finish(
     r
 }
 
-/// Patch `lookUpMethod` of the guest Objective-C runtime to log `selector` of every cache miss. The displaced first
-/// two instructions run in a trampoline, so the original function continues unchanged.
-fn hook_objc(sess: &mut Session) -> Result<(), String> {
-    let entry = sess.linker.modules().iter().find_map(|m| m.export("lookUpMethod")).ok_or("no lookUpMethod export")?;
+/// Patch the first two instructions of the ARM function `symbol` (exported by any loaded library) with a jump to a
+/// host hook; the displaced instructions run in a trampoline, so the original continues unchanged. `hook` sees the
+/// guest registers on entry.
+fn hook_function(
+    sess: &mut Session,
+    symbol: &str,
+    hook: impl Fn(&mut Cpu) + Send + Sync + 'static,
+) -> Result<(), String> {
+    let entry = sess.linker.modules().iter().find_map(|m| m.export(symbol)).ok_or(format!("no {symbol} export"))?;
     if entry & 1 != 0 {
-        return Err("lookUpMethod is Thumb code".into());
+        return Err(format!("{symbol} is Thumb code"));
     }
     let mem = sess.cpu.mem().clone();
     let tramp = lock(&sess.st).heap.alloc(16);
@@ -764,24 +873,56 @@ fn hook_objc(sess: &mut Session) -> Result<(), String> {
     code.extend_from_slice(&0xE51F_F004u32.to_le_bytes()); // ldr pc, [pc, #-4]
     code.extend_from_slice(&(entry + 8).to_le_bytes());
     mem.write_bytes(tramp, &code).map_err(|e| e.to_string())?;
-    let seen = Mutex::new(std::collections::HashSet::new());
-    let hook = sess
+    let thunk = sess
         .cpu
         .register_shared_thunk(
-            "bhpc:objc_trace",
+            &format!("bhpc:trace:{symbol}"),
             Arc::new(move |c: &mut Cpu| {
-                let (cls, sel) = (c.reg(0), c.reg(1));
-                let name = c.mem().read_cstr(sel).unwrap_or_default();
-                if seen.lock().unwrap_or_else(PoisonError::into_inner).insert((cls, sel)) {
-                    eprintln!("[objc] {cls:#x} {name}");
-                }
+                hook(c);
                 c.tail_call(tramp);
             }),
         )
         .map_err(|e| e.to_string())?;
     let mut patch = 0xE51F_F004u32.to_le_bytes().to_vec();
-    patch.extend_from_slice(&hook.to_le_bytes());
+    patch.extend_from_slice(&thunk.to_le_bytes());
     mem.write_bytes(entry, &patch).map_err(|e| e.to_string())?;
     sess.cpu.clear_cache();
     Ok(())
+}
+
+/// Log the selector of every Objective-C method-cache miss (`lookUpMethod`), once per (class, selector).
+fn hook_objc(sess: &mut Session) -> Result<(), String> {
+    let seen = Mutex::new(std::collections::HashSet::new());
+    hook_function(sess, "lookUpMethod", move |c| {
+        let (cls, sel) = (c.reg(0), c.reg(1));
+        let name = c.mem().read_cstr(sel).unwrap_or_default();
+        if seen.lock().unwrap_or_else(PoisonError::into_inner).insert((cls, sel)) {
+            eprintln!("[objc] {cls:#x} {name}");
+        }
+    })
+}
+
+/// `--trace-fn NAME`: log every call of an exported ARM function with its first four arguments; an argument that
+/// points at a `CFString` (or a C string) is shown as text.
+fn hook_trace(sess: &mut Session, symbol: &str) -> Result<(), String> {
+    let name = symbol.to_string();
+    hook_function(sess, symbol, move |c| {
+        let args: Vec<String> = (0..4)
+            .map(|i| {
+                let v = c.reg(i);
+                let text = c
+                    .mem()
+                    .read_u32(v.wrapping_add(8))
+                    .ok()
+                    .and_then(|p| c.mem().read_cstr(p).ok())
+                    .or_else(|| c.mem().read_cstr(v).ok())
+                    .filter(|t| !t.is_empty() && t.chars().all(|ch| !ch.is_control()));
+                match text {
+                    Some(t) => format!("{v:#x}={t:?}"),
+                    None => format!("{v:#x}"),
+                }
+            })
+            .collect();
+        eprintln!("[trace-fn] {name}({})", args.join(", "));
+    })
 }

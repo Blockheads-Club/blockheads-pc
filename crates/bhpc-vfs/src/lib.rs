@@ -12,6 +12,7 @@
 pub mod archive;
 pub mod asset;
 pub mod error;
+pub mod fontname;
 pub mod fonts;
 pub mod fs;
 pub mod hostfs;
