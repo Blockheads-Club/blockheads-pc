@@ -151,10 +151,12 @@ fn open_splash(app: &tauri::App) -> tauri::Result<()> {
         .minimizable(false)
         .shadow(false)
         .skip_taskbar(true)
+        // Hidden until built: GTK warns when the frameless window gets its title bar after it was shown.
+        .visible(false)
         .focused(true);
     #[cfg(not(target_os = "macos"))]
     let b = b.transparent(true);
-    b.build()?;
+    b.build()?.show()?;
     Ok(())
 }
 
