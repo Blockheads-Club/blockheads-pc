@@ -12,7 +12,14 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn std::io::Write) -> u8 {
-    run_with(args, stdout, stderr, &bench::measure)
+    // `--config FILE` (the launcher's `launcher.toml`) stands for --apk/--data-dir/--window/... .
+    match bhpc_launcher::config::expand_args(args) {
+        Ok(args) => run_with(&args, stdout, stderr, &bench::measure),
+        Err(e) => {
+            let _ = writeln!(stderr, "bhpc-run: {e}");
+            2
+        }
+    }
 }
 
 type Measure<'a> = &'a dyn Fn(u32) -> Result<bench::ThunkTiming, bhpc_run::RunError>;
@@ -328,6 +335,24 @@ mod tests {
         let (mut o, mut e) = (Vec::new(), Vec::new());
         assert_eq!(run(&s(&["--apk", "/nonexistent/x.apk", "--init-only"]), &mut o, &mut e), 1);
         assert!(String::from_utf8_lossy(&e).contains("bhpc-run:"));
+    }
+
+    #[test]
+    fn config_file_stands_for_the_flags() {
+        let (apk, dir) = apk_with(&[0xE320_F000, 0xE12F_FF1E]);
+        let mut cfg = bhpc_launcher::LaunchConfig::new(&apk, dir.join("cfgdata"));
+        cfg.force = true;
+        let file = dir.join("launcher.toml");
+        cfg.save(&file).unwrap();
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        let args = s(&["--config", &file.to_string_lossy(), "--init-only"]);
+        assert_eq!(run(&args, &mut o, &mut e), 0, "{}", String::from_utf8_lossy(&e));
+        assert!(String::from_utf8(o).unwrap().contains("constructors: 1/1 returned"));
+        assert!(dir.join("cfgdata").exists());
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        assert_eq!(run(&s(&["--config", &dir.join("none.toml").to_string_lossy()]), &mut o, &mut e), 2);
+        assert!(String::from_utf8_lossy(&e).contains("does not exist"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

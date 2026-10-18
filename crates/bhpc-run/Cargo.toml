@@ -23,6 +23,7 @@ bhpc-app = { path = "../bhpc-app" }
 bhpc-gles = { path = "../bhpc-gles" }
 bhpc-audio = { path = "../bhpc-audio" }
 bhpc-input = { path = "../bhpc-input" }
+bhpc-launcher = { path = "../bhpc-launcher" }
 bhpc-mem.workspace = true
 bhpc-cpu.workspace = true
 bhpc-loader.workspace = true
