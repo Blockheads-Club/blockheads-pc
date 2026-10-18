@@ -238,6 +238,7 @@ fn epoll_reports_readiness_and_validates_requests() {
     assert_eq!(evs[0].0 & 0x10, 0x10, "EPOLLHUP");
     // Argument errors and a descriptor of the other table (always ready).
     assert_eq!(r.wait(ep, 0, 0).0, NEG1);
+    assert_eq!(r.call("epoll_pwait", &[ep, r.scratch + 1000, 4, 0, 0]), 1, "epoll_pwait is epoll_wait");
     assert_eq!(r.wait(FD_BASE + 300, 1, 0).0, NEG1);
     assert_eq!(r.errno(), errno::EBADF);
     let other = r.event(EPOLLIN | EPOLLOUT, 5);

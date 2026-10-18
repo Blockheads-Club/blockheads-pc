@@ -398,3 +398,23 @@ fn a_setup_hook_can_supply_window_audio_and_screen_size() {
         Session::open_setup(&cfg, Box::new(std::io::sink()), None, &mut |_, _| Err(RunError::NoEntry("hook".into())));
     assert!(matches!(err, Err(RunError::NoEntry(_))));
 }
+
+#[test]
+fn java_exports_are_bound_lazily_and_the_vm_heap_is_zeroed_and_freed() {
+    use bhpc_jni::vm::GuestAlloc;
+    let dir = Tmp::new("java");
+    let code = lib(&[BX_LR], |b, at| b.syms = vec![def("Java_com_example_Main_run", at)]);
+    let apk = apk_file(&dir, &[("libApplication.so", code)]);
+    let mut cfg = InitConfig::new(apk);
+    cfg.force = true;
+    cfg.data_dir = Some(dir.0.join("data"));
+    let mut sess = Session::open(&cfg, Box::new(std::io::sink())).unwrap();
+    // The exported native is found through the resolver and runs the library's `bx lr`.
+    let r = sess.jni.vm.call_static(&mut sess.cpu, "com/example/Main", "run", "()V", &[]);
+    assert!(r.is_ok());
+    let mut heap = bhpc_run::apkrun::BionicHeap(sess.st.clone());
+    let p = heap.alloc(64);
+    heap.free(p);
+    let q = heap.alloc(64);
+    assert_eq!(lock(&sess.st).mem.read_bytes(q, 64).unwrap(), vec![0u8; 64], "recycled blocks come back zeroed");
+}
