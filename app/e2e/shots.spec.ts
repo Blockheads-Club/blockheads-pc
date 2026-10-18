@@ -153,6 +153,25 @@ for (const scheme of ['light', 'dark'] as const) {
       await shot(page, 'settings-about', scheme);
     });
 
+    test('small window 800 x 600', async ({ page }) => {
+      const small = { width: 800, height: 600 };
+      await open(page, 'first=1', scheme, small);
+      await page.getByLabel('I own the game').check();
+      await shot(page, 'small-setup1-welcome', scheme);
+      await page.getByRole('button', { name: 'Next' }).click();
+      await page.getByRole('button', { name: 'Browse…' }).click();
+      await expect(page.getByText('The Blockheads 1.7.6')).toBeVisible();
+      await shot(page, 'small-setup2-apk', scheme);
+      await page.getByRole('button', { name: 'Next' }).click();
+      await page.getByRole('button', { name: 'Next' }).click();
+      await shot(page, 'small-setup4-controls', scheme);
+      await page.goto('/?updates=1');
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await shot(page, 'small-settings-general', scheme);
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Controls' }).click();
+      await shot(page, 'small-settings-controls', scheme);
+    });
+
     for (const os of ['windows', 'macos', 'linux'] as const) {
       test(`title bar ${os}`, async ({ page }) => {
         await open(page, `os=${os}&maximized=1`, scheme);

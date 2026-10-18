@@ -22,7 +22,7 @@ for f in "$dir"/deb/*.deb; do
 done
 for f in "$dir"/rpm/*.rpm; do
   [ -e "$f" ] || continue
-  rpm -qlp "$f" | scan "$f"
+  rpm --dbpath "$work" -qlp "$f" | scan "$f"
 done
 for f in "$dir"/appimage/*.AppImage; do
   [ -e "$f" ] || continue
