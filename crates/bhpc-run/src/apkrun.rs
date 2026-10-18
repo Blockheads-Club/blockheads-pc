@@ -308,6 +308,8 @@ impl Session {
         bcfg.fs = storage.vfs.clone();
         let (mut cpu, st) = new_env_with(bcfg, Some(cfg.watchdog_cycles))?;
         cpu.set_trace_thunks(cfg.trace_thunks);
+        // Spinning guest threads must not starve the ones they wait for (threads inherit the policy).
+        bhpc_bionic::sched::enable_time_slice(&mut cpu, &st, bhpc_bionic::sched::DEFAULT_SLICE_CYCLES);
         lock(&st).vfs.trace = cfg.trace_fs;
         let hooks = setup(&mut cpu, &st)?;
         let mut linker = Linker::new(cpu.mem().clone());

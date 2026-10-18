@@ -430,7 +430,6 @@ fn boot(
         bhpc_gles::register_all(cpu, &gles);
         let sles = Sles::install(cpu, mixer.clone()).map_err(other)?;
         let _vfd = crate::vfd::install(cpu, st);
-        crate::extras::install(cpu, st);
         crate::mmapio::SharedMaps::default().install(cpu, st);
         dl::install(cpu, st, dl_slot.clone());
         watch_blocking(cpu, st, &blocks);
@@ -474,6 +473,11 @@ fn boot(
     if let Some(secs) = cfg.seconds {
         // If a guest thread is stuck in a call that never returns (so the UI loop cannot look at the clock), stop
         // the scheduler: every blocked thread wakes, the run ends and the report shows where each one waited.
+        // The same limit also covers a guest that spins: the time slice checks the wall-clock deadline.
+        bhpc_bionic::sched::set_wall_deadline(
+            &sess.st,
+            Some(std::time::Instant::now() + Duration::from_secs(secs + 5)),
+        );
         let (sched, done) = (lock(&sess.st).sched.clone(), flags.clone());
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(secs + 5));

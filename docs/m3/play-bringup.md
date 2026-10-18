@@ -42,7 +42,6 @@ World..." opens the world dialog).
 * LMDB needs `pread`/`pwrite` and coherent `mmap(MAP_SHARED)` (`mmapio.rs`);
 * `dlopen`/`dlsym` over a snapshot of the module table plus the GL/EGL/OpenSL ES host libraries (`dl.rs`), including
   `RTLD_NEXT` (libgles wraps `eglSwapBuffers`);
-* `inet_pton`/`inet_ntop`/`inet_ntoa`, `__get_h_errno`, `__isinf` (`extras.rs`);
 * first launch shows a consent alert ("Enable multiplayer and free crystals?"); play mode presses the first button
   (`--alert-choice` overrides).
 
