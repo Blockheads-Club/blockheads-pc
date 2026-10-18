@@ -13,7 +13,7 @@ functions and lines, and by Playwright against a mock backend.
 
 | Path | What |
 |---|---|
-| `crates/bhpc-launcher` | APK check (4 error kinds), `LaunchConfig` TOML, key bindings with conflicts, window options, save import, `ops` (what each command does), `session` (spawn/stop/poll `bhpc-run`, bounded log) |
+| `crates/bhpc-launcher` | APK check (4 error kinds), `LaunchConfig` TOML, key bindings with conflicts, window options, save import, `ops` (what each command does), `progress` (start-up progress protocol, weights, estimate), `session` (spawn/stop/poll `bhpc-run`, bounded log, stall guard) |
 | `app/src/lib` | `store.svelte.ts` (state), `api.ts` (Tauri commands), `mock-api.ts` (test fake), `screens/`, `parts/`, `ui/`, `layout/` |
 | `app/src-tauri` | Tauri shell, capabilities, bundle config, icons, sidecar (`binaries/`, built, not committed) |
 | `app/e2e` | Playwright specs and the in-page mock backend |
@@ -37,8 +37,17 @@ bun run check          # svelte-check
 bun run test           # vitest with the 100 % coverage gate
 bun run test:e2e       # Playwright against the built UI and the mock backend
 SHOT_DIR=/tmp/shots bunx playwright test e2e/shots.spec.ts   # screenshots of every screen, light and dark
-scripts/build-sidecar.sh && bun run tauri dev                # real backend (from the repo root: ../scripts)
+bun run tauri dev                                            # real backend; refreshes the sidecar first (see below)
 ```
+
+## The sidecar is always rebuilt from the current sources
+
+A launcher build once bundled a stale `bhpc-run`. `tauri.conf.json` therefore runs `scripts/ensure-sidecar.mjs` as
+`beforeDevCommand` and `beforeBuildCommand`; it calls `scripts/build-sidecar.sh`, an incremental `cargo build` (a few
+seconds when nothing changed) that copies the result to `app/src-tauri/binaries/`. So `bun run tauri dev` and
+`bun run tauri build [--no-bundle]` can not ship a runner older than `crates/`. `BHPC_SKIP_SIDECAR=1` skips the
+step; CI sets it because it builds the sidecar for the target triple in the step before (`launcher-bundles.yml`).
+The first build after a clean checkout compiles static SDL2 and dynarmic and takes minutes.
 
 ## Installers
 
@@ -94,6 +103,55 @@ GtkGLArea, with the shared-memory path as the automatic fallback. GTK3 uses GLX 
 (EGL), and it needs a GPU render node to test; that is why it is not part of this change. Windows (shared D3D/GL
 handle into a child HWND) and macOS (IOSurface into an NSView) are also still to do; both fall back to a separate
 window now.
+
+## Start-up progress and the loading screen
+
+While the game boots (about 5 to 30 s) the game area shows a loading screen with a real percentage. Design:
+`PC-Loading` (screen) and `PC-Loading-Spec` (behaviour).
+
+**Protocol.** `bhpc-run` prints these lines on stdout when started with `--embed` or `--progress` (the launcher passes
+`--progress` always, so the separate-window fallback has the same loading state). A plain `bhpc-run --apk X` prints
+nothing extra. Parsed by `bhpc_launcher::progress::parse_line`; they are kept out of the log.
+
+```text
+@progress <phase> <done> <total>    total 0 = no measurable steps (the bar eases within the step)
+@ready                              the first frame was presented
+```
+
+| # | phase | what is counted | where |
+|---|---|---|---|
+| 1 | `apk` | reading and checking the APK (0/1, 1/1) | `apkrun::Session::open_setup` |
+| 2 | `libraries` | mapping and relocating the libraries (0/0, 1/1) | same |
+| 3 | `constructors` | every constructor, N/237 for the 1.7.6 build | `Session::run_constructors` (`Counting` trace) |
+| 4 | `runtime` | Java start-up stages (`LibraryInit` ... `SurfaceInit`), N/6 | `play.rs` UI thread |
+| 5 | `launch` | `nativeRun` (`UIApplicationMain`) and the four lifecycle stages, N/5 | `play.rs` |
+| 6 | `frame` | waiting for the first presented frame (0/0), then `@ready` | `Hooks::before_swap` |
+
+**Percentage.** `progress::Tracker` turns the last line into `base(step) + weight(step) * fraction`; steps without
+counts (`total` 0) fill along `1 - e^(-t/usual)` up to 95 % of their share, so the bar keeps moving. The value never
+decreases. The default weights are the design's (10, 18, 22, 22, 20, 8 %); after each start the step durations are
+appended to `boot-times.toml` in the config dir and the weights become the average share of the last 5 starts (floor
+2 % per step), so the bar becomes roughly linear in time on this computer. Measured on the dev machine (Xvfb, software GL, 12 s to the first frame): apk 0.2 s, libraries 0.4 s, constructors
+2.5 s, runtime 2.4 s, launch 0.0 s, first frame 6.7 s, so the learned weights differ a lot from the defaults.
+
+**Rules** (all in `progress.rs`, constants documented there): time left only after 3 s and 15 % (the screen rounds it:
+1 s steps below 10 s, 5 s steps above, "about 1 min" cap); a step is *slow* after twice its usual time but not sooner
+than 4 s and at the latest after 15 s (striped bar, note, "Still working..."); no progress line for 60 s is a *stall*:
+the session kills the runner and reports it as crashed at that step.
+
+**Launcher states.** `GameState::Starting` (JSON `starting`, badge "Starting...") lasts until `@ready`; then `running`.
+A runner that prints no progress (older build, `BHPC_RUN` override) counts as starting for 2.5 s. The snapshot carries
+`progress` (percent, step, eta, slow, stalled, step times, ready), also after a crash (where it got to). The page polls
+every 250 ms while starting. `Playing.svelte` shows `parts/LoadingView.svelte` after 400 ms of starting (a faster
+start shows nothing), fades it out over 240 ms on ready (the badge changes at the same moment, focus moves to the
+game), Esc or Cancel stop at once (no dialog, Home says stopped), and a crash before the first frame keeps the screen
+with the error, the step, the last log lines, Try again, Copy log and Back to Home.
+`LoadingView` is a single component fed by props (progress, version, failed, handover, fullscreen, log tail), so a
+restyle does not touch the plumbing.
+
+**In-window view.** Until the first frame the GTK view draws nothing and lets the mouse through (`GtkOverlay`
+pass-through), so the page's loading screen is visible and Cancel works; the first frame fades in over 240 ms (no
+fade when GTK animations are off), takes the mouse and the keyboard focus.
 
 ## Deviations from the design
 

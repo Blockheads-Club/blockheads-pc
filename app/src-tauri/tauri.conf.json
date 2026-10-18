@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "club.blockheads.pc",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "node ../scripts/ensure-sidecar.mjs && bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "node ../scripts/ensure-sidecar.mjs && bun run build",
     "frontendDist": "../build"
   },
   "app": {

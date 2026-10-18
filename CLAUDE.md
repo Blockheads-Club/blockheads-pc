@@ -96,6 +96,9 @@ Umbrella rules: `../AGENTS.md`.
   (Playwright against the mock backend in `app/e2e/mock.ts`). Svelte compiles `text {x}` mixes into `x ?? ''`:
   write `{`text ${x}`}` when `x` is never nullish, or the branch stays uncovered.
 - JSON between Rust and TS is snake_case (serde defaults); `LaunchConfig` is the same struct as `launcher.toml`.
+- `bhpc-run --embed|--progress` prints `@progress <phase> <done> <total>` / `@ready` lines on stdout (protocol and
+  loading screen in `docs/launcher.md`, code in `bhpc_launcher::progress`); the launcher keeps them out of the log.
+  `tauri dev/build` run `scripts/ensure-sidecar.mjs` first so the bundled sidecar is never stale.
 - The sidecar `bhpc-run` is built by `scripts/build-sidecar.sh` (static SDL2, separate target dir) into
   `app/src-tauri/binaries/` (gitignored); never put game files in a bundle (`scripts/check-bundle.sh`).
 

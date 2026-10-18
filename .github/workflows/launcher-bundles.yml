@@ -10,7 +10,7 @@ name: launcher-bundles
 on:
   push:
     branches: [dev, main]
-    paths: ["app/**", "crates/**", "scripts/build-sidecar.sh", "scripts/check-bundle.sh", ".github/workflows/launcher-bundles.yml"]
+    paths: ["app/**", "crates/**", "scripts/build-sidecar.sh", "scripts/ensure-sidecar.mjs", "scripts/check-bundle.sh", ".github/workflows/launcher-bundles.yml"]
   pull_request:
     paths: ["app/**", "scripts/build-sidecar.sh", ".github/workflows/launcher-bundles.yml"]
   workflow_dispatch:
@@ -88,6 +88,9 @@ jobs:
 
       - name: Bundle
         working-directory: app
+        # The sidecar above is built for this target; the build hook would build the host's.
+        env:
+          BHPC_SKIP_SIDECAR: "1"
         run: bun run tauri build --target ${{ matrix.target }}
 
       - name: No game files in the bundles
