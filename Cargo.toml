@@ -13,6 +13,7 @@ members = [
     "crates/bhpc-audio",
     "crates/bhpc-input",
     "crates/bhpc-app",
+    "crates/bhpc-launcher",
 ]
 
 [workspace.package]
