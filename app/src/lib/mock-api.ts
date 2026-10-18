@@ -39,6 +39,13 @@ export function makeBoot(over: Partial<BootState> = {}): BootState {
 export function makeApi(over: Record<string, unknown> = {}) {
   return {
     appInfo: vi.fn(async () => ({ version: '9.9.9', os: 'linux', arch: 'x86_64', config_dir: '/cfg', updates_enabled: false, native_controls: false })),
+    splashSet: vi.fn(async () => {}),
+    splashGet: vi.fn(async () => null as unknown),
+    splashRetry: vi.fn(async () => {}),
+    appQuit: vi.fn(async () => {}),
+    mainReady: vi.fn(async () => {}),
+    onSplashState: vi.fn(async () => () => {}),
+    onSplashRetry: vi.fn(async () => () => {}),
     boot: vi.fn(async () => makeBoot()),
     saveConfig: vi.fn(async (c: LaunchConfig) => c),
     savePrefs: vi.fn(async (p: Prefs) => p),

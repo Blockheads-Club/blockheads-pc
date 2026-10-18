@@ -111,3 +111,13 @@ export interface UpdateProgress {
   mb_per_s: number;
   eta_s: number;
 }
+
+/** What the hidden main window tells the splash window while it boots. */
+export interface SplashState {
+  boot: 'loading' | 'slow' | 'error';
+  error: string;
+  first_run: boolean;
+  version: string;
+  config_dir: string;
+  lang: string;
+}

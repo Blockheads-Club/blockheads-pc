@@ -16,14 +16,17 @@ for (const scheme of ['light', 'dark'] as const) {
   test.describe(scheme, () => {
     test.beforeEach(async ({ page }) => mockTauri(page));
 
-    test('splash', async ({ page }) => {
-      await open(page, 'splash=hang', scheme);
+    test('splash window', async ({ page }) => {
+      // The splash is its own 600x380 window; the main window stays empty (and hidden) while booting.
+      const size = { width: 600, height: 380 };
+      await open(page, 'x=1', scheme, size);
+      await page.goto('/splash');
       await expect(page.getByRole('status', { name: 'Blockheads PC is starting' })).toBeVisible();
       await shot(page, 'splash-launcher', scheme);
-      await page.evaluate(() => localStorage.removeItem('bhpc.setup-seen'));
-      await page.goto('/?splash=hang&first=1');
+      await page.goto('/splash?first=1&splash=slow');
+      await expect(page.getByRole('status', { name: 'Blockheads PC setup is starting' })).toBeVisible();
       await shot(page, 'splash-setup', scheme);
-      await page.goto('/?splash=error');
+      await page.goto('/splash?splash=error');
       await expect(page.getByRole('alert')).toBeVisible();
       await shot(page, 'splash-error', scheme);
     });

@@ -18,6 +18,7 @@ import SetupImport from './SetupImport.svelte';
 import SetupReady from './SetupReady.svelte';
 import SetupWelcome from './SetupWelcome.svelte';
 import Splash from './Splash.svelte';
+import type { SplashState } from '$lib/types';
 
 let hooks: ReturnType<typeof makeWin>['hooks'];
 const click = (name: string | RegExp) => fireEvent.click(screen.getByRole('button', { name }));
@@ -31,47 +32,43 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
+const splash = (over: Partial<SplashState> = {}): SplashState => ({
+  boot: 'loading', error: '', first_run: false, version: '9.9.9', config_dir: '/cfg', lang: 'en', ...over
+});
+
 describe('Splash', () => {
+  const fns = () => ({ onretry: vi.fn(), onopenlog: vi.fn(), onquit: vi.fn() });
+
   it('shows progress in both variants', () => {
-    store.info = null;
-    const { unmount } = render(Splash);
+    const { unmount } = render(Splash, { state: splash(), ...fns() });
     expect(screen.getByRole('status', { name: 'Blockheads PC is starting' })).toBeVisible();
     expect(screen.getByText('Checking your game file…')).toBeVisible();
     unmount();
-    store.boot = 'slow';
-    render(Splash, { variant: 'setup' });
+    render(Splash, { state: splash({ boot: 'slow', first_run: true }), square: true, ...fns() });
     expect(screen.getByRole('status', { name: 'Blockheads PC setup is starting' })).toBeVisible();
     expect(screen.getByText('This is taking longer than usual. Still working…')).toBeVisible();
     cleanup();
-    render(Splash);
+    render(Splash, { state: splash({ boot: 'slow' }), ...fns() });
     expect(screen.getByText(/Taking longer than usual/)).toBeVisible();
     cleanup();
-    store.boot = 'loading';
-    render(Splash, { variant: 'setup' });
+    render(Splash, { state: splash({ first_run: true }), ...fns() });
     expect(screen.getByText('Preparing setup…')).toBeVisible();
   });
 
   it('offers retry, the config folder and quit after a failed start', async () => {
-    store.boot = 'error';
-    store.bootError = 'i/o error: denied';
-    const close = vi.spyOn(window, 'close').mockImplementation(() => {});
-    render(Splash);
+    const f = fns();
+    render(Splash, { state: splash({ boot: 'error', error: 'i/o error: denied' }), ...f });
     expect(screen.getByRole('alert')).toHaveTextContent('couldn’t open its settings');
     expect(screen.getByText('i/o error: denied')).toBeVisible();
     await click('Open folder');
-    expect(mock.api.openPath).toHaveBeenCalledWith('/cfg');
+    expect(f.onopenlog).toHaveBeenCalled();
     await click('Quit');
-    expect(close).toHaveBeenCalled();
+    expect(f.onquit).toHaveBeenCalled();
     await click('Try again');
-    expect(mock.api.appInfo).toHaveBeenCalled();
+    expect(f.onretry).toHaveBeenCalled();
     cleanup();
-    store.info = null;
-    store.boot = 'error';
-    render(Splash, { variant: 'setup' });
+    render(Splash, { state: splash({ boot: 'error', first_run: true }), ...fns() });
     expect(screen.getByRole('alert')).toHaveTextContent('Setup couldn’t create its data folder');
-    await click('Open folder');
-    expect(mock.api.openPath).toHaveBeenLastCalledWith('');
-    close.mockRestore();
   });
 });
 

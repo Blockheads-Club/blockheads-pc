@@ -1,15 +1,24 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import type {
-  ApkReport, AppInfo, BootState, DisplayInfo, ImportSummary, LaunchConfig, Prefs, Snapshot, UpdateInfo, UpdateProgress
+  ApkReport, AppInfo, BootState, DisplayInfo, ImportSummary, LaunchConfig, Prefs, Snapshot, SplashState, UpdateInfo, UpdateProgress
 } from './types';
 
 /** Thin typed wrapper over the Tauri commands (see src-tauri/src/lib.rs). */
 export const api = {
   appInfo: () => invoke<AppInfo>('app_info'),
+  splashSet: (splash: SplashState) => invoke<void>('splash_set', { splash }),
+  splashGet: () => invoke<SplashState | null>('splash_get'),
+  splashRetry: () => invoke<void>('splash_retry'),
+  appQuit: () => invoke<void>('app_quit'),
+  /** The boot work is done: show the main window, close the splash. */
+  mainReady: () => invoke<void>('main_ready'),
+  onSplashState: (cb: (s: SplashState) => void) => listen<SplashState>('splash-state', (e) => cb(e.payload)),
+  onSplashRetry: (cb: () => void) => listen('splash-retry', () => cb()),
   boot: () => invoke<BootState>('boot'),
   saveConfig: (config: LaunchConfig) => invoke<LaunchConfig>('save_config', { config }),
   savePrefs: (prefs: Prefs) => invoke<Prefs>('save_prefs', { prefs }),

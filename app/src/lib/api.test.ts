@@ -13,11 +13,13 @@ const win = vi.hoisted(() => ({
 }));
 const webview = vi.hoisted(() => ({ onDragDropEvent: vi.fn() }));
 const dialog = vi.hoisted(() => ({ open: vi.fn(), save: vi.fn() }));
+const event = vi.hoisted(() => ({ listen: vi.fn(async (_n: string, cb: (e: { payload: unknown }) => void) => cb({ payload: 'p' })) }));
 const opener = vi.hoisted(() => ({ openUrl: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => win }));
 vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => webview }));
 vi.mock('@tauri-apps/plugin-dialog', () => dialog);
+vi.mock('@tauri-apps/api/event', () => event);
 vi.mock('@tauri-apps/plugin-opener', () => opener);
 
 import { api, win as winApi } from './api';
@@ -32,6 +34,11 @@ describe('api', () => {
   it('maps every call onto its Tauri command and arguments', async () => {
     const c = makeConfig();
     await api.appInfo();
+    await api.splashSet({ boot: 'loading', error: '', first_run: false, version: '1', config_dir: '/c', lang: 'en' });
+    await api.splashGet();
+    await api.splashRetry();
+    await api.appQuit();
+    await api.mainReady();
     await api.boot();
     await api.saveConfig(c);
     await api.savePrefs(PREFS);
@@ -52,13 +59,21 @@ describe('api', () => {
     await api.updateInstall();
     await api.updateProgress();
     expect(invoke.mock.calls.map((x: unknown[]) => x[0])).toEqual([
-      'app_info', 'boot', 'save_config', 'save_prefs', 'finish_setup', 'check_apk', 'use_apk', 'normalize_binding',
+      'app_info', 'splash_set', 'splash_get', 'splash_retry', 'app_quit', 'main_ready', 'boot', 'save_config', 'save_prefs', 'finish_setup', 'check_apk', 'use_apk', 'normalize_binding',
       'display_info', 'import_saves', 'data_size', 'move_data_dir', 'open_path', 'game_start', 'game_stop', 'game_poll',
       'save_log', 'update_check', 'update_install', 'update_progress'
     ]);
     expect(invoke).toHaveBeenCalledWith('use_apk', { path: '/a.apk', force: false, keepCopy: true });
     expect(invoke).toHaveBeenCalledWith('import_saves', { source: '/src', overwrite: true, dataDir: '/data' });
     expect(invoke).toHaveBeenCalledWith('game_poll', { since: 4 });
+  });
+
+  it('subscribes to the splash events', async () => {
+    const seen: unknown[] = [];
+    await api.onSplashState((s) => seen.push(s));
+    await api.onSplashRetry(() => seen.push('retry'));
+    expect(seen).toEqual(['p', 'retry']);
+    expect(event.listen.mock.calls.map((c) => c[0])).toEqual(['splash-state', 'splash-retry']);
   });
 
   it('opens links and the native pickers', async () => {

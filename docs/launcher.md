@@ -73,6 +73,26 @@ configured. Windows and macOS bundles have never been built (no runners yet).
 - **Update check** is UI only: the backend answers "not available" and the interface hides it
   (`updates_enabled: false`); the full flow (available, downloading, installing, ready, playing, error) is built and
   exercised against the mock. "Restart now" just closes the window.
-- **Splash**: the setup splash is shown on the very first launch while the backend loads; the launcher splash on later
-  starts and for a slow or failed start (retry, open folder, quit).
+- **Splash**: a separate small window, never part of the main window (both variants: yellow setup splash on the very
+  first launch, dark launcher splash on later starts, plus the slow and error states with retry, open folder and
+  quit). See "Splash window" below.
 - **Display detection** shows the monitor size and scale; the refresh rate is not available through Tauri.
+
+## Splash window
+
+On start only a frameless, transparent, non-resizable 600x380 window (the design's splash card, centred, not in the
+taskbar) is shown; the `main` window is created hidden (`tauri.conf.json`, so the Wayland/GTK title-bar warning fix
+holds) and runs the boot work (app info, boot, display info, APK recheck). The splash route is `/splash`
+(`src/routes/splash`, content `screens/Splash.svelte`) and has its own capability file
+(`capabilities/splash.json`, event listening only; its buttons are app commands).
+
+- The main window pushes its boot state (`loading`/`slow`/`error`, first run, version, language) with `splash_set`;
+  the splash renders it (`splash-state` event, `splash_get` for what was set before it opened).
+- When the boot is done the main window calls `main_ready`: Rust waits for the minimum splash time, shows and focuses
+  `main`, and closes the splash. On a boot error the main window stays hidden; the splash shows the error and
+  Retry emits `splash-retry` to the main window, Quit exits. Closing the splash before that also quits.
+- **`BHPC_SPLASH_HOLD_MS`**: minimum splash time in milliseconds (default 0), read in Rust. For testing the splash:
+  `BHPC_SPLASH_HOLD_MS=5000 blockheads-pc`.
+- macOS: the transparent window needs the private API, so there the splash is a plain undecorated window with square
+  corners (`square` in the splash page). Not tested (no Mac runner).
+- If the splash window cannot be created the main window is shown directly.

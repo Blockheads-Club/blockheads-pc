@@ -1,18 +1,23 @@
 <script lang="ts">
-  import { api } from '../api';
   import { t } from '../i18n.svelte';
-  import { store } from '../store.svelte';
+  import type { SplashState } from '../types';
   import Button from '../ui/Button.svelte';
 
-  /** `setup`: yellow first-launch splash; `launcher`: dark splash on every other start. */
-  let { variant = 'launcher' }: { variant?: 'setup' | 'launcher' } = $props();
-  const setup = $derived(variant === 'setup');
-  const version = $derived(store.info?.version ?? '');
+  /** The whole content of the splash window (600x380 card; `variant` setup = yellow first-launch splash). */
+  let { state, square = false, onretry, onopenlog, onquit }: {
+    state: SplashState;
+    /** No transparency (macOS): the window itself is the card, so no rounded corners. */
+    square?: boolean;
+    onretry: () => void;
+    onopenlog: () => void;
+    onquit: () => void;
+  } = $props();
+  const setup = $derived(state.first_run);
 </script>
 
 <div class="wrap">
   <section
-    class={['sp', setup ? 'sp-s' : 'sp-l']}
+    class={['sp', setup ? 'sp-s' : 'sp-l', square && 'sq']}
     role="status"
     aria-live="polite"
     aria-label={setup ? t('splash.setupLabel') : t('splash.label')}
@@ -20,28 +25,29 @@
     <img class="ic" src={setup ? '/pc-icon-macos.svg' : '/pc-icon.svg'} alt="" width={setup ? 132 : 128} height={setup ? 132 : 128} />
     <div class="wm">Blockheads<span class="tg">PC</span></div>
     {#if setup}<p class="welcome">{t('splash.welcome')}</p>{/if}
-    {#if store.boot === 'error'}
+    {#if state.boot === 'error'}
       <p class="err" role="alert">{setup ? t('splash.setupError') : t('splash.error')}</p>
-      <p class="hint detail">{store.bootError}</p>
+      <p class="hint detail">{state.error}</p>
       <div class="acts">
-        <Button variant="primary" onclick={() => store.init()}>{t('common.retry')}</Button>
-        <Button onclick={() => api.openPath(store.info?.config_dir ?? '')}>{t('splash.openLog')}</Button>
-        <Button variant="ghost" onclick={() => window.close()}>{t('common.quit')}</Button>
+        <Button variant="primary" onclick={() => onretry()}>{t('common.retry')}</Button>
+        <Button onclick={() => onopenlog()}>{t('splash.openLog')}</Button>
+        <Button variant="ghost" onclick={() => onquit()}>{t('common.quit')}</Button>
       </div>
     {:else}
       <div class="bar"><span></span></div>
-      <p class="msg">{store.boot === 'slow' ? t(setup ? 'splash.slowSetup' : 'splash.slow') : t(setup ? 'splash.loadingSetup' : 'splash.loading')}</p>
+      <p class="msg">{state.boot === 'slow' ? t(setup ? 'splash.slowSetup' : 'splash.slow') : t(setup ? 'splash.loadingSetup' : 'splash.loading')}</p>
     {/if}
-    <div class="foot"><span>{t('splash.footer')}</span><span class="mono">{version}</span></div>
+    <div class="foot"><span>{t('splash.footer')}</span><span class="mono">{state.version}</span></div>
   </section>
 </div>
 
 <style>
-  .wrap { min-height: 100%; display: grid; place-items: center; background: var(--stage); padding: 16px; }
+  .wrap { height: 100vh; }
   .sp {
-    width: min(600px, 100%);
-    min-height: 380px;
+    width: 100%;
+    height: 100%;
     border-radius: 18px;
+    box-sizing: border-box;
     overflow: hidden;
     position: relative;
     display: flex;
@@ -51,8 +57,8 @@
     gap: 14px;
     text-align: center;
     padding: 24px 24px 48px;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.25);
   }
+  .sq { border-radius: 0; }
   .sp-l { background-color: #1f1a17; background-image: repeating-conic-gradient(from -3deg at 50% 118%, rgba(255, 122, 69, 0.13) 0deg 7deg, transparent 7deg 22deg); color: #f5ede5; }
   .sp-s { background-color: #ffd27a; background-image: repeating-conic-gradient(from -3deg at 50% 118%, rgba(255, 255, 255, 0.4) 0deg 7deg, transparent 7deg 22deg); color: #1f1a17; border: 3px solid #1f1a17; }
   .ic { animation: drop 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }

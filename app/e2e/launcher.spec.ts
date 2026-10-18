@@ -11,6 +11,24 @@ const noOverflow = (page: Page) =>
     return bodies.every((el) => el.scrollWidth <= el.clientWidth + 1);
   });
 
+const calls = (page: Page, cmd: string) => page.evaluate((c) => (window as any).__calls.filter((x: unknown[]) => x[0] === c).length, cmd);
+
+test('the main window is revealed only when the boot is done; a hung or failed boot stays on the splash', async ({ page }) => {
+  await page.goto('/?splash=hang');
+  await expect.poll(() => calls(page, 'splash_set')).toBeGreaterThan(0);
+  expect(await calls(page, 'main_ready')).toBe(0);
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await page.goto('/?splash=error');
+  await expect.poll(() => calls(page, 'splash_set')).toBeGreaterThan(0);
+  expect(await calls(page, 'main_ready')).toBe(0);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: /The Blockheads/ })).toBeVisible();
+  expect(await calls(page, 'main_ready')).toBe(1);
+  await page.goto('/?first=1');
+  await expect(page.getByRole('heading', { name: 'Play The Blockheads on your computer' })).toBeVisible();
+  expect(await calls(page, 'main_ready')).toBe(1);
+});
+
 test('first run to Home, then play, crash and play again', async ({ page }) => {
   await page.goto('/?first=1&crash=1');
   await page.getByLabel('I own the game').check();

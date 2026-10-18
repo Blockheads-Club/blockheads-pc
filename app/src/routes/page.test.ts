@@ -59,12 +59,15 @@ describe('layout', () => {
 });
 
 describe('page', () => {
-  it('shows the splash and then Home for a configured launcher', async () => {
+  it('keeps the window empty while booting, feeds the splash window, then reveals Home', async () => {
     mock.api.boot = vi.fn(async () => makeBoot());
     render(Page);
-    expect(screen.getByRole('status', { name: /starting/ })).toBeVisible();
+    expect(screen.queryByRole('status')).toBeNull();
+    await waitFor(() => expect(mock.api.splashSet).toHaveBeenCalledWith(expect.objectContaining({ boot: 'loading', lang: 'en' })));
+    expect(mock.api.mainReady).not.toHaveBeenCalled();
     expect(await screen.findByRole('heading', { name: /The Blockheads/ })).toBeVisible();
     expect(document.title).toBe('Blockheads PC · Home');
+    expect(mock.api.mainReady).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('link', { name: 'Skip to content' })).toHaveAttribute('href', '#main');
     expect(theme.choice).toBe('system');
   });
@@ -235,5 +238,29 @@ describe('page', () => {
     expect(viewport.compact).toBe(true);
     expect(screen.queryByRole('button', { name: 'Close window' })).toBeNull();
     expect(screen.getByRole('navigation', { name: 'Quick actions' })).toBeVisible();
+  });
+});
+
+describe('boot hand-over', () => {
+  it('stays hidden on a boot error and retries when the splash asks', async () => {
+    let retry: () => void = () => {};
+    mock.api.onSplashRetry = vi.fn(async (cb: () => void) => { retry = cb; return () => {}; });
+    mock.api.boot = vi.fn(async () => { throw 'denied'; });
+    render(Page);
+    await waitFor(() => expect(mock.api.splashSet).toHaveBeenCalledWith(expect.objectContaining({ boot: 'error', error: 'denied' })));
+    expect(mock.api.mainReady).not.toHaveBeenCalled();
+    mock.api.boot = vi.fn(async () => makeBoot());
+    retry();
+    await screen.findByRole('heading', { name: /The Blockheads/ });
+    expect(mock.api.mainReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores IPC failures of the hand-over', async () => {
+    mock.api.splashSet = vi.fn(async () => { throw 'x'; });
+    mock.api.mainReady = vi.fn(async () => { throw 'x'; });
+    mock.api.onSplashRetry = vi.fn(async () => { throw 'x'; });
+    render(Page);
+    await screen.findByRole('heading', { name: /The Blockheads/ });
+    expect(mock.api.mainReady).toHaveBeenCalled();
   });
 });

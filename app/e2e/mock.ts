@@ -3,7 +3,7 @@ import type { Page } from '@playwright/test';
 /**
  * Replaces the Tauri IPC with an in-page fake launcher backend so the built web UI can be driven in a browser.
  * Scenarios come from the URL query: ?first=1 (no saved config), ?os=macos|windows|linux, ?game=ready|running|
- * stopped|crashed|missing, ?updates=1 (the update feed exists), ?update=available, ?splash=hang|error.
+ * stopped|crashed|missing, ?updates=1 (the update feed exists), ?update=available, ?splash=hang|error (main window boot) and, on /splash, ?splash=slow|error&first=1 (state of the splash window).
  */
 export async function mockTauri(page: Page) {
   await page.addInitScript(() => {
@@ -82,6 +82,18 @@ export async function mockTauri(page: Page) {
         if (q.get('splash') === 'error') throw 'i/o error: Permission denied (os error 13)';
         return { config: s.config, defaults, prefs: s.prefs };
       },
+      splash_set: () => undefined,
+      splash_get: () => ({
+        boot: q.get('splash') === 'error' ? 'error' : q.get('splash') === 'slow' ? 'slow' : 'loading',
+        error: q.get('splash') === 'error' ? 'i/o error: Permission denied (os error 13)' : '',
+        first_run: !!q.get('first'),
+        version: '0.1.0',
+        config_dir: '/home/mira/.config/blockheads-pc',
+        lang: 'en'
+      }),
+      splash_retry: () => undefined,
+      app_quit: () => undefined,
+      main_ready: () => undefined,
       save_config: (a) => ((s.config = a.config), s.config),
       save_prefs: (a) => ((s.prefs = a.prefs), s.prefs),
       finish_setup: (a) => ((s.config = { ...a.config, apk: '/home/mira/.local/share/blockheads-pc/game/TheBlockheads.apk' }), (s.prefs = a.prefs), s.config),

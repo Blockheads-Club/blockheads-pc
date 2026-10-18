@@ -7,10 +7,14 @@ use bhpc_launcher::import::ImportSummary;
 use bhpc_launcher::ops::{self, Boot};
 use bhpc_launcher::prefs::Prefs;
 use bhpc_launcher::session::{Session, Snapshot};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::{Manager, RunEvent, State, WebviewWindow};
+use std::time::{Duration, Instant};
+use tauri::{
+    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 use tauri_plugin_opener::OpenerExt;
 
 type Res<T> = Result<T, String>;
@@ -19,10 +23,44 @@ fn text<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-/// Shared state: the supervised game process.
-#[derive(Default)]
+/// What the splash window shows; the hidden main window (which runs the boot work) pushes it.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct SplashState {
+    boot: String,
+    error: String,
+    first_run: bool,
+    version: String,
+    config_dir: String,
+    lang: String,
+}
+
+/// Minimum splash time from `BHPC_SPLASH_HOLD_MS` (milliseconds; unset, empty or invalid means none).
+fn splash_hold(var: Option<std::ffi::OsString>) -> Duration {
+    var.and_then(|v| v.to_str().and_then(|s| s.trim().parse::<u64>().ok()))
+        .map(Duration::from_millis)
+        .unwrap_or_default()
+}
+
+/// Shared state: the supervised game process and the splash hand-over.
 struct App {
     session: Mutex<Session>,
+    splash: Mutex<Option<SplashState>>,
+    started: Instant,
+    hold: Duration,
+    /// The main window is on screen: closing the splash is no longer a request to quit.
+    revealed: AtomicBool,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        App {
+            session: Mutex::default(),
+            splash: Mutex::default(),
+            started: Instant::now(),
+            hold: splash_hold(std::env::var_os("BHPC_SPLASH_HOLD_MS")),
+            revealed: AtomicBool::new(false),
+        }
+    }
 }
 
 impl App {
@@ -57,6 +95,67 @@ fn app_info() -> AppInfo {
         updates_enabled: false,
         native_controls: cfg!(target_os = "macos"),
     }
+}
+
+/// The main window keeps this up to date while it boots; the splash window renders it.
+#[tauri::command]
+fn splash_set(app: AppHandle, state: State<'_, App>, splash: SplashState) {
+    *state.splash.lock().unwrap_or_else(|e| e.into_inner()) = Some(splash.clone());
+    let _ = app.emit_to("splash", "splash-state", splash);
+}
+
+#[tauri::command]
+fn splash_get(state: State<'_, App>) -> Option<SplashState> {
+    state.splash.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The splash's Retry button: the main window owns the boot work, so it is told to run it again.
+#[tauri::command]
+fn splash_retry(app: AppHandle) {
+    let _ = app.emit_to("main", "splash-retry", ());
+}
+
+#[tauri::command]
+fn app_quit(app: AppHandle) {
+    app.exit(0);
+}
+
+/// The boot work is done: after the minimum splash time show the main window and close the splash.
+#[tauri::command]
+async fn main_ready(app: AppHandle, state: State<'_, App>) -> Res<()> {
+    let wait = state.hold.saturating_sub(state.started.elapsed());
+    if !wait.is_zero() {
+        tauri::async_runtime::spawn_blocking(move || std::thread::sleep(wait)).await.map_err(text)?;
+    }
+    state.revealed.store(true, Ordering::SeqCst);
+    if let Some(w) = app.get_webview_window("main") {
+        w.show().map_err(text)?;
+        let _ = w.set_focus();
+    }
+    if let Some(w) = app.get_webview_window("splash") {
+        let _ = w.close();
+    }
+    Ok(())
+}
+
+/// The small frameless splash window (card size of the design). Transparent so the card's rounded corners show;
+/// macOS cannot do that without the private API, so it gets a plain undecorated window there.
+fn open_splash(app: &tauri::App) -> tauri::Result<()> {
+    let b = WebviewWindowBuilder::new(app, "splash", WebviewUrl::App("splash".into()))
+        .title("Blockheads PC")
+        .inner_size(600.0, 380.0)
+        .center()
+        .decorations(false)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .shadow(false)
+        .skip_taskbar(true)
+        .focused(true);
+    #[cfg(not(target_os = "macos"))]
+    let b = b.transparent(true);
+    b.build()?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -197,15 +296,31 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(App::default())
         .setup(|app| {
-            // Created hidden (tauri.conf.json): GTK warns when the frameless window gets its client-side
-            // title bar after it was already realized, which showing it first would do.
-            if let Some(w) = app.get_webview_window("main") {
-                w.show()?;
+            // The main window is created hidden (tauri.conf.json) and runs the boot work; `main_ready` shows it
+            // (GTK warns when the frameless window gets its title bar after it was realized and shown early).
+            // Only the splash is on screen until then. Should the splash fail to open, show the main window.
+            if let Err(e) = open_splash(app) {
+                eprintln!("splash window failed: {e}");
+                if let Some(w) = app.get_webview_window("main") {
+                    w.show()?;
+                }
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Closing the splash (Alt+F4) before the launcher is up means the user wants out.
+            let closing = window.label() == "splash" && matches!(event, WindowEvent::CloseRequested { .. });
+            if closing && !window.state::<App>().revealed.load(Ordering::SeqCst) {
+                window.app_handle().exit(0);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            splash_set,
+            splash_get,
+            splash_retry,
+            app_quit,
+            main_ready,
             boot,
             save_config,
             save_prefs,
@@ -234,4 +349,17 @@ pub fn run() {
             handle.state::<App>().session().stop();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splash_hold_parses_milliseconds() {
+        assert_eq!(splash_hold(None), Duration::ZERO);
+        assert_eq!(splash_hold(Some("".into())), Duration::ZERO);
+        assert_eq!(splash_hold(Some("soon".into())), Duration::ZERO);
+        assert_eq!(splash_hold(Some(" 2500 ".into())), Duration::from_millis(2500));
+    }
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { win } from '$lib/api';
-  import { t } from '$lib/i18n.svelte';
+  import { api, win } from '$lib/api';
+  import { i18n, t } from '$lib/i18n.svelte';
   import TitleBar from '$lib/layout/TitleBar.svelte';
   import CloseDialog from '$lib/screens/CloseDialog.svelte';
   import Home from '$lib/screens/Home.svelte';
@@ -18,7 +18,6 @@
   import SetupImport from '$lib/screens/SetupImport.svelte';
   import SetupReady from '$lib/screens/SetupReady.svelte';
   import SetupWelcome from '$lib/screens/SetupWelcome.svelte';
-  import Splash from '$lib/screens/Splash.svelte';
   import UpdateDialog from '$lib/screens/UpdateDialog.svelte';
   import { SETUP_STEPS, store } from '$lib/store.svelte';
   import { initTheme } from '$lib/theme.svelte';
@@ -57,8 +56,26 @@
   let square = $state(false);
   const round = $derived(os !== 'macos' && !square);
 
+  /** The splash window mirrors the boot state; once past it the main window replaces the splash. */
+  $effect(() => {
+    if (s !== 'splash') return;
+    const state = {
+      boot: store.boot, error: store.bootError, first_run: store.firstRun,
+      version: store.info?.version ?? '', config_dir: store.info?.config_dir ?? '', lang: i18n.lang
+    };
+    void api.splashSet(state).catch(() => {});
+  });
+  let revealed = false;
+  $effect(() => {
+    if (s === 'splash' || revealed) return;
+    revealed = true;
+    void api.mainReady().catch(() => {});
+  });
+
   onMount(() => {
     initTheme();
+    let offRetry: (() => void) | undefined;
+    void api.onSplashRetry(() => void store.init()).then((u) => (offRetry = u)).catch(() => {});
     const sync = () => void Promise.all([win.isMaximized(), win.isFullscreen()]).then(([m, f]) => (square = m || f)).catch(() => {});
     sync();
     let offResize: (() => void) | undefined;
@@ -71,6 +88,7 @@
       unwatch();
       off?.();
       offResize?.();
+      offRetry?.();
       store.stopPolling();
     };
   });
@@ -112,7 +130,7 @@
   <TitleBar {os} {ctx} {onStage} native={store.info?.native_controls ?? false} />
   <div class="content">
     {#if s === 'splash'}
-      <Splash variant={store.firstRun ? 'setup' : 'launcher'} />
+      <!-- Hidden window: the separate splash window shows the boot (see /splash). -->
     {:else if s === 'setup'}
       {#if store.step === 1}<SetupWelcome />
       {:else if store.step === 2}<SetupApk />
