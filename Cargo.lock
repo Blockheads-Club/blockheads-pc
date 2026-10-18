@@ -239,6 +239,7 @@ dependencies = [
  "bhpc-loader",
  "bhpc-mem",
  "bhpc-vfs",
+ "libc",
 ]
 
 [[package]]

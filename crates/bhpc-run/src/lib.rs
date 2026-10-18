@@ -197,6 +197,8 @@ mod tests_dl;
 mod tests_input;
 #[cfg(test)]
 mod tests_mmapio;
+#[cfg(all(test, unix))]
+mod tests_net;
 #[cfg(test)]
 mod tests_tracks;
 #[cfg(test)]
