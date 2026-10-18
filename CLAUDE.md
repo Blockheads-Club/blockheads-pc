@@ -88,3 +88,13 @@ Umbrella rules: `../AGENTS.md`.
   (`watch_blocking` did): register wrappers first, the table last.
 - The game runs input handlers on the Android UI guest thread; its CFRunLoop is only serviced by the UI loop's
   `CFRunLoopRunInMode(..., 0, true)` call, so `performSelector:afterDelay:` from a button works.
+
+## Launcher (app/, crates/bhpc-launcher)
+- `app/` is a Tauri 2 + SvelteKit app (bun); `app/src-tauri` is its own cargo workspace and a thin layer over
+  `crates/bhpc-launcher`, where all logic lives and is covered at 100 % by `scripts/coverage.sh`. See `docs/launcher.md`.
+- Interface: `bun run check`, `bun run test` (vitest, 100 % statements/branches/functions/lines), `bun run test:e2e`
+  (Playwright against the mock backend in `app/e2e/mock.ts`). Svelte compiles `text {x}` mixes into `x ?? ''`:
+  write `{`text ${x}`}` when `x` is never nullish, or the branch stays uncovered.
+- JSON between Rust and TS is snake_case (serde defaults); `LaunchConfig` is the same struct as `launcher.toml`.
+- The sidecar `bhpc-run` is built by `scripts/build-sidecar.sh` (static SDL2, separate target dir) into
+  `app/src-tauri/binaries/` (gitignored); never put game files in a bundle (`scripts/check-bundle.sh`).
