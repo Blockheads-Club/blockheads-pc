@@ -252,6 +252,16 @@ fn install_widgets(vm: &Vm) {
             c.vm.ui_update(o, |v| v.alpha = a);
             void()
         })
+        .method("_setBackgroundColor", "(I)V", |c| {
+            let (o, col) = (c.this, c.int(0) as u32);
+            c.vm.ui_update(o, |v| v.bg = Some(col));
+            void()
+        })
+        .method("setClipsToBounds", "(Z)V", |c| {
+            let (o, on) = (c.this, c.int(0) != 0);
+            c.vm.ui_update(o, |v| v.clips = on);
+            void()
+        })
         .method("setUserInteractionEnabled", "(Z)V", |c| {
             let (o, i) = (c.this, c.int(0) != 0);
             c.vm.ui_update(o, |v| v.interactive = i);
@@ -376,6 +386,57 @@ fn install_widgets(vm: &Vm) {
                     void()
                 });
         }
+        if matches!(w, "Label" | "Button" | "TextField" | "TextView") {
+            b = b
+                .method("setFont", "(Landroid/graphics/Typeface;F)V", |c| {
+                    let (o, f, size) = (c.this, c.obj(0), c.float(1));
+                    c.vm.ui_update(o, |v| (v.style.font, v.style.size) = (f, size));
+                    void()
+                })
+                .method("setTextColor", "(I)V", |c| {
+                    let (o, col) = (c.this, c.int(0) as u32);
+                    c.vm.ui_update(o, |v| v.style.color = col);
+                    void()
+                })
+                .method("setTextAlignment", "(I)V", |c| {
+                    let (o, a) = (c.this, c.int(0));
+                    c.vm.ui_update(o, |v| v.style.align = a);
+                    void()
+                })
+                .method("setNumberOfLines", "(I)V", |c| {
+                    let (o, n) = (c.this, c.int(0));
+                    c.vm.ui_update(o, |v| v.style.lines = n);
+                    void()
+                })
+                .method("setMinimumFontSize", "(F)V", |c| {
+                    let (o, s) = (c.this, c.float(0));
+                    c.vm.ui_update(o, |v| v.style.min_size = s);
+                    void()
+                })
+                .method("setShadowColor", "(I)V", |c| {
+                    let (o, col) = (c.this, c.int(0) as u32);
+                    c.vm.ui_update(o, |v| v.style.shadow_color = col);
+                    void()
+                })
+                .method("setShadowOffset", "(FF)V", |c| {
+                    let (o, d) = (c.this, [c.float(0), c.float(1)]);
+                    c.vm.ui_update(o, |v| v.style.shadow_offset = d);
+                    void()
+                });
+        }
+        if w == "ImageView" {
+            b = b
+                .method("setImage", "(Landroid/graphics/Bitmap;II)V", |c| {
+                    let (o, img, w, h) = (c.this, c.obj(0), c.int(1), c.int(2));
+                    c.vm.ui_update(o, |v| v.image = img.map(|i| (i, w, h)));
+                    void()
+                })
+                .method("removeImage", "()V", |c| {
+                    let o = c.this;
+                    c.vm.ui_update(o, |v| v.image = None);
+                    void()
+                });
+        }
         if w == "Label" {
             b = b.method("setText", "(Ljava/lang/String;)V", |c| {
                 let (o, t) = (c.this, c.string(0).unwrap_or_default());
@@ -385,6 +446,21 @@ fn install_widgets(vm: &Vm) {
         }
         if w == "Button" {
             b = b
+                .method("setBackgroundDrawable", "(Landroid/graphics/Bitmap;I)V", |c| {
+                    let (o, bmp, state) = (c.this, c.obj(0), c.int(1));
+                    c.vm.ui_update(o, |v| set_state_bitmap(&mut v.backgrounds, state, bmp));
+                    void()
+                })
+                .method("setIconDrawable", "(Landroid/graphics/Bitmap;I)V", |c| {
+                    let (o, bmp, state) = (c.this, c.obj(0), c.int(1));
+                    c.vm.ui_update(o, |v| set_state_bitmap(&mut v.icons, state, bmp));
+                    void()
+                })
+                .method("setHighlighted", "(Z)V", |c| {
+                    let (o, on) = (c.this, c.int(0) != 0);
+                    c.vm.ui_update(o, |v| v.highlighted = on);
+                    void()
+                })
                 .method("setText", "(Ljava/lang/String;I)V", |c| {
                     let (o, t, state) = (c.this, c.string(0).unwrap_or_default(), c.int(1));
                     if state == 0 {
@@ -412,6 +488,12 @@ fn install_widgets(vm: &Vm) {
             make,
         );
     }
+}
+
+/// Set (or clear) the bitmap a button shows in `state`.
+fn set_state_bitmap(list: &mut Vec<(i32, Obj)>, state: i32, bmp: Option<Obj>) {
+    list.retain(|b| b.0 != state);
+    list.extend(bmp.map(|b| (state, b)));
 }
 
 /// `queueEvent`/`runOnThread`: run on the main looper.

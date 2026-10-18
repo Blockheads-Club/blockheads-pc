@@ -38,7 +38,7 @@ mod tests_support;
 
 pub use api::{GlApi, HostGl};
 pub use state::{es2_version, filter_extensions, Gles, GlesConfig, Stats};
-pub use window::{GlWindow, HostContext};
+pub use window::{GlWindow, HostContext, Overlay};
 
 use api::{gl_list, FromGuest, ToGuest};
 use bhpc_cpu::{Cpu, SharedThunkFn};

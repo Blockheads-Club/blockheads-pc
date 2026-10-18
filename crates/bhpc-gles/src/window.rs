@@ -1,6 +1,17 @@
 //! The windowing side of EGL, implemented by `bhpc-app` (SDL2) and by mocks in tests.
 
 use std::ffi::c_void;
+use std::sync::Arc;
+
+/// Pixels the window draws over the game's frame (the Java view tree rendered by the fake JVM): premultiplied RGBA,
+/// top row first, covering the whole drawable. `serial` changes with the pixels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overlay {
+    pub width: u32,
+    pub height: u32,
+    pub serial: u64,
+    pub rgba: Arc<Vec<u8>>,
+}
 
 /// Opaque handle of a host GL context created by a [`GlWindow`].
 pub type HostContext = u64;
@@ -38,6 +49,9 @@ pub trait GlWindow: Send + Sync {
     fn default_framebuffer(&self) -> u32 {
         0
     }
+    /// Set (or clear) the overlay that [`GlWindow::compose`] draws on top of the game's surface, blended, over the
+    /// whole drawable. Needs no current context.
+    fn set_overlay(&self, _overlay: Option<Overlay>) {}
     /// Draw the game's surface into the window's back buffer (letterboxed), without swapping. Needs the game's
     /// context to be current and leaves its GL state untouched.
     fn compose(&self) {}

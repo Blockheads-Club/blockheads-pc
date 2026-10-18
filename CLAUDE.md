@@ -64,7 +64,7 @@ Umbrella rules: `../AGENTS.md`.
 
 ## Gotchas learned fixing the click freeze and window scaling
 - Native touches (`Window.nativeTouchesBegin/...`) take landscape screen pixels like the window; only the Java view
-  layer (`Vm::ui_touch`, `control_screen_pos`) uses the turned portrait space (`screen_to_ui`).
+  layer (`Vm::ui_touch`, `control_screen_pos`) uses the portrait space centred on the window (`screen_to_ui`, `ui_offset`).
 - libSystem's kqueue/dispatch go through `syscall(351/350/353/354)`; `vfd` answers them. A thunk registered later under
   the same name (`mmapio`'s `write` watcher) replaces the earlier one: wrappers must forward to the table's own fds.
 - The game chooses its content size once; the window letterboxes it (`vsurface.rs`); `Geometry` maps the mouse.
@@ -107,3 +107,19 @@ Umbrella rules: `../AGENTS.md`.
 - A world that looks frozen headlessly is usually the game's modal tutorial popup ("WELCOME TO THE BLOCKHEADS", built
   from `com.apportable.ui` Java views that the port does not draw): it calls `setPaused:`, hides the HUD and stops the
   simulation. `--script` `clicktext OK` dismisses it; use `dumpviews` to see such invisible views.
+
+## Gotchas learned: drawing the Java views
+- The `com.apportable.ui` views (popups, dialogs) are rendered by `Vm::render_ui` (`bhpc-jni/src/render.rs`): software
+  rasteriser (fills, bitmaps, text via `ab_glyph`) into a window-sized premultiplied RGBA frame, cached by item list
+  (`UiFrame::serial`). `Hooks::before_swap` (play.rs) hands it to the window through `OverlayFeed` and
+  `GlWindow::set_overlay`; `vsurface.rs` blends it over the letterboxed game surface inside `compose` (so screenshots
+  include it) and restores all GL state it touches. Nothing visible (menus, HUD) means no overlay and no cost.
+- Java `Bitmap`s are fake objects whose pixels (premultiplied RGBA) live in guest memory (`jlib/graphics.rs`); the
+  native side fills them through `AndroidBitmap_lockPixels` (thunks registered by `Vm::install`) or
+  `copyPixelsFromBuffer`. They are never freed (small, a few per popup).
+- The views stay upright: nothing tells the game the device turned, so Apportable never rotates the portrait
+  768x1024 space; `Vm::ui_offset` centres it on the 1024x768 window (offset (128, -128)) for drawing and for
+  `ui_touch`, and a fill that covers the whole space (the dimmer) is stretched over the window.
+- Text: labels use `TextStyle` (font asset `BlockheadsFont-Regular.otf` from the APK, size in px, colour, alignment,
+  lines, shadow); missing/unparsable fonts fall back to the bundled Liberation Sans. `dumpviews` shows bg colour, clip,
+  bitmaps (`WxH:opaque-pixels`) and the text style.

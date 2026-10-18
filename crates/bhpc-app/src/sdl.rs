@@ -284,6 +284,10 @@ impl GlWindow for SdlGl {
         ctx_nonzero(ctx).map_or(0, |ctx| self.surface.framebuffer(ctx, &|n| self.proc_address(n)))
     }
 
+    fn set_overlay(&self, overlay: Option<bhpc_gles::Overlay>) {
+        self.surface.set_overlay(overlay);
+    }
+
     fn compose(&self) {
         if !self.live() {
             return;

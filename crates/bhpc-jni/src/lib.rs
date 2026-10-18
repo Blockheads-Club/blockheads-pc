@@ -15,6 +15,7 @@ pub mod jni;
 pub mod looper;
 pub mod mutf8;
 pub mod platform;
+mod render;
 pub mod startup;
 mod ui;
 pub mod value;
@@ -25,6 +26,7 @@ pub use host::{install, Jni, JniError, Usage};
 pub use invoke::Recv;
 pub use jni::{Layout, JNI_VERSION, TABLE_SLOTS};
 pub use platform::{Assets, AudioHooks, GfxHooks, MemAssets, NoAssets, NoAudio, NoGfx, Platform, TrackOp};
+pub use render::UiFrame;
 pub use startup::{native_env, Stage};
 pub use ui::{Hit, TouchPhase};
 pub use value::{ClassId, Obj, Sig, Ty, Value};
@@ -50,6 +52,8 @@ mod tests_jni;
 mod tests_lib;
 #[cfg(test)]
 mod tests_looper;
+#[cfg(test)]
+mod tests_render;
 #[cfg(test)]
 mod tests_startup;
 #[cfg(test)]

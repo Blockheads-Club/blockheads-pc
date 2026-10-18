@@ -187,6 +187,7 @@ struct Hooks {
     flags: Arc<Flags>,
     shot: Option<PathBuf>,
     shot_at: u64,
+    overlay: crate::overlay::OverlayFeed,
 }
 
 type ReadPixels = unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void);
@@ -229,6 +230,11 @@ impl Hooks {
 
     /// Count a presented frame (and take the screenshot when it is due); call right before the swap.
     fn before_swap(&self) {
+        // The Java views (popups) go over the game's frame, also in screenshots.
+        let vm = self.flags.vm.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        if let Some(vm) = vm {
+            self.overlay.update(&*self.window, vm.render_ui());
+        }
         let n = self.flags.swaps.fetch_add(1, Ordering::SeqCst) + 1;
         self.flags.swap_times.lock().unwrap_or_else(PoisonError::into_inner).push(Instant::now());
         let wanted: Vec<PathBuf> =
@@ -554,6 +560,7 @@ fn boot(
             flags: hooks_flags.clone(),
             shot: shot.clone(),
             shot_at,
+            overlay: crate::overlay::OverlayFeed::default(),
         });
         // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.
         if let Some(inner) = bhpc_gles::builtin("eglSwapBuffers", &gles) {

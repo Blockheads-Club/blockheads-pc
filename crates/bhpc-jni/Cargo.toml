@@ -10,6 +10,7 @@ description = "Fake JavaVM/JNIEnv for the Blockheads guest libraries: Java objec
 bhpc-mem.workspace = true
 bhpc-cpu.workspace = true
 bhpc-vfs.workspace = true
+ab_glyph = { version = "0.2", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 bhpc-loader.workspace = true

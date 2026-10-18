@@ -6,6 +6,7 @@ use crate::vm::{Call, JResult, Vm};
 
 mod android;
 mod apportable;
+mod graphics;
 mod io;
 mod lang;
 mod util;
@@ -44,6 +45,7 @@ pub(crate) fn install(vm: &Vm) {
     util::install(vm);
     io::install(vm);
     android::install(vm);
+    graphics::install(vm);
     apportable::install(vm);
     crate::looper::install(vm);
 }
@@ -51,4 +53,5 @@ pub(crate) fn install(vm: &Vm) {
 #[cfg(test)]
 pub(crate) use apportable::WIDGETS;
 pub(crate) use apportable::{activity, surface_view};
+pub(crate) use graphics::{bitmap_info, bitmap_info_in, face_in, face_of, Face, BOLD, ITALIC};
 pub(crate) use lang::thread_object;

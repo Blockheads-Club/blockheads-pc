@@ -195,6 +195,8 @@ pub(crate) struct State {
     pub text_focus: Option<Obj>,
     /// UIKit view tree (see `ui`).
     pub ui: crate::ui::UiState,
+    /// Fonts and the last frame of the view renderer.
+    pub render: crate::render::RenderCache,
 }
 
 /// Resolver for exported native symbols: name -> guest address.
@@ -1162,6 +1164,7 @@ impl State {
         work.extend(self.classes.iter().filter_map(|c| c.mirror));
         work.extend(self.fields.iter().filter_map(|f| f.value.as_ref()));
         work.extend(self.lent.values().map(|l| l.obj));
+        work.extend(self.ui.views.values().flat_map(crate::ui::View::refs));
         work.extend(self.threads.values().filter_map(|t| t.pending));
         let mut marked = vec![false; self.objs.len()];
         while let Some(o) = work.pop() {

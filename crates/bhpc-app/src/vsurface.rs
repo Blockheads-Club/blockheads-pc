@@ -6,6 +6,7 @@
 //! that points at the shared storage.
 
 use crate::surface::{fit, pack, unpack};
+use bhpc_gles::Overlay;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CString};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,11 +56,21 @@ const VERTEX_ATTRIB_ARRAY_NORMALIZED: u32 = 0x886A;
 const VERTEX_ATTRIB_ARRAY_BUFFER_BINDING: u32 = 0x889F;
 const VERTEX_ATTRIB_ARRAY_POINTER: u32 = 0x8645;
 /// Capabilities that would disturb a plain textured quad: scissor, stencil, depth, blend, cull, dither.
+const BLEND: u32 = 0x0BE2;
+const BLEND_SRC_RGB: u32 = 0x80C9;
+const BLEND_DST_RGB: u32 = 0x80C8;
+const BLEND_SRC_ALPHA: u32 = 0x80CB;
+const BLEND_DST_ALPHA: u32 = 0x80CA;
+const ONE: u32 = 1;
+const ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
 const CAPS: [u32; 6] = [0x0C11, 0x0B90, 0x0B71, 0x0BE2, 0x0B44, 0x0BD0];
 
 const VS: &str =
     "attribute vec2 pos; attribute vec2 uv; varying vec2 v; void main() { v = uv; gl_Position = vec4(pos, 0.0, 1.0); }";
 const FS: &str = "precision mediump float; varying vec2 v; uniform sampler2D t; void main() { gl_FragColor = vec4(texture2D(t, v).rgb, 1.0); }";
+/// The overlay is premultiplied RGBA and is blended with `ONE, ONE_MINUS_SRC_ALPHA`.
+const FS_OVERLAY: &str =
+    "precision mediump float; varying vec2 v; uniform sampler2D t; void main() { gl_FragColor = texture2D(t, v); }";
 /// Full-screen strip: position then texture coordinate.
 const QUAD: [f32; 16] = [-1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0];
 
@@ -120,6 +131,8 @@ gl_table! {
     glDisable: fn(u32);
     glViewport: fn(i32, i32, i32, i32);
     glColorMask: fn(u8, u8, u8, u8);
+    glBlendFuncSeparate: fn(u32, u32, u32, u32);
+    glTexSubImage2D: fn(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void);
     glClearColor: fn(f32, f32, f32, f32);
     glClear: fn(u32);
     glDrawArrays: fn(u32, i32, i32);
@@ -144,6 +157,12 @@ struct Shared {
     program: u32,
     vbo: u32,
     sampler: i32,
+    overlay_program: u32,
+    overlay_sampler: i32,
+    /// The overlay texture, its size and the serial of the pixels it holds.
+    overlay_tex: u32,
+    overlay_size: (u32, u32),
+    overlay_serial: Option<u64>,
 }
 
 #[derive(Default)]
@@ -161,6 +180,7 @@ pub struct VirtualSurface {
     want: AtomicU64,
     gl: Mutex<Option<Gl>>,
     state: Mutex<State>,
+    overlay: Mutex<Option<Overlay>>,
 }
 
 fn cstr(s: &str) -> CString {
@@ -169,11 +189,21 @@ fn cstr(s: &str) -> CString {
 
 impl VirtualSurface {
     pub fn new() -> VirtualSurface {
-        VirtualSurface { want: AtomicU64::new(0), gl: Mutex::new(None), state: Mutex::new(State::default()) }
+        VirtualSurface {
+            want: AtomicU64::new(0),
+            gl: Mutex::new(None),
+            state: Mutex::new(State::default()),
+            overlay: Mutex::new(None),
+        }
     }
 
     pub fn set_size(&self, w: u32, h: u32) {
         self.want.store(pack(w, h), Ordering::SeqCst);
+    }
+
+    /// Set (or clear) the picture [`VirtualSurface::compose`] blends over the whole drawable.
+    pub fn set_overlay(&self, overlay: Option<Overlay>) {
+        *self.overlay.lock().unwrap_or_else(PoisonError::into_inner) = overlay;
     }
 
     pub fn size(&self) -> Option<(u32, u32)> {
@@ -214,6 +244,7 @@ impl VirtualSurface {
     /// the surface in this context.
     pub fn compose(&self, ctx: usize, drawable: (u32, u32), loader: &dyn Fn(&str) -> *const c_void) {
         let Some(size) = self.size() else { return };
+        let overlay = self.overlay.lock().unwrap_or_else(PoisonError::into_inner).clone();
         self.with_gl(loader, |g, st| {
             if !st.fbos.contains_key(&ctx) {
                 return;
@@ -221,7 +252,7 @@ impl VirtualSurface {
             // SAFETY: as in `framebuffer`; the original GL state is restored before returning.
             unsafe {
                 ensure(g, st, ctx, size);
-                draw(g, &st.shared, fit(size, drawable));
+                draw(g, &mut st.shared, fit(size, drawable), overlay.as_ref().map(|o| (o, drawable)));
             }
         });
     }
@@ -239,8 +270,8 @@ unsafe fn ensure(g: &Gl, st: &mut State, ctx: usize, size: (u32, u32)) -> u32 {
     let mut prev = [0i32; 1];
     (g.glGetIntegerv)(FRAMEBUFFER_BINDING, prev.as_mut_ptr());
     if st.shared.program == 0 {
-        match build_program(g) {
-            Some((p, vbo, sampler)) => (st.shared.program, st.shared.vbo, st.shared.sampler) = (p, vbo, sampler),
+        match build_program(g, &mut st.shared) {
+            Some(()) => {}
             None => {
                 st.broken = true;
                 eprintln!("[gl] offscreen surface unavailable: cannot build the compositing program");
@@ -332,7 +363,8 @@ unsafe fn realloc(g: &Gl, sh: &mut Shared, size: (u32, u32)) {
     sh.generation += 1;
 }
 
-unsafe fn build_program(g: &Gl) -> Option<(u32, u32, i32)> {
+/// Compile and link the shared vertex shader with `fs`; returns the program and its sampler uniform.
+unsafe fn link(g: &Gl, fs: &str) -> Option<(u32, i32)> {
     let compile = |kind: u32, src: &str| -> Option<u32> {
         let s = (g.glCreateShader)(kind);
         let c = cstr(src);
@@ -343,7 +375,7 @@ unsafe fn build_program(g: &Gl) -> Option<(u32, u32, i32)> {
         (g.glGetShaderiv)(s, COMPILE_STATUS, &mut ok);
         (ok != 0).then_some(s)
     };
-    let (vs, fs) = (compile(VERTEX_SHADER, VS)?, compile(FRAGMENT_SHADER, FS)?);
+    let (vs, fs) = (compile(VERTEX_SHADER, VS)?, compile(FRAGMENT_SHADER, fs)?);
     let p = (g.glCreateProgram)();
     (g.glAttachShader)(p, vs);
     (g.glAttachShader)(p, fs);
@@ -354,10 +386,13 @@ unsafe fn build_program(g: &Gl) -> Option<(u32, u32, i32)> {
     (g.glDeleteShader)(fs);
     let mut ok = 0;
     (g.glGetProgramiv)(p, LINK_STATUS, &mut ok);
-    if ok == 0 {
-        return None;
-    }
-    let sampler = (g.glGetUniformLocation)(p, cstr("t").as_ptr());
+    (ok != 0).then(|| (p, (g.glGetUniformLocation)(p, cstr("t").as_ptr())))
+}
+
+/// The compositing programs (surface and overlay) and the quad they draw.
+unsafe fn build_program(g: &Gl, sh: &mut Shared) -> Option<()> {
+    let (p, sampler) = link(g, FS)?;
+    let (op, osampler) = link(g, FS_OVERLAY)?;
     let mut vbo = 0u32;
     let mut prev = 0;
     (g.glGetIntegerv)(ARRAY_BUFFER_BINDING, &mut prev);
@@ -365,7 +400,8 @@ unsafe fn build_program(g: &Gl) -> Option<(u32, u32, i32)> {
     (g.glBindBuffer)(ARRAY_BUFFER, vbo);
     (g.glBufferData)(ARRAY_BUFFER, std::mem::size_of_val(&QUAD) as isize, QUAD.as_ptr().cast(), STATIC_DRAW);
     (g.glBindBuffer)(ARRAY_BUFFER, prev as u32);
-    Some((p, vbo, sampler))
+    (sh.program, sh.sampler, sh.overlay_program, sh.overlay_sampler, sh.vbo) = (p, sampler, op, osampler, vbo);
+    Some(())
 }
 
 #[derive(Default, Clone, Copy)]
@@ -380,7 +416,7 @@ struct Attrib {
 }
 
 /// Draw the surface texture into framebuffer 0 inside `vp`, restoring every piece of state it touches.
-unsafe fn draw(g: &Gl, sh: &Shared, vp: crate::surface::Viewport) {
+unsafe fn draw(g: &Gl, sh: &mut Shared, vp: crate::surface::Viewport, overlay: Option<(&Overlay, (u32, u32))>) {
     let (mut fb, mut prog, mut buf, mut tex, mut unit) = (0, 0, 0, 0, 0);
     let (mut view, mut mask, mut clear) = ([0i32; 4], [0u8; 4], [0f32; 4]);
     (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut fb);
@@ -425,6 +461,9 @@ unsafe fn draw(g: &Gl, sh: &Shared, vp: crate::surface::Viewport) {
     (g.glEnableVertexAttribArray)(0);
     (g.glEnableVertexAttribArray)(1);
     (g.glDrawArrays)(TRIANGLE_STRIP, 0, 4);
+    if let Some((ov, drawable)) = overlay {
+        draw_overlay(g, sh, ov, drawable);
+    }
 
     // Put everything back.
     for (i, a) in attribs.iter().enumerate() {
@@ -458,4 +497,62 @@ unsafe fn draw(g: &Gl, sh: &Shared, vp: crate::surface::Viewport) {
     (g.glClearColor)(clear[0], clear[1], clear[2], clear[3]);
     (g.glViewport)(view[0], view[1], view[2], view[3]);
     (g.glBindFramebuffer)(FRAMEBUFFER, fb as u32);
+}
+
+/// Blend the overlay picture over the whole drawable. Runs inside [`draw`], with the quad's buffer and attributes set
+/// up and framebuffer 0 bound; changes the program, texture, viewport, blend state (restored by the caller, except the
+/// blend function which is restored here).
+unsafe fn draw_overlay(g: &Gl, sh: &mut Shared, ov: &Overlay, drawable: (u32, u32)) {
+    let (w, h) = (ov.width as usize, ov.height as usize);
+    if w == 0 || h == 0 || ov.rgba.len() != w * h * 4 || sh.overlay_program == 0 {
+        return;
+    }
+    if sh.overlay_tex == 0 {
+        (g.glGenTextures)(1, &mut sh.overlay_tex);
+    }
+    (g.glBindTexture)(TEXTURE_2D, sh.overlay_tex);
+    if sh.overlay_serial != Some(ov.serial) || sh.overlay_size != (ov.width, ov.height) {
+        // Rows go bottom first in GL.
+        let mut flipped = Vec::with_capacity(ov.rgba.len());
+        for row in ov.rgba.chunks_exact(w * 4).rev() {
+            flipped.extend_from_slice(row);
+        }
+        if sh.overlay_size != (ov.width, ov.height) || sh.overlay_serial.is_none() {
+            (g.glTexImage2D)(
+                TEXTURE_2D,
+                0,
+                RGBA as i32,
+                w as i32,
+                h as i32,
+                0,
+                RGBA,
+                UNSIGNED_BYTE,
+                flipped.as_ptr().cast(),
+            );
+            for (p, v) in [
+                (TEXTURE_MIN_FILTER, LINEAR),
+                (TEXTURE_MAG_FILTER, LINEAR),
+                (TEXTURE_WRAP_S, CLAMP_TO_EDGE),
+                (TEXTURE_WRAP_T, CLAMP_TO_EDGE),
+            ] {
+                (g.glTexParameteri)(TEXTURE_2D, p, v);
+            }
+        } else {
+            (g.glTexSubImage2D)(TEXTURE_2D, 0, 0, 0, w as i32, h as i32, RGBA, UNSIGNED_BYTE, flipped.as_ptr().cast());
+        }
+        sh.overlay_serial = Some(ov.serial);
+        sh.overlay_size = (ov.width, ov.height);
+    }
+    let mut blend = [0i32; 4];
+    for (i, p) in [BLEND_SRC_RGB, BLEND_DST_RGB, BLEND_SRC_ALPHA, BLEND_DST_ALPHA].into_iter().enumerate() {
+        (g.glGetIntegerv)(p, &mut blend[i]);
+    }
+    (g.glViewport)(0, 0, drawable.0 as i32, drawable.1 as i32);
+    (g.glUseProgram)(sh.overlay_program);
+    (g.glUniform1i)(sh.overlay_sampler, 0);
+    (g.glEnable)(BLEND);
+    (g.glBlendFuncSeparate)(ONE, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
+    (g.glDrawArrays)(TRIANGLE_STRIP, 0, 4);
+    (g.glDisable)(BLEND);
+    (g.glBlendFuncSeparate)(blend[0] as u32, blend[1] as u32, blend[2] as u32, blend[3] as u32);
 }

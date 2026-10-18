@@ -30,6 +30,57 @@ pub(crate) struct View {
     pub interactive: bool,
     pub enabled: bool,
     pub text: String,
+    /// `_setBackgroundColor`: ARGB.
+    pub bg: Option<u32>,
+    /// `setClipsToBounds`.
+    pub clips: bool,
+    /// `ImageView.setImage`: the bitmap and the size it is meant to be shown at (0 = its own).
+    pub image: Option<(Obj, i32, i32)>,
+    /// `Button.setBackgroundDrawable(bitmap, state)`.
+    pub backgrounds: Vec<(i32, Obj)>,
+    /// `Button.setIconDrawable(bitmap, state)`.
+    pub icons: Vec<(i32, Obj)>,
+    pub highlighted: bool,
+    pub style: TextStyle,
+}
+
+/// How a label, button caption or text field draws its text.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextStyle {
+    pub font: Option<Obj>,
+    pub size: f32,
+    /// ARGB.
+    pub color: u32,
+    /// `NSTextAlignment`: 0 left, 1 center, 2 right.
+    pub align: i32,
+    /// 0 = as many as fit.
+    pub lines: i32,
+    pub min_size: f32,
+    pub shadow_color: u32,
+    pub shadow_offset: [f32; 2],
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        TextStyle {
+            font: None,
+            size: 17.0,
+            color: 0xFF00_0000,
+            align: 0,
+            lines: 1,
+            min_size: 0.0,
+            shadow_color: 0,
+            shadow_offset: [0.0; 2],
+        }
+    }
+}
+
+impl View {
+    /// Heap objects the view keeps alive.
+    pub(crate) fn refs(&self) -> impl Iterator<Item = Obj> + '_ {
+        let bitmaps = self.backgrounds.iter().chain(&self.icons).map(|b| b.1);
+        bitmaps.chain(self.image.map(|i| i.0)).chain(self.style.font)
+    }
 }
 
 #[derive(Default)]
@@ -92,6 +143,13 @@ impl Vm {
                 interactive: true,
                 enabled: true,
                 text: String::new(),
+                bg: None,
+                clips: false,
+                image: None,
+                backgrounds: Vec::new(),
+                icons: Vec::new(),
+                highlighted: false,
+                style: TextStyle::default(),
             },
         );
     }
@@ -190,26 +248,30 @@ impl Vm {
         })
     }
 
-    /// Window pixels to the coordinates of the Java views. The manifest declares the game portrait, so UIKit lays its
-    /// views out in a portrait space (768x1024 on the 1024x768 window) that the game's own renderer turns by a quarter
-    /// turn: the top of the portrait space is the right edge of the landscape window. A portrait window needs no turn.
-    pub fn screen_to_ui(&self, x: f32, y: f32) -> (f32, f32) {
+    /// Where the origin of the Java views' space lies in window pixels. The manifest declares the game portrait, so
+    /// UIKit lays its views out in a portrait space (768x1024 on the 1024x768 window): the game never receives the
+    /// orientation event that would make Apportable turn that space, so the views stay upright and the portrait
+    /// space is centred on the window (a popup centred in it is centred on the screen). A portrait window needs no
+    /// shift.
+    pub fn ui_offset(&self) -> (f32, f32) {
         let (w, h) = self.screen_size();
         if w > h {
-            (h as f32 - y, x)
+            ((w - h) as f32 / 2.0, (h - w) as f32 / 2.0)
         } else {
-            (x, y)
+            (0.0, 0.0)
         }
+    }
+
+    /// Window pixels to the coordinates of the Java views (see [`Vm::ui_offset`]).
+    pub fn screen_to_ui(&self, x: f32, y: f32) -> (f32, f32) {
+        let (ox, oy) = self.ui_offset();
+        (x - ox, y - oy)
     }
 
     /// Inverse of [`Vm::screen_to_ui`].
     pub fn ui_to_screen(&self, x: f32, y: f32) -> (f32, f32) {
-        let (w, h) = self.screen_size();
-        if w > h {
-            (y, h as f32 - x)
-        } else {
-            (x, y)
-        }
+        let (ox, oy) = self.ui_offset();
+        (x + ox, y + oy)
     }
 
     /// Views whose text contains `needle` (ignoring case) and that are shown, in creation order.
@@ -282,19 +344,26 @@ impl Vm {
         }
     }
 
+    /// `WxH` of a bitmap and how many of its pixels are not fully transparent (for the dump).
+    pub(crate) fn bitmap_summary(&self, b: Obj) -> String {
+        let Some((w, h, ptr)) = crate::jlib::bitmap_info(self, b) else { return "none".into() };
+        let px = self.mem().read_bytes(ptr, w * h * 4).unwrap_or_default();
+        format!("{w}x{h}:{}", px.chunks(4).filter(|p| p[3] != 0).count())
+    }
+
     /// The view tree as indented text: kind, handle, window-space rectangle, flags, text.
     pub fn dump_views(&self) -> String {
-        let st = self.st();
-        let mut roots: Vec<Obj> = st.ui.views.iter().filter(|(_, v)| v.parent.is_none()).map(|(o, _)| *o).collect();
+        let views = self.st().ui.views.clone();
+        let mut roots: Vec<Obj> = views.iter().filter(|(_, v)| v.parent.is_none()).map(|(o, _)| *o).collect();
         roots.sort();
         let mut out = String::new();
         for r in roots {
-            Self::dump(&st.ui.views, r, 0, (0.0, 0.0), &mut out);
+            self.dump(&views, r, 0, (0.0, 0.0), &mut out);
         }
         out
     }
 
-    fn dump(views: &HashMap<Obj, View>, v: Obj, depth: usize, parent_origin: (f32, f32), out: &mut String) {
+    fn dump(&self, views: &HashMap<Obj, View>, v: Obj, depth: usize, parent_origin: (f32, f32), out: &mut String) {
         let Some(i) = views.get(&v) else { return };
         let o = (parent_origin.0 + i.frame[0], parent_origin.1 + i.frame[1]);
         let _ = write!(
@@ -318,13 +387,28 @@ impl Vm {
         if i.alpha < 1.0 {
             let _ = write!(out, " alpha={:.2}", i.alpha);
         }
+        if let Some(bg) = i.bg {
+            let _ = write!(out, " bg=#{bg:08x}");
+        }
+        if i.clips {
+            out.push_str(" clip");
+        }
+        for (what, b) in i.image.iter().map(|b| ("img", b.0)).chain(i.backgrounds.iter().map(|b| ("bgimg", b.1))) {
+            let _ = write!(out, " {what}={}", self.bitmap_summary(b));
+        }
         if !i.text.is_empty() {
-            let _ = write!(out, " {:?}", i.text);
+            let f = i.style.font.map(|t| crate::jlib::face_of(self, t)).unwrap_or_default();
+            let st = &i.style;
+            let _ = write!(
+                out,
+                " font={:?}/{:?}/{} {}pt color=#{:08x} align={} lines={} {:?}",
+                f.path, f.name, f.style, st.size, st.color, st.align, st.lines, i.text
+            );
         }
         out.push('\n');
         for c in &i.children {
             let co = (o.0 - i.bounds[0], o.1 - i.bounds[1]);
-            Self::dump(views, *c, depth + 1, co, out);
+            self.dump(views, *c, depth + 1, co, out);
         }
     }
 }

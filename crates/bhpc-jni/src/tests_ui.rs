@@ -100,11 +100,12 @@ fn rectf_holds_four_floats() {
 }
 
 #[test]
-fn screen_and_ui_coordinates_turn_a_quarter_for_landscape_windows() {
-    // the test platform is 800x480 (landscape): UI space is 480 wide and 800 tall
+fn the_portrait_ui_space_is_centred_on_landscape_windows() {
+    // the test platform is 800x480 (landscape): UI space is 480 wide and 800 tall, centred: shifted by (160, -160)
     let e = Env::new();
-    assert_eq!(e.vm.screen_to_ui(100.0, 50.0), (430.0, 100.0));
-    assert_eq!(e.vm.ui_to_screen(430.0, 100.0), (100.0, 50.0));
+    assert_eq!(e.vm.ui_offset(), (160.0, -160.0));
+    assert_eq!(e.vm.screen_to_ui(100.0, 50.0), (-60.0, 210.0));
+    assert_eq!(e.vm.ui_to_screen(-60.0, 210.0), (100.0, 50.0));
     let mut p = crate::tests::test_platform();
     p.screen_width = 480;
     p.screen_height = 800;

@@ -149,6 +149,41 @@ fn thunk(vm: &Vm, f: impl Fn(&mut J) + Send + Sync + 'static) -> SharedThunkFn {
     })
 }
 
+/// `libjnigraphics`: `AndroidBitmap_getInfo/lockPixels/unlockPixels` over the fake `Bitmap` objects (the pixels live
+/// in guest memory, so locking just hands out the block). `ANDROID_BITMAP_RESULT_BAD_PARAMETER` is -1.
+fn bitmap_interface(vm: &Vm) -> Vec<(String, SharedThunkFn)> {
+    const FORMAT_RGBA_8888: u32 = 1;
+    let info = |j: &mut J| {
+        let (b, out) = (j.obj(), j.u32());
+        let Some((w, h, _)) = b.and_then(|b| crate::jlib::bitmap_info(j.vm, b)).filter(|_| out != 0) else {
+            return j.ret(u32::MAX);
+        };
+        for (i, v) in [w, h, w * 4, FORMAT_RGBA_8888, 0].into_iter().enumerate() {
+            j.write_u32(out + 4 * i as u32, v);
+        }
+        j.ret(0);
+    };
+    let lock = |j: &mut J| {
+        let (b, out) = (j.obj(), j.u32());
+        match b.and_then(|b| crate::jlib::bitmap_info(j.vm, b)) {
+            Some((_, _, ptr)) => {
+                j.write_u32(out, ptr);
+                j.ret(0);
+            }
+            None => j.ret(u32::MAX),
+        }
+    };
+    let unlock = |j: &mut J| {
+        let ok = j.obj().is_some_and(|b| crate::jlib::bitmap_info(j.vm, b).is_some());
+        j.ret(if ok { 0 } else { u32::MAX });
+    };
+    vec![
+        ("AndroidBitmap_getInfo".to_string(), thunk(vm, info)),
+        ("AndroidBitmap_lockPixels".to_string(), thunk(vm, lock)),
+        ("AndroidBitmap_unlockPixels".to_string(), thunk(vm, unlock)),
+    ]
+}
+
 // ------------------------------------------------------------------ memory helpers
 
 fn read_cbytes(vm: &Vm, mut p: u32) -> Vec<u8> {
@@ -862,6 +897,9 @@ impl Vm {
                 let addr = cpu.register_shared_thunk(&format!("JNI:{name}"), f).map_err(|e| format!("{e:?}"))?;
                 mem.write_u32(base + 4 * i as u32, addr).map_err(werr)?;
             }
+        }
+        for (name, f) in bitmap_interface(self) {
+            cpu.register_shared_thunk(&name, f).map_err(|e| format!("{e:?}"))?;
         }
         mem.write_u32(java_vm, invoke_table).map_err(werr)?;
         let l = Layout { java_vm, table, invoke_table };

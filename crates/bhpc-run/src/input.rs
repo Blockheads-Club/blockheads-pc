@@ -200,7 +200,7 @@ impl EventSink for JniSink<'_> {
             }
         }
         // The game's own views take screen pixels, landscape like the window (the Java views, hit-tested by
-        // `ui_touch`, are the ones laid out in a turned space), so only the content-to-screen scale applies.
+        // `ui_touch`, are the ones laid out in a portrait space), so only the content-to-screen scale applies.
         let mapped = ev.map_points(&|x, y| content_to_screen(self.vm.content_scale(), x, y));
         let ev = &mapped;
         let text_target = ev.text_field().is_some();

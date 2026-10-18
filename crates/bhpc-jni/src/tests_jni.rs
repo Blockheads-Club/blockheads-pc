@@ -89,8 +89,8 @@ fn table_has_233_named_slots() {
         seen.insert(a);
     }
     assert_eq!(seen.len(), TABLE_SLOTS);
-    // 233 JNI functions + 8 invocation functions.
-    assert_eq!(e.cpu.thunk_count(), TABLE_SLOTS + 8);
+    // 233 JNI functions + 8 invocation functions + the 3 `AndroidBitmap_*` functions of libjnigraphics.
+    assert_eq!(e.cpu.thunk_count(), TABLE_SLOTS + 8 + 3);
     assert_eq!(e.vm.install(&e.cpu).unwrap(), e.layout, "install is idempotent");
     assert_eq!(mem.read_u32(e.layout.java_vm).unwrap(), e.layout.invoke_table);
     assert_eq!(mem.read_u32(e.env_ptr()).unwrap(), e.layout.table);

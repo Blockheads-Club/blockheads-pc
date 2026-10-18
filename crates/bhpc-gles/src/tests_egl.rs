@@ -428,5 +428,6 @@ fn a_window_without_an_offscreen_surface_renders_straight_into_itself() {
     w.set_surface_size(1024, 768);
     assert_eq!(w.surface_size(), (640, 480), "the surface is the drawable");
     assert_eq!(w.default_framebuffer(), 0);
+    w.set_overlay(None);
     w.compose();
 }

@@ -79,3 +79,7 @@ World..." opens the world dialog).
   from CFNetwork this way). With that and the dispatch fix the start-up mission-list request no longer logs
   "Bad file descriptor".
 * Scripts gained `focus on|off`, `minimize`, `restore`, `resize W H` and `key f11`.
+* **Java views.** The popups/dialogs of `com.apportable.ui` (tutorial "WELCOME", ...) are drawn over the frame:
+  `bhpc-jni/src/render.rs` rasterises the view tree (backgrounds, `ImageView`/`Button` bitmaps, label text) into a
+  window-sized RGBA frame, `play.rs` passes it to the window (`GlWindow::set_overlay`) and `vsurface.rs` blends it in
+  `compose`. See the gotchas section of `CLAUDE.md`.
