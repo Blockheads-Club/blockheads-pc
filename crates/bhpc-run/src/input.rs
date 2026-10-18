@@ -4,7 +4,7 @@
 use bhpc_app::{Event, Key, MouseButton as AppButton};
 use bhpc_cpu::Cpu;
 use bhpc_input::{EventSink, GuestEvent, HostAction, HostEvent, HostKey, Mods, MouseButton};
-use bhpc_jni::{Data, Ty, Value, Vm};
+use bhpc_jni::{Data, TouchPhase, Ty, Value, Vm};
 
 /// Translate a window-system event. Touch events are not forwarded (the mapper emulates touches from the mouse).
 pub fn host_event(ev: &Event) -> Option<HostEvent> {
@@ -108,8 +108,26 @@ pub fn args_for(vm: &Vm, ev: &GuestEvent, i: usize) -> Vec<Value> {
     }
 }
 
+/// The single-finger touch of `ev` for the control layer (`Vm::ui_touch`); multi-finger gestures never hit controls.
+pub fn control_touch(ev: &GuestEvent) -> Option<(TouchPhase, f32, f32)> {
+    match ev {
+        GuestEvent::TouchBegin { id: 0, x, y, .. } => Some((TouchPhase::Begin, *x, *y)),
+        GuestEvent::TouchEnd { id: 0, x, y, .. } => Some((TouchPhase::End, *x, *y)),
+        GuestEvent::TouchMove { ids, xs, ys, .. } if ids.len() == 1 => Some((TouchPhase::Move, xs[0], ys[0])),
+        GuestEvent::TouchCancel { ids, xs, ys, .. } if ids.len() == 1 => Some((TouchPhase::Cancel, xs[0], ys[0])),
+        _ => None,
+    }
+}
+
 impl EventSink for JniSink<'_> {
     fn deliver(&mut self, ev: &GuestEvent) -> bool {
+        if let Some((phase, x, y)) = control_touch(ev) {
+            match self.vm.ui_touch(self.cpu, phase, x, y) {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(e) => self.errors.push(format!("ui touch: {e:?}")),
+            }
+        }
         let mut result = true;
         let text_target = ev.text_field().is_some();
         let focus = self.vm.text_focus();

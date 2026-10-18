@@ -68,7 +68,7 @@ pub(crate) fn install(vm: &Vm) {
         })
         .method("gc", "()V", |_| void())
         .method("homeScreen", "()V", |_| void())
-        .method("_getRequestedOrientation", "()I", |_| int(1))
+        .method("_getRequestedOrientation", "()I", |_| int(0))
         .method("_setRequestedOrientation", "(I)V", |_| void())
         .method("primaryContainer", "()Landroid/widget/FrameLayout;", |c| {
             object(Some(c.vm.singleton("container", |vm| {
@@ -228,13 +228,55 @@ fn install_widgets(vm: &Vm) {
             ("isDrawRectImplemented", "(I)Z", false),
             ("nativeSetFrame", "(IIII)V", false),
         ])
-        .method("setFrame", "(Landroid/graphics/RectF;)V", dirty)
-        .method("setBounds", "(Landroid/graphics/RectF;)V", dirty)
+        .method("setFrame", "(Landroid/graphics/RectF;)V", |c| {
+            let (o, f) = (c.this, c.vm.rect_of(c.obj(0)));
+            c.vm.ui_update(o, |v| v.frame = f);
+            c.vm.mark_layout(o);
+            void()
+        })
+        .method("setBounds", "(Landroid/graphics/RectF;)V", |c| {
+            let (o, f) = (c.this, c.vm.rect_of(c.obj(0)));
+            c.vm.ui_update(o, |v| v.bounds = [f[0], f[1]]);
+            c.vm.mark_layout(o);
+            void()
+        })
+        .method("setHidden", "(Z)V", |c| {
+            let (o, h) = (c.this, c.int(0) != 0);
+            c.vm.ui_update(o, |v| v.hidden = h);
+            void()
+        })
+        .method("_setAlpha", "(F)V", |c| {
+            let (o, a) = (c.this, c.float(0));
+            c.vm.ui_update(o, |v| v.alpha = a);
+            void()
+        })
+        .method("setUserInteractionEnabled", "(Z)V", |c| {
+            let (o, i) = (c.this, c.int(0) != 0);
+            c.vm.ui_update(o, |v| v.interactive = i);
+            void()
+        })
+        .method("insertSubview", "(Lcom/apportable/ui/View;I)V", |c| {
+            if let Some(child) = c.obj(0) {
+                c.vm.ui_attach(c.this, child, Some(c.int(1).max(0) as usize));
+                c.vm.mark_layout(c.this);
+            }
+            void()
+        })
+        .method("removeSubview", "(Lcom/apportable/ui/View;)V", |c| {
+            if let Some(child) = c.obj(0) {
+                c.vm.ui_detach(child);
+                c.vm.mark_layout(c.this);
+            }
+            void()
+        })
         .method("setNeedsLayout", "()V", dirty)
         .method("layoutIfNeeded", "()V", dirty)
         .method("addSubview", "(Lcom/apportable/ui/View;)V", |c| {
             for o in [Some(c.this), c.obj(0)].into_iter().flatten() {
                 c.vm.mark_layout(o);
+            }
+            if let Some(child) = c.obj(0) {
+                c.vm.ui_attach(c.this, child, None);
             }
             // A text field added to an alert is the alert's input line.
             if let Some(f) = c.obj(0).filter(|f| c.vm.instance_of(*f, "com/apportable/ui/TextField")) {
@@ -244,18 +286,22 @@ fn install_widgets(vm: &Vm) {
             void()
         });
     drop(view);
+    install_rect(vm);
     vm.define("com/apportable/ui/Window").method("makeKeyAndOrderFront", "()V", |c| {
         let o = c.this;
         c.vm.mark_layout(o);
         c.vm.st().focus_pending = true;
         void()
     });
+    // The controls' events go to the native side through `Control.event(handle, type)`.
+    vm.define("com/apportable/ui/Control").extends("com/apportable/ui/View").native("event", "(II)V", false);
     for w in WIDGETS {
         let class = format!("com/apportable/ui/{w}");
         let owner = if w == "MediaPlayer" { "Landroid/app/Activity;" } else { "Landroid/content/Context;" };
         let mut b = vm.define(&class);
         if w != "View" {
-            b = b.extends("com/apportable/ui/View");
+            let base = if matches!(w, "Button" | "TextField" | "Slider" | "Switch") { "Control" } else { "View" };
+            b = b.extends(&format!("com/apportable/ui/{base}"));
         }
         if w == "AlertView" {
             b = b
@@ -309,6 +355,8 @@ fn install_widgets(vm: &Vm) {
                 .method("setText", "(Ljava/lang/String;)V", |c| {
                     let t = c.string(0).unwrap_or_default();
                     c.vm.set_text_of(c.this, &t);
+                    let o = c.this;
+                    c.vm.ui_update(o, |v| v.text = t);
                     void()
                 })
                 .method("getText", "()Ljava/lang/String;", |c| {
@@ -326,8 +374,32 @@ fn install_widgets(vm: &Vm) {
                     void()
                 });
         }
+        if w == "Label" {
+            b = b.method("setText", "(Ljava/lang/String;)V", |c| {
+                let (o, t) = (c.this, c.string(0).unwrap_or_default());
+                c.vm.ui_update(o, |v| v.text = t);
+                void()
+            });
+        }
+        if w == "Button" {
+            b = b
+                .method("setText", "(Ljava/lang/String;I)V", |c| {
+                    let (o, t, state) = (c.this, c.string(0).unwrap_or_default(), c.int(1));
+                    if state == 0 {
+                        c.vm.ui_update(o, |v| v.text = t);
+                    }
+                    void()
+                })
+                .method("setEnabled", "(Z)V", |c| {
+                    let (o, e) = (c.this, c.int(0) != 0);
+                    c.vm.ui_update(o, |v| v.enabled = e);
+                    void()
+                });
+        }
         let make = |c: &mut Call| {
             let o = c.vm.alloc_object(c.class);
+            let (kind, frame) = (c.vm.class_name(c.class), c.vm.rect_of(c.obj(2)));
+            c.vm.ui_create(o, kind.rsplit('/').next().unwrap_or_default(), c.int(1), frame);
             c.vm.set_field(o, "mObject", Value::Int(c.int(1)));
             c.vm.mark_layout(o);
             object(Some(o))
@@ -382,3 +454,52 @@ const ACTIVITY_NATIVES: [(&str, &str, bool); 21] = [
     ("gpgNativeOnActivityResumed", "(Landroid/app/Activity;)V", true),
     ("gpgNativeOnActivityStarted", "(Landroid/app/Activity;)V", true),
 ];
+
+/// `android.graphics.RectF`: four float fields and the few helpers the game calls.
+fn install_rect(vm: &Vm) {
+    use super::float;
+    const FIELDS: [&str; 4] = ["left", "top", "right", "bottom"];
+    fn set(c: &Call, o: Obj, v: [f32; 4]) {
+        for (n, x) in FIELDS.iter().zip(v) {
+            c.vm.set_field(o, n, Value::Float(x));
+        }
+    }
+    fn get(c: &Call, o: Obj) -> [f32; 4] {
+        c.vm.rect_of(Some(o))
+    }
+    let mut b = vm.define("android/graphics/RectF");
+    for n in FIELDS {
+        b = b.field(n, "F");
+    }
+    b.method("<init>", "()V", |_| void())
+        .method("<init>", "(FFFF)V", |c| {
+            set(c, c.this, [c.float(0), c.float(1), c.float(2), c.float(3)]);
+            void()
+        })
+        .method("<init>", "(Landroid/graphics/RectF;)V", |c| {
+            let src = c.vm.rect_of(c.obj(0));
+            set(c, c.this, src);
+            void()
+        })
+        .method("set", "(FFFF)V", |c| {
+            set(c, c.this, [c.float(0), c.float(1), c.float(2), c.float(3)]);
+            void()
+        })
+        .method("width", "()F", |c| float(get(c, c.this)[2] - get(c, c.this)[0]))
+        .method("height", "()F", |c| float(get(c, c.this)[3] - get(c, c.this)[1]))
+        .method("centerX", "()F", |c| float((get(c, c.this)[0] + get(c, c.this)[2]) / 2.0))
+        .method("centerY", "()F", |c| float((get(c, c.this)[1] + get(c, c.this)[3]) / 2.0))
+        .method("isEmpty", "()Z", |c| {
+            let r = get(c, c.this);
+            boolean(r[0] >= r[2] || r[1] >= r[3])
+        })
+        .method("offset", "(FF)V", |c| {
+            let r = get(c, c.this);
+            set(c, c.this, [r[0] + c.float(0), r[1] + c.float(1), r[2] + c.float(0), r[3] + c.float(1)]);
+            void()
+        })
+        .method("contains", "(FF)Z", |c| {
+            let (r, x, y) = (get(c, c.this), c.float(0), c.float(1));
+            boolean(x >= r[0] && x < r[2] && y >= r[1] && y < r[3])
+        });
+}

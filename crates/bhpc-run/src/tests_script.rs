@@ -1,4 +1,4 @@
-use crate::script::{build, click_line, key_code, parse, Action};
+use crate::script::{build, click_events, click_line, key_code, parse, Action};
 use bhpc_app::{Event, Key, Mods, MouseButton};
 
 fn at(steps: &[(u64, Action)], i: usize) -> u64 {
@@ -48,7 +48,7 @@ fn drag_interpolates_and_releases_at_the_end() {
 
 #[test]
 fn keys_and_text() {
-    let s = parse("0 key enter\n10 keydown left\n20 keyup left\n30 text hello  world \n40 quit\n50 mark in_world\n")
+    let s = parse("0 key enter\n10 keydown left\n20 keyup left\n30 text hello  world \n40 quit\n50 mark in_world\n60 dumpviews\n70 waittext Welcome back\n80 clicktext OK\n")
         .unwrap();
     let k = |key, pressed| Action::Event(Event::Key { key: Key(key), pressed, repeat: false, mods: Mods::default() });
     assert_eq!(s[0], (0, k(40, true)));
@@ -58,6 +58,11 @@ fn keys_and_text() {
     assert_eq!(s[4], (40, k(40, false)));
     assert_eq!(s[5], (40, Action::Quit));
     assert_eq!(s[6], (50, Action::Mark("in_world".into())));
+    assert_eq!(s[7], (60, Action::DumpViews));
+    assert_eq!(s[8], (70, Action::WaitText("Welcome back".into())));
+    assert_eq!(s[9], (80, Action::ClickText("OK".into())));
+    assert_eq!(parse("0 waittext\n").unwrap_err(), "line 1: waittext needs a text");
+    assert_eq!(click_events(1.0, 2.0).len(), 3);
     for (n, want) in [
         ("a", 4),
         ("Z", 29),

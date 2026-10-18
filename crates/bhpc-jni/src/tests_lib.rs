@@ -1094,7 +1094,7 @@ fn verde_activity() {
         ("getContentHeight", 480),
         ("getSplashScreenWidth", 800),
         ("getSplashScreenHeight", 480),
-        ("_getRequestedOrientation", 1),
+        ("_getRequestedOrientation", 0),
     ] {
         assert_eq!(int(e.call(a, m, "()I", &[])), want, "{m}");
     }

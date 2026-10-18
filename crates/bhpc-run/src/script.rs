@@ -13,6 +13,9 @@
 //! +100  keydown left           # and keyup, for held keys
 //! +100  shot menu              # screenshot `<name>.png` in the shot directory on the next presented frame
 //! +100  mark world              # start a frame-time segment (p50/p99 are reported per segment)
+//! +100  waittext Welcome         # wait (up to 3 minutes) until a view shows this text; later times shift
+//! +100  clicktext OK            # wait for the text, then click the button that shows it
+//! +100  dumpviews               # print the view tree (kind, window rectangle, text) to stderr
 //! +100  wait                   # no-op, only moves the clock
 //! 60000 quit
 //! ```
@@ -26,6 +29,12 @@ pub enum Action {
     Shot(String),
     /// Start a frame-time segment with this label.
     Mark(String),
+    /// Wait until a shown UIKit view displays this text (ignoring case); later steps shift by the time waited.
+    WaitText(String),
+    /// Wait for the text as above, then click the button that shows it.
+    ClickText(String),
+    /// Print the UIKit view tree (geometry, text) to stderr.
+    DumpViews,
     Quit,
 }
 
@@ -36,6 +45,14 @@ pub type Step = (u64, Action);
 const CLICK_GAP: u64 = 60;
 /// Spacing of the intermediate moves of a drag.
 const DRAG_GAP: u64 = 30;
+
+/// The events of a click at `(x, y)` with their offsets in milliseconds from its start.
+pub fn click_events(x: f32, y: f32) -> [(u64, Event); 3] {
+    [(0, mouse(x, y, None)), (CLICK_GAP, mouse(x, y, Some(true))), (2 * CLICK_GAP, mouse(x, y, Some(false)))]
+}
+
+/// How long a `waittext`/`clicktext` waits for its text.
+pub const WAIT_TIMEOUT_MS: u64 = 180_000;
 
 /// HID usage id of a key name.
 pub fn key_code(name: &str) -> Option<Key> {
@@ -80,9 +97,7 @@ fn command(t: u64, words: &[&str], rest: &str) -> Result<(Vec<Step>, u64), Strin
     let end = match words[0] {
         "click" => {
             let (x, y): (f32, f32) = (num(words, 1, "x")?, num(words, 2, "y")?);
-            out.push((t, Action::Event(mouse(x, y, None))));
-            out.push((t + CLICK_GAP, Action::Event(mouse(x, y, Some(true)))));
-            out.push((t + 2 * CLICK_GAP, Action::Event(mouse(x, y, Some(false)))));
+            out.extend(click_events(x, y).map(|(d, e)| (t + d, Action::Event(e))));
             t + 2 * CLICK_GAP
         }
         "hold" => {
@@ -136,6 +151,19 @@ fn command(t: u64, words: &[&str], rest: &str) -> Result<(Vec<Step>, u64), Strin
         "mark" => {
             let name = words.get(1).ok_or("mark needs a label")?;
             out.push((t, Action::Mark((*name).to_string())));
+            t
+        }
+        "waittext" | "clicktext" => {
+            let text = rest.split_once(char::is_whitespace).map_or("", |x| x.1).trim();
+            if text.is_empty() {
+                return Err(format!("{} needs a text", words[0]));
+            }
+            let a = if words[0] == "waittext" { Action::WaitText(text.into()) } else { Action::ClickText(text.into()) };
+            out.push((t, a));
+            t
+        }
+        "dumpviews" => {
+            out.push((t, Action::DumpViews));
             t
         }
         "wait" => t,

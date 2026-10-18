@@ -192,6 +192,8 @@ pub(crate) struct State {
     pub ticks: Vec<Obj>,
     /// The `TextField`/`TextView` that is first responder (receives the keyboard), see `Vm::text_focus`.
     pub text_focus: Option<Obj>,
+    /// UIKit view tree (see `ui`).
+    pub ui: crate::ui::UiState,
 }
 
 /// Resolver for exported native symbols: name -> guest address.

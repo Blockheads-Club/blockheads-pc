@@ -22,6 +22,10 @@ pub(crate) fn boolean(v: bool) -> JResult {
     Ok(Value::Int(v as i32))
 }
 
+pub(crate) fn float(v: f32) -> JResult {
+    Ok(Value::Float(v))
+}
+
 pub(crate) fn long(v: i64) -> JResult {
     Ok(Value::Long(v))
 }

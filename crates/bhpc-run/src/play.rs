@@ -10,7 +10,7 @@
 use crate::apkrun::{backtrace_lines, HostHooks, InitConfig, Session};
 use crate::dl::{self, DlTable};
 use crate::input::{host_event, JniSink};
-use crate::script::{Action, Step};
+use crate::script::{click_events, Action, Step, WAIT_TIMEOUT_MS};
 use crate::tracks::Tracks;
 use crate::{framestats, png, RunError};
 use bhpc_app::sdl::SdlBackend;
@@ -151,6 +151,10 @@ struct Flags {
     marks: Mutex<Vec<(String, usize)>>,
     /// A script asked to quit.
     script_quit: AtomicBool,
+    /// A script asked for a view-tree dump.
+    dump_views: AtomicBool,
+    /// The fake JVM, for scripts that wait for views.
+    vm: Mutex<Option<Vm>>,
     /// The UI thread finished the Java start-up stages that must precede `nativeRun`.
     startup_done: AtomicBool,
     /// Why the UI thread ended (set when it ends normally).
@@ -387,8 +391,11 @@ fn run_script(script: &[Step], tx: &std::sync::mpsc::Sender<Event>, flags: &Flag
         std::thread::sleep(Duration::from_millis(20));
     }
     let begun = Instant::now();
+    // Time spent in `waittext`/`clicktext` pushes everything after it back.
+    let mut shift = 0u64;
     for (at, action) in script {
-        std::thread::sleep(Duration::from_millis(*at).saturating_sub(begun.elapsed()));
+        let due = Duration::from_millis(*at + shift);
+        std::thread::sleep(due.saturating_sub(begun.elapsed()));
         match action {
             Action::Event(e) => {
                 let _ = tx.send(e.clone());
@@ -405,8 +412,49 @@ fn run_script(script: &[Step], tx: &std::sync::mpsc::Sender<Event>, flags: &Flag
                 eprintln!("[script] {} ms: mark {label} (frame {at})", begun.elapsed().as_millis());
                 flags.marks.lock().unwrap_or_else(PoisonError::into_inner).push((label.clone(), at));
             }
+            Action::WaitText(text) | Action::ClickText(text) => {
+                let found = wait_text(flags, text);
+                eprintln!(
+                    "[script] {} ms: {} {text:?}",
+                    begun.elapsed().as_millis(),
+                    if found { "found" } else { "TIMEOUT waiting for" }
+                );
+                if let (true, Action::ClickText(_)) = (found, action) {
+                    click_text(flags, tx, text);
+                }
+                shift = (begun.elapsed().as_millis() as u64).saturating_sub(*at);
+            }
+            Action::DumpViews => flags.dump_views.store(true, Ordering::SeqCst),
             Action::Quit => flags.script_quit.store(true, Ordering::SeqCst),
         }
+    }
+}
+
+fn vm_of(flags: &Flags) -> Option<Vm> {
+    flags.vm.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+/// Poll until a view shows `text` (the game builds its alerts and popups on its own schedule).
+fn wait_text(flags: &Flags, text: &str) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(WAIT_TIMEOUT_MS) && !flags.done.load(Ordering::SeqCst) {
+        if vm_of(flags).is_some_and(|vm| vm.has_text(text)) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+fn click_text(flags: &Flags, tx: &std::sync::mpsc::Sender<Event>, text: &str) {
+    let Some((x, y)) = vm_of(flags).and_then(|vm| vm.control_screen_pos(text)) else {
+        eprintln!("[script] no control shows {text:?}");
+        return;
+    };
+    eprintln!("[script] clicking {text:?} at {x:.0},{y:.0}");
+    for (delay, e) in click_events(x, y) {
+        std::thread::sleep(Duration::from_millis(if delay == 0 { 0 } else { 60 }));
+        let _ = tx.send(e);
     }
 }
 
@@ -517,6 +565,7 @@ fn boot(
     }
     let mut report = PlayReport::default();
     let vm = sess.jni.vm.clone();
+    *flags.vm.lock().unwrap_or_else(PoisonError::into_inner) = Some(vm.clone());
     let pid = sess.cpu.processor_id();
 
     // 1. Constructors, JNI_OnLoad and libv_init of every library.
@@ -559,6 +608,12 @@ fn boot(
         main_pid: pid,
         st: st.clone(),
         rx: Mutex::new(Some(rx)),
+        runloop: {
+            let export = |n: &str| sess.linker.modules().iter().find_map(|m| m.export(n));
+            export("CFRunLoopRunInMode")
+                .zip(export("kCFRunLoopDefaultMode"))
+                .and_then(|(f, m)| Some((f, sess.cpu.mem().read_u32(m).ok()?)))
+        },
     };
     if let Err(e) = spawn_ui_thread(&mut sess, ui) {
         report.stop = e;
@@ -608,6 +663,10 @@ struct UiThread {
     main_pid: usize,
     st: bhpc_bionic::Shared,
     rx: Mutex<Option<Receiver<Event>>>,
+    /// `CFRunLoopRunInMode` and the default run loop mode: the UI thread has a run loop of its own that nothing else
+    /// spins, so the timers that touch handlers schedule (`performSelector:afterDelay:`, UIView animations) would
+    /// never fire; the UI loop turns it once per iteration.
+    runloop: Option<(u32, u32)>,
 }
 
 type StageError = (String, [u32; 16]);
@@ -723,6 +782,9 @@ impl UiThread {
                     return "alert: guest stopped".into();
                 }
             }
+            if flags.dump_views.swap(false, Ordering::SeqCst) {
+                eprintln!("[views]\n{}", vm.dump_views());
+            }
             let focus = vm.text_focus();
             if focus != focused {
                 focused = focus;
@@ -758,6 +820,12 @@ impl UiThread {
                 let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
                 mapper.set_text_focus(None, &mut sink);
                 focused = None;
+            }
+            if let Some((run, mode)) = self.runloop {
+                c.set_ticks(FOREVER);
+                if let Err(s) = c.call(run, &[mode, 0, 0, 0, 0]) {
+                    return format!("UI run loop: guest stopped: {s}");
+                }
             }
         }
     }

@@ -16,6 +16,7 @@ pub mod looper;
 pub mod mutf8;
 pub mod platform;
 pub mod startup;
+mod ui;
 pub mod value;
 pub mod vm;
 
@@ -25,6 +26,7 @@ pub use invoke::Recv;
 pub use jni::{Layout, JNI_VERSION, TABLE_SLOTS};
 pub use platform::{Assets, AudioHooks, GfxHooks, MemAssets, NoAssets, NoAudio, NoGfx, Platform, TrackOp};
 pub use startup::{native_env, Stage};
+pub use ui::{Hit, TouchPhase};
 pub use value::{ClassId, Obj, Sig, Ty, Value};
 pub use vm::{Alert, Call, Data, GuestAlloc, JResult, Kind, MemberReport, Report, Throw, Vm, VmConfig};
 
@@ -50,5 +52,7 @@ mod tests_lib;
 mod tests_looper;
 #[cfg(test)]
 mod tests_startup;
+#[cfg(test)]
+mod tests_ui;
 #[cfg(test)]
 mod tests_vm;
