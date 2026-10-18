@@ -81,7 +81,8 @@
 </div>
 
 <style>
-  .win { min-height: 100%; display: flex; flex-wrap: wrap; background: var(--bg); }
+  /* Fixed-height app layout: the rail stays put, only the step content scrolls (not the whole page). */
+  .win { height: 100%; display: flex; overflow: hidden; background: var(--bg); }
   .rail {
     --ray: rgba(255, 122, 69, 0.12);
     flex: 1 1 230px;
@@ -92,6 +93,7 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+    overflow-y: auto;
   }
   .rb { display: flex; gap: 10px; align-items: center; padding: 0 6px; font: 800 18px/1.1 var(--f-display); letter-spacing: -0.01em; }
   .tg {
@@ -140,7 +142,7 @@
   .cur .n { background: #ff7a45; border-color: #ff7a45; color: #1c0d06; box-shadow: 0 2px 0 #9c3a12; }
   .done .n { background: #163a29; border-color: #56c990; color: #56c990; }
   .rfoot { margin-top: auto; font-size: 12.5px; color: var(--stage-text-3); padding: 0 6px; }
-  .rmain { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; min-height: 100%; }
+  .rmain { flex: 999 1 520px; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
   .wbody { flex: 1; padding: 32px 40px; display: flex; flex-direction: column; gap: 18px; max-width: 820px; width: 100%; outline: none; }
   .wfoot {
     display: flex;

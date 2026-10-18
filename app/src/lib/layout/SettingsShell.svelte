@@ -52,11 +52,12 @@
 </div>
 
 <style>
-  .app { min-height: 100%; display: flex; flex-direction: column; background: var(--bg); }
+  /* Fixed-height app layout: the header and the section nav stay put, only the section content scrolls. */
+  .app { height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
   .top { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 2px solid var(--line); background: var(--surface); }
   h1 { font: 800 18px var(--f-display); flex: 1; }
-  .shell { flex: 1; display: flex; flex-wrap: wrap; }
-  .snav { flex: 1 1 210px; max-width: 250px; padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; border-right: 2px solid var(--line); }
+  .shell { flex: 1; min-height: 0; display: flex; }
+  .snav { flex: 1 1 210px; max-width: 250px; padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; border-right: 2px solid var(--line); overflow-y: auto; }
   .item {
     display: flex;
     align-items: center;
@@ -73,7 +74,8 @@
   }
   .item:hover { background: var(--surface-2); }
   .item[aria-current='page'] { background: var(--primary-soft); color: var(--primary-ink); }
-  .smain { flex: 999 1 480px; min-width: 0; padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 16px; max-width: 820px; outline: none; }
+  .smain { flex: 999 1 480px; min-width: 0; padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 16px; outline: none; overflow-y: auto; }
+  .smain > :global(*) { max-width: 764px; }
   @media (max-width: 860px) {
     .snav { flex: 1 1 100%; max-width: none; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 2px solid var(--line); padding: 8px 12px; }
     .item { white-space: nowrap; }
