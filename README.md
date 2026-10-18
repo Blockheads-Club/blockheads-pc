@@ -113,7 +113,7 @@ Full syntax in `crates/bhpc-run/src/script.rs`; a worked example (joining a serv
 | Ctrl + left drag | pinch around the press point (right/up = spread) |
 | Esc | Android Back |
 | letters, digits, arrows, Enter, Backspace, Delete, Tab, Space, Home, End | Android key events; while a text field has focus they type into it instead |
-| F11 | toggle fullscreen |
+| F11 | toggle fullscreen (the picture is scaled to the screen, bars keep its aspect ratio) |
 | close window | quit |
 
 **Join a local server.** Start a server first (for example `blockheads_server --new myworld --port 15160`), then in the
@@ -155,12 +155,15 @@ BHPC_APK="$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk" cargo test -p bhpc-r
   the game); this has not been investigated.
 - Some Java services are still stubs and answer 0/null (notifications, news client, in-app purchases, ad and
   analytics SDKs); the end-of-run report lists the ones the game called.
-- No gamepad support, no DPI scaling of the content size, and the on-screen keyboard is replaced by host text input.
+- No gamepad support, and the on-screen keyboard is replaced by host text input.
+- The game picks its render size itself (for example 1024x768 in a 1280x960 window, 1334x750 in 1600x900) and the
+  window scales that picture, keeping its aspect ratio (bars at the sides or top and bottom), also on high-DPI
+  displays and in fullscreen. It chooses the size once at start-up: resizing the window afterwards scales and
+  letterboxes the same picture instead of re-laying the game out.
 - `bhpc-run` ignores the launcher's config file (see above).
 - Gameplay has been exercised only briefly; expect rough edges and report what you find.
-- The game can freeze when entering a world. The last log line before the freeze is "Connection to server to
-  retrieve mission list failed ... Bad file descriptor" (an HTTP request through the guest socket layer). Not yet
-  investigated.
+- Losing the window focus does not pause the game (it keeps running unfocused); minimising does, like
+  backgrounding the app on a phone.
 
 Rebuilding the fixture needs the Android NDK (r27, `ANDROID_NDK_HOME` or `~/Android/Sdk/ndk/27.2.12479018`):
 `fixtures/build.sh`.

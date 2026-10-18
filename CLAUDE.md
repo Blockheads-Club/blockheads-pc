@@ -62,6 +62,15 @@ Umbrella rules: `../AGENTS.md`.
   other guest threads depend on.
 - The fake VM allocator must return zeroed memory; `BHPC_JNI_CALLS`-style tracing is `--trace-jni --trace-jni-calls`.
 
+## Gotchas learned fixing the click freeze and window scaling
+- Native touches (`Window.nativeTouchesBegin/...`) take landscape screen pixels like the window; only the Java view
+  layer (`Vm::ui_touch`, `control_screen_pos`) uses the turned portrait space (`screen_to_ui`).
+- libSystem's kqueue/dispatch go through `syscall(351/350/353/354)`; `vfd` answers them. A thunk registered later under
+  the same name (`mmapio`'s `write` watcher) replaces the earlier one: wrappers must forward to the table's own fds.
+- The game chooses its content size once; the window letterboxes it (`vsurface.rs`); `Geometry` maps the mouse.
+- Focus loss must not send `WillResignActive` (the game pauses). Debug with `--trace-fn` on libSystem exports such as
+  `dispatch_after`, `_dispatch_mgr_wakeup`, `linux_evfilt_user_knote_modify`.
+
 ## Gotchas learned in M2 (G1 fixes)
 - Guest threads run one at a time under the scheduler baton and only hand it over when they block. A spinning
   thread therefore needs the cycle time slice: `Cpu::set_slice` / `sched::enable_time_slice` (the CPU must count

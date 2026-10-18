@@ -53,5 +53,29 @@ World..." opens the world dialog).
 * Java stubs still called: `Notifications.*`, `NoodleNewsClient.*`, `ApportableIAP.*`, `AndroidAudioManager.getInstance`,
   Flurry/Heyzap shims (all harmless so far);
 * music (`MediaPlayer`), the on-screen keyboard (`TextField`/`TextView` focus callbacks into `InputMapper`), gamepads,
-  fullscreen toggling and DPI scaling of the content size are not done; the SLES pump thread calls guest code without
+  the SLES pump thread calls guest code without
   holding the scheduler baton.
+
+## Window size, input and scheduling fixes (click freeze, window scaling)
+
+* **Render size.** The game announces its own size with `VerdeActivity.setContentSize` (second call wins; 1024x768
+  for a 1280x960 screen, 1334x750 for 1600x900, 2048x1536 stays) like an Android fixed-size surface. The window
+  keeps an offscreen framebuffer of that size (`bhpc-app/src/vsurface.rs`, behind `GlWindow::default_framebuffer`:
+  `glBindFramebuffer(0)` binds it, `glGetIntegerv(FRAMEBUFFER_BINDING)` still answers 0) and draws it letterboxed
+  into the drawable right before the swap (`compose`). `eglQuerySurface` reports the content size. Screenshots read
+  the composed window.
+* **Screen size.** `getScreenWidth/Height` and the display metrics are the drawable size and follow `Resized`
+  (`Vm::set_screen_size`, then `SurfaceChanged`); the Java views are laid out in screen pixels, the game's touches
+  are in content pixels: `Vm::content_scale` converts, `bhpc_input::Geometry` maps window pixels to content pixels
+  through the letterbox (mouse events are logical pixels, so high-DPI works).
+* **Lifecycle.** Focus loss/gain send no lifecycle (the game pauses and shows its pause menu on
+  `applicationWillResignActive`; compositors flip focus around clicks). Minimise/restore go to background/foreground.
+* **Dispatch.** libSystem's libkqueue makes its user-event wake-up with `syscall(351)` (eventfd) and timers with
+  `syscall(350/353/354)` (timerfd). They were `ENOSYS`, so the dispatch manager thread never woke, `dispatch_after`
+  blocks never ran (the tutorial popup's dimmer stayed up and the game ignored every touch,
+  `[[BlockBackground instance] isUserInteractionEnabled]`), and libv's `write` wrapper failed with EBADF. `vfd`
+  now implements them (`vfd/timerfd.rs`); `mmapio`'s `write` watcher hands descriptors of the table back to it.
+* **`dlsym(RTLD_NEXT)`** also finds symbols of libraries loaded later (CoreFoundation links `_CFSocketStreamCreatePair`
+  from CFNetwork this way). With that and the dispatch fix the start-up mission-list request no longer logs
+  "Bad file descriptor".
+* Scripts gained `focus on|off`, `minimize`, `restore`, `resize W H` and `key f11`.
