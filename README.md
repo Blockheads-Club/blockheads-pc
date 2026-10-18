@@ -125,11 +125,12 @@ pre-filled with 15151), optionally set a nickname, then Join Online World. Detai
 (`~/.local/share/blockheads-pc`). Worlds and settings are under `DIR/home`, caches under `DIR/cache`, temporary
 files under `DIR/tmp`; they persist between runs. Delete the directory to start from scratch.
 
-**Launcher.** `cargo run -p bhpc-launcher --features gui` opens a small GUI that picks the APK and data directory,
-verifies the APK and stores the choice in `~/.config/blockheads-pc/launcher.toml`. Its Launch button starts the
-`bhpc-run` that sits next to the launcher binary (build it with the `play` feature first) and passes `--apk`,
-`--data-dir` and `--force`. `bhpc-run` itself does **not** read `launcher.toml` yet, and the window size and key
-bindings set in the launcher are not applied; use the flags above.
+**Launcher.** `app/` is the "Blockheads PC" launcher (Tauri 2 + SvelteKit): a setup wizard (game file, window and
+graphics, controls, import Android saves), a Home screen that starts and supervises the game, and Settings. It keeps
+its choices in `~/.config/blockheads-pc/launcher.toml` and starts the `bhpc-run` sidecar with `--config` pointing at
+that file. See [`docs/launcher.md`](docs/launcher.md) for building it, the installers and what is not wired yet
+(fullscreen, vsync, key bindings and the game window title/icon are saved but not applied by `bhpc-run` yet).
+`bhpc-run --config launcher.toml` also works on its own; flags next to it win over the file.
 
 **Load only** (no window, runs every constructor and prints the thunk histogram; exit code 0 = fine, about 2 s):
 
@@ -160,7 +161,8 @@ BHPC_APK="$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk" cargo test -p bhpc-r
   window scales that picture, keeping its aspect ratio (bars at the sides or top and bottom), also on high-DPI
   displays and in fullscreen. It chooses the size once at start-up: resizing the window afterwards scales and
   letterboxes the same picture instead of re-laying the game out.
-- `bhpc-run` ignores the launcher's config file (see above).
+- `bhpc-run --config` applies the launcher's APK, data directory, forced build and window size only; fullscreen, vsync
+  and key bindings are saved by the launcher but not used yet (see `docs/launcher.md`).
 - Gameplay has been exercised only briefly; expect rough edges and report what you find.
 - Losing the window focus does not pause the game (it keeps running unfocused); minimising does, like
   backgrounding the app on a phone.
