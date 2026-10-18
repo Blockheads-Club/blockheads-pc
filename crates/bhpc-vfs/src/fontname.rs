@@ -78,7 +78,7 @@ fn utf16be(s: &str) -> Vec<u8> {
     s.encode_utf16().flat_map(u16::to_be_bytes).collect()
 }
 
-fn build_name_table(recs: &mut Vec<Rec>) -> Vec<u8> {
+fn build_name_table(recs: &mut [Rec]) -> Vec<u8> {
     recs.sort_by_key(|r| (r.platform, r.encoding, r.language, r.id));
     let mut t = Vec::new();
     t.extend_from_slice(&0u16.to_be_bytes());

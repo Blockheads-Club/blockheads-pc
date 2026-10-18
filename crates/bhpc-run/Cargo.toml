@@ -32,3 +32,6 @@ bhpc-vfs.workspace = true
 
 [dev-dependencies]
 bhpc-loader = { workspace = true, features = ["test-elf"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

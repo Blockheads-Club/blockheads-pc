@@ -530,10 +530,12 @@ fn boot(
         }
         bhpc_gles::register_all(cpu, &gles);
         let sles = Sles::install(cpu, mixer.clone()).map_err(other)?;
+        // Before the descriptor table: it rebinds `read`/`poll`/`select` itself, and the logging wrappers must not
+        // replace those with plain bionic builtins.
+        watch_blocking(cpu, st, &blocks);
         let _vfd = crate::vfd::install(cpu, st);
         crate::mmapio::SharedMaps::default().install(cpu, st);
         dl::install(cpu, st, dl_slot.clone());
-        watch_blocking(cpu, st, &blocks);
         parts = Some(Parts { gles, sles });
         let gfx: Arc<dyn GfxHooks> = hooks;
         let audio: Arc<dyn bhpc_jni::AudioHooks> = Arc::new(Tracks::new(mixer.clone(), st.clone()));
@@ -762,6 +764,13 @@ impl UiThread {
                     eprintln!("[play] main looper: Java exception {}", vm.exception_message(e).unwrap_or_default());
                 }
             }
+            if let Some((run, mode)) = self.runloop {
+                // `CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true)`: the double sits in r2:r3, the flag on the stack.
+                c.set_ticks(FOREVER);
+                if let Err(e) = c.call(run, &[mode, 0, 0, 0, 1]) {
+                    return format!("UI run loop: guest stopped: {e:?}");
+                }
+            }
             match vm.run_layout(c) {
                 Ok(_) => {}
                 Err(Throw::Stop(s)) => return format!("layout: guest stopped: {s}"),
@@ -820,12 +829,6 @@ impl UiThread {
                 let mut sink = JniSink { vm, cpu: c, actions: Vec::new(), errors: Vec::new(), returned: false };
                 mapper.set_text_focus(None, &mut sink);
                 focused = None;
-            }
-            if let Some((run, mode)) = self.runloop {
-                c.set_ticks(FOREVER);
-                if let Err(s) = c.call(run, &[mode, 0, 0, 0, 0]) {
-                    return format!("UI run loop: guest stopped: {s}");
-                }
             }
         }
     }
@@ -965,7 +968,7 @@ fn hook_objc(sess: &mut Session) -> Result<(), String> {
         let (cls, sel) = (c.reg(0), c.reg(1));
         let name = c.mem().read_cstr(sel).unwrap_or_default();
         if seen.lock().unwrap_or_else(PoisonError::into_inner).insert((cls, sel)) {
-            eprintln!("[objc] {cls:#x} {name}");
+            eprintln!("[objc] t{} {cls:#x} {name}", sched::ctx().tid);
         }
     })
 }

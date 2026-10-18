@@ -15,6 +15,9 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+#[cfg_attr(not(unix), path = "vfd/net_stub.rs")]
+mod net;
+
 /// First descriptor number handed out.
 pub const FD_BASE: u32 = 600;
 
@@ -62,6 +65,8 @@ enum Kind {
     /// Counter of an `eventfd`.
     Event(usize),
     Epoll,
+    /// A host socket (see [`net`]).
+    Net(Arc<net::HostSock>),
 }
 
 struct Entry {
@@ -82,6 +87,10 @@ struct Table {
     chans: Vec<Chan>,
     counters: Vec<u64>,
     epolls: HashMap<u32, HashMap<u32, Watch>>,
+    /// Guest address of the static `hostent` of `gethostbyname`.
+    hostent: u32,
+    /// Log every socket call (`BHPC_TRACE_NET` in the environment, or [`Vfd::set_trace_net`]).
+    trace_net: bool,
 }
 
 /// Shared handle to the table.
@@ -112,7 +121,7 @@ impl Table {
                 self.chans[*r].readers += 1;
                 self.chans[*w].writers += 1;
             }
-            Kind::Event(_) | Kind::Epoll => {}
+            Kind::Event(_) | Kind::Epoll | Kind::Net(_) => {}
         }
         if matches!(kind, Kind::Epoll) {
             self.epolls.insert(fd, HashMap::new());
@@ -124,13 +133,18 @@ impl Table {
     /// Readiness bits (`EPOLLIN | EPOLLOUT | EPOLLHUP`) of `fd`; descriptors of other tables are always ready.
     fn ready(&self, fd: u32) -> u32 {
         let Some(e) = self.fds.get(&fd) else { return EPOLLIN | EPOLLOUT };
-        match e.kind {
-            Kind::PipeR(c) => self.in_bits(c),
-            Kind::PipeW(c) => EPOLLOUT | if self.chans[c].readers == 0 { EPOLLERR } else { 0 },
-            Kind::Sock(r, w) => self.in_bits(r) | EPOLLOUT | if self.chans[w].readers == 0 { EPOLLERR } else { 0 },
-            Kind::Event(n) => EPOLLOUT | if self.counters[n] > 0 { EPOLLIN } else { 0 },
+        match &e.kind {
+            Kind::PipeR(c) => self.in_bits(*c),
+            Kind::PipeW(c) => EPOLLOUT | if self.chans[*c].readers == 0 { EPOLLERR } else { 0 },
+            Kind::Sock(r, w) => self.in_bits(*r) | EPOLLOUT | if self.chans[*w].readers == 0 { EPOLLERR } else { 0 },
+            Kind::Event(n) => EPOLLOUT | if self.counters[*n] > 0 { EPOLLIN } else { 0 },
             Kind::Epoll => 0,
+            Kind::Net(s) => s.ready(),
         }
+    }
+
+    fn is_net(&self, fd: u32) -> bool {
+        matches!(self.fds.get(&fd), Some(Entry { kind: Kind::Net(_), .. }))
     }
 
     fn in_bits(&self, c: usize) -> u32 {
@@ -147,7 +161,7 @@ impl Table {
                 self.chans[r].readers -= 1;
                 self.chans[w].writers -= 1;
             }
-            Kind::Event(_) | Kind::Epoll => {}
+            Kind::Event(_) | Kind::Epoll | Kind::Net(_) => {}
         }
         self.epolls.remove(&fd);
         for w in self.epolls.values_mut() {
@@ -155,6 +169,15 @@ impl Table {
         }
         true
     }
+}
+
+/// Wake-up deadline for a wait that may involve host sockets (nothing notifies the scheduler about those).
+fn tick(deadline: Option<Instant>, net: bool) -> Option<Instant> {
+    if !net {
+        return deadline;
+    }
+    let next = Instant::now() + net::SLICE;
+    Some(deadline.map_or(next, |d| d.min(next)))
 }
 
 fn deadline_of(timeout_ms: i32) -> Option<Instant> {
@@ -166,6 +189,11 @@ type Thunk = Arc<dyn Fn(&mut Cpu) + Send + Sync>;
 impl Vfd {
     fn t(&self) -> std::sync::MutexGuard<'_, Table> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Switch the socket call log on or off.
+    pub fn set_trace_net(&self, on: bool) {
+        self.t().trace_net = on;
     }
 
     /// Number of descriptors this table owns (tests, diagnostics).
@@ -194,6 +222,7 @@ impl Vfd {
         let new = |name: &'static str, f: Thunk| {
             let _ = cpu.register_shared_thunk(name, f);
         };
+        self.install_net(cpu, st);
         let (v, s) = (self.clone(), st.clone());
         new("pipe", Arc::new(move |c| v.pipe(c, &s)));
         let (v, s) = (self.clone(), st.clone());
@@ -378,6 +407,7 @@ impl Vfd {
         let deadline = deadline_of(timeout);
         loop {
             let mut ready = Vec::new();
+            let net;
             {
                 let mut t = self.t();
                 let Some(set) = t.epolls.get(&ep).cloned() else {
@@ -386,6 +416,7 @@ impl Vfd {
                 };
                 let mut fds: Vec<u32> = set.keys().copied().collect();
                 fds.sort_unstable();
+                net = fds.iter().any(|fd| t.is_net(*fd));
                 for fd in fds {
                     let w = set[&fd];
                     let bits = t.ready(fd) & (w.events | EPOLLERR | EPOLLHUP);
@@ -414,7 +445,7 @@ impl Vfd {
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 return c.ret_u32(0);
             }
-            if sched::block(c, st, deadline, "epoll_wait").is_none() {
+            if sched::block(c, st, tick(deadline, net), "epoll_wait").is_none() {
                 return;
             }
         }
@@ -425,6 +456,9 @@ impl Vfd {
             let mut a = c.args();
             (a.u32(c), a.u32(c), a.u32(c))
         };
+        if self.net_read(c, st, fd, buf, n) {
+            return;
+        }
         loop {
             let got: Result<Vec<u8>, u32> = {
                 let mut t = self.t();
@@ -459,7 +493,7 @@ impl Vfd {
                             Err(0)
                         }
                     }
-                    Kind::PipeW(_) | Kind::Epoll => Err(errno::EBADF),
+                    Kind::PipeW(_) | Kind::Epoll | Kind::Net(_) => Err(errno::EBADF),
                 }
             };
             match got {
@@ -487,6 +521,9 @@ impl Vfd {
             let mut a = c.args();
             (a.u32(c), a.u32(c), a.u32(c))
         };
+        if self.net_write(c, st, fd, buf, n) {
+            return;
+        }
         let Some(data) = rd(c, buf, n) else { return };
         let r: Result<(), u32> = {
             let mut t = self.t();
@@ -594,6 +631,7 @@ impl Vfd {
             let t = self.t();
             match t.fds.get(&fd).map(|e| e.kind.clone()) {
                 Some(Kind::PipeR(ch) | Kind::Sock(ch, _)) => Some(t.chans[ch].buf.len() as u32),
+                Some(Kind::Net(s)) => Some(s.pending()),
                 Some(_) => Some(0),
                 None => None,
             }
@@ -634,6 +672,7 @@ impl Vfd {
             return false;
         }
         let deadline = deadline_of(timeout);
+        let net = list.iter().any(|(fd, _)| self.t().is_net(*fd));
         loop {
             let mut out = raw.clone();
             let mut count = 0;
@@ -665,7 +704,7 @@ impl Vfd {
                 c.ret_u32(0);
                 return true;
             }
-            if sched::block(c, st, deadline, "poll").is_none() {
+            if sched::block(c, st, tick(deadline, net), "poll").is_none() {
                 return true;
             }
         }
@@ -675,6 +714,7 @@ impl Vfd {
 /// Host-side helper for the runner: the table plus the thunks, registered on `cpu`.
 pub fn install(cpu: &Cpu, st: &Shared) -> Vfd {
     let v = Vfd::default();
+    v.set_trace_net(std::env::var_os("BHPC_TRACE_NET").is_some());
     v.install(cpu, st);
     v
 }

@@ -9,14 +9,14 @@ const EPOLLIN: u32 = 1;
 const EPOLLOUT: u32 = 4;
 const EPOLLONESHOT: u32 = 1 << 30;
 
-struct Rig {
-    cpu: Box<bhpc_cpu::Cpu>,
-    st: bhpc_bionic::Shared,
-    vfd: Vfd,
-    scratch: u32,
+pub(crate) struct Rig {
+    pub(crate) cpu: Box<bhpc_cpu::Cpu>,
+    pub(crate) st: bhpc_bionic::Shared,
+    pub(crate) vfd: Vfd,
+    pub(crate) scratch: u32,
 }
 
-fn rig() -> Rig {
+pub(crate) fn rig() -> Rig {
     let (cpu, st) = new_env(Box::new(std::io::sink()), None).unwrap();
     let vfd = install(&cpu, &st);
     let scratch = bhpc_bionic::lock(&st).heap.calloc(1, 8192);
@@ -24,19 +24,19 @@ fn rig() -> Rig {
 }
 
 impl Rig {
-    fn call(&mut self, name: &str, args: &[u32]) -> u32 {
+    pub(crate) fn call(&mut self, name: &str, args: &[u32]) -> u32 {
         let a = bhpc_bionic::resolve(&mut self.cpu, &self.st, name).unwrap_or_else(|| panic!("{name} not bound"));
         self.cpu.call(a, args).unwrap().r0
     }
 
     /// True if the call stops the guest (a bad guest pointer).
-    fn faults(&mut self, name: &str, args: &[u32]) -> bool {
+    pub(crate) fn faults(&mut self, name: &str, args: &[u32]) -> bool {
         let a = self.cpu.thunk_addr(name).unwrap();
         self.cpu.call(a, args).is_err()
     }
 
     /// Start a guest thread that waits `ms`, then writes one byte `z` to `wr`.
-    fn delayed_writer(&mut self, wr: u32, ms: u64) {
+    pub(crate) fn delayed_writer(&mut self, wr: u32, ms: u64) {
         let write = self.cpu.thunk_addr("write").unwrap();
         let buf = self.put(3000, b"z");
         let n = self.cpu.thunk_count();
@@ -54,47 +54,47 @@ impl Rig {
         assert_eq!(self.call("pthread_create", &[out, 0, start, 0]), 0);
     }
 
-    fn errno(&mut self) -> u32 {
+    pub(crate) fn errno(&mut self) -> u32 {
         let a = bhpc_bionic::sched::errno_addr(&self.st);
         self.cpu.mem().read_u32(a).unwrap()
     }
 
-    fn put(&self, at: u32, bytes: &[u8]) -> u32 {
+    pub(crate) fn put(&self, at: u32, bytes: &[u8]) -> u32 {
         self.cpu.mem().write_bytes(self.scratch + at, bytes).unwrap();
         self.scratch + at
     }
 
-    fn get(&self, at: u32, n: u32) -> Vec<u8> {
+    pub(crate) fn get(&self, at: u32, n: u32) -> Vec<u8> {
         self.cpu.mem().read_bytes(self.scratch + at, n).unwrap()
     }
 
     /// A pipe `(read fd, write fd)`.
-    fn pipe(&mut self, flags: u32) -> (u32, u32) {
+    pub(crate) fn pipe(&mut self, flags: u32) -> (u32, u32) {
         let out = self.scratch + 4000;
         let name = if flags == 0 { "pipe" } else { "pipe2" };
         assert_eq!(self.call(name, &[out, flags]), 0);
         (self.cpu.mem().read_u32(out).unwrap(), self.cpu.mem().read_u32(out + 4).unwrap())
     }
 
-    fn write(&mut self, fd: u32, bytes: &[u8]) -> u32 {
+    pub(crate) fn write(&mut self, fd: u32, bytes: &[u8]) -> u32 {
         let p = self.put(100, bytes);
         self.call("write", &[fd, p, bytes.len() as u32])
     }
 
-    fn read(&mut self, fd: u32, n: u32) -> (u32, Vec<u8>) {
+    pub(crate) fn read(&mut self, fd: u32, n: u32) -> (u32, Vec<u8>) {
         let r = self.call("read", &[fd, self.scratch + 200, n]);
         let got = if r == NEG1 { Vec::new() } else { self.get(200, r) };
         (r, got)
     }
 
-    fn event(&mut self, bits: u32, data: u64) -> u32 {
+    pub(crate) fn event(&mut self, bits: u32, data: u64) -> u32 {
         let mut rec = [0u8; 16];
         rec[..4].copy_from_slice(&bits.to_le_bytes());
         rec[8..].copy_from_slice(&data.to_le_bytes());
         self.put(300, &rec)
     }
 
-    fn wait(&mut self, ep: u32, max: u32, timeout: i32) -> (u32, Vec<(u32, u64)>) {
+    pub(crate) fn wait(&mut self, ep: u32, max: u32, timeout: i32) -> (u32, Vec<(u32, u64)>) {
         let r = self.call("epoll_wait", &[ep, self.scratch + 1000, max, timeout as u32]);
         let evs = (0..if r == NEG1 { 0 } else { r })
             .map(|i| {

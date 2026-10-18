@@ -227,7 +227,7 @@ fn touches_on_controls_are_played_as_android_would() {
     let (gx, gy) = e.vm.ui_to_screen(150.0, 370.0);
     let (nx, ny) = e.vm.ui_to_screen(250.0, 370.0);
     let vm = e.vm.clone();
-    let mut touch = |e: &mut Env, p: TouchPhase, x: f32, y: f32| vm.ui_touch(&mut e.cpu, p, x, y).unwrap();
+    let touch = |e: &mut Env, p: TouchPhase, x: f32, y: f32| vm.ui_touch(&mut e.cpu, p, x, y).unwrap();
     // press, drag and release on the button: all consumed, down and up-inside reach the native side
     assert!(touch(&mut e, TouchPhase::Begin, gx, gy));
     assert!(touch(&mut e, TouchPhase::Move, gx, gy));
