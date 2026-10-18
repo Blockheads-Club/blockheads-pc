@@ -30,7 +30,9 @@ fn rig() -> Rig {
     let storage = Storage::open(&vcfg).unwrap();
     let cfg = bhpc_bionic::Config { fs: storage.vfs.clone(), ..bhpc_bionic::Config::default() };
     let (cpu, st) = new_env_with(cfg, None).unwrap();
-    SharedMaps::default().install(&cpu, &st);
+    // The same order as `play`: the descriptor table first, the map watcher over it.
+    let vfd = crate::vfd::install(&cpu, &st);
+    SharedMaps::default().install(&cpu, &st, &vfd);
     let scratch = bhpc_bionic::lock(&st).heap.calloc(1, 16384);
     Rig { cpu, st, scratch, dir }
 }
@@ -179,4 +181,21 @@ fn maps_follow_the_file_not_the_descriptor() {
     assert_eq!(r.call("write", &[other, d, 4]), 4);
     assert_eq!(r.cpu.mem().read_bytes(map, 4).unwrap(), b"CCCC");
     assert_eq!(r.call("munmap", &[map, 4096]), 0);
+}
+
+#[test]
+fn write_still_reaches_the_descriptor_table() {
+    // libkqueue wakes its manager thread with a `write` to an eventfd: the map watcher must not shadow the table.
+    let mut r = rig();
+    let out = r.scratch + 9000;
+    assert_eq!(r.call("pipe", &[out, 0]), 0);
+    let (rd, wr) = (r.cpu.mem().read_u32(out).unwrap(), r.cpu.mem().read_u32(out + 4).unwrap());
+    let data = r.put(9100, b"wake");
+    assert_eq!(r.call("write", &[wr, data, 4]), 4);
+    let back = r.scratch + 9200;
+    assert_eq!(r.call("read", &[rd, back, 8]), 4);
+    assert_eq!(r.cpu.mem().read_bytes(back, 4).unwrap(), b"wake");
+    // `writev` and ordinary files keep going through bionic.
+    let fd = r.open_file();
+    assert_eq!(r.call("write", &[fd, data, 4]), 4);
 }

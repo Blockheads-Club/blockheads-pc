@@ -533,8 +533,8 @@ fn boot(
         // Before the descriptor table: it rebinds `read`/`poll`/`select` itself, and the logging wrappers must not
         // replace those with plain bionic builtins.
         watch_blocking(cpu, st, &blocks);
-        let _vfd = crate::vfd::install(cpu, st);
-        crate::mmapio::SharedMaps::default().install(cpu, st);
+        let vfd = crate::vfd::install(cpu, st);
+        crate::mmapio::SharedMaps::default().install(cpu, st, &vfd);
         dl::install(cpu, st, dl_slot.clone());
         parts = Some(Parts { gles, sles });
         let gfx: Arc<dyn GfxHooks> = hooks;

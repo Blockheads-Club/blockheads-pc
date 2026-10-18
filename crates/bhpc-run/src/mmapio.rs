@@ -6,6 +6,7 @@
 //! map); stores into a writable map are not written back (the only such map is LMDB's lock table, which is
 //! process-local). Regions come from the module arena, so a map can be far larger than the guest heap.
 
+use crate::vfd::{Vfd, FD_BASE};
 use bhpc_bionic::guest::{rd, wr};
 use bhpc_bionic::layout::errno;
 use bhpc_bionic::misc::fail;
@@ -159,13 +160,20 @@ impl SharedMaps {
 
     /// Wrap a bionic write function (`write`, `writev`: descriptor first, advances the file position) so the
     /// maps of the descriptor see what it wrote. LMDB flushes its dirty pages with `lseek` + `writev`.
-    fn watch_write(&self, cpu: &Cpu, st: &Shared, name: &str) {
+    ///
+    /// Registered after the descriptor table, so it has to hand the table's own descriptors (eventfds, pipes,
+    /// sockets: libkqueue's wake-up of the dispatch manager thread is a `write` to an eventfd) back to it instead
+    /// of replacing its `write` with bionic's, which does not know them.
+    fn watch_write(&self, cpu: &Cpu, st: &Shared, name: &str, vfd: &Vfd) {
         let Some(inner) = bhpc_bionic::builtin(name, st) else { return };
-        let (m, s) = (self.clone(), st.clone());
+        let (m, s, v, is_write) = (self.clone(), st.clone(), vfd.clone(), name == "write");
         let _ = cpu.register_shared_thunk(
             name,
             Arc::new(move |c: &mut Cpu| {
                 let fd = c.args().u32(c);
+                if is_write && (FD_BASE..1024).contains(&fd) {
+                    return v.write(c, &s);
+                }
                 let Some(path) = m.path_if_mapped(&s, fd) else {
                     inner(c);
                     return;
@@ -186,7 +194,7 @@ impl SharedMaps {
     }
 
     /// Register the thunks on `cpu`.
-    pub fn install(&self, cpu: &Cpu, st: &Shared) {
+    pub fn install(&self, cpu: &Cpu, st: &Shared, vfd: &Vfd) {
         let reg = |name: &str, f: bhpc_cpu::SharedThunkFn| {
             let _ = cpu.register_shared_thunk(name, f);
         };
@@ -199,7 +207,7 @@ impl SharedMaps {
             reg(name, Arc::new(move |c: &mut Cpu| m.pwrite(c, &s, wide)));
         }
         for name in ["write", "writev"] {
-            self.watch_write(cpu, st, name);
+            self.watch_write(cpu, st, name, vfd);
         }
         let (m, s) = (self.clone(), st.clone());
         let inner = bhpc_bionic::builtin("mmap", st);

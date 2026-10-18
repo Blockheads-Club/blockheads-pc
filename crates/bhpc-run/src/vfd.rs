@@ -17,11 +17,15 @@ use std::time::{Duration, Instant};
 
 #[cfg_attr(not(unix), path = "vfd/net_stub.rs")]
 mod net;
+pub(crate) mod timerfd;
 
 /// First descriptor number handed out.
 pub const FD_BASE: u32 = 600;
 
 const RLIMIT_NOFILE: u32 = 7;
+/// ARM EABI numbers of `syscall(2)` this table implements besides the timerfd ones.
+const SYS_EVENTFD: u32 = 351;
+const SYS_EVENTFD2: u32 = 356;
 const EPIPE: u32 = 32;
 const EEXIST: u32 = 17;
 const EMFILE: u32 = 24;
@@ -67,6 +71,8 @@ enum Kind {
     Epoll,
     /// A host socket (see [`net`]).
     Net(Arc<net::HostSock>),
+    /// A `timerfd` (see [`timerfd`]).
+    Timer(usize),
 }
 
 struct Entry {
@@ -86,6 +92,7 @@ struct Table {
     fds: HashMap<u32, Entry>,
     chans: Vec<Chan>,
     counters: Vec<u64>,
+    timers: Vec<timerfd::Timer>,
     epolls: HashMap<u32, HashMap<u32, Watch>>,
     /// Guest address of the static `hostent` of `gethostbyname`.
     hostent: u32,
@@ -121,7 +128,7 @@ impl Table {
                 self.chans[*r].readers += 1;
                 self.chans[*w].writers += 1;
             }
-            Kind::Event(_) | Kind::Epoll | Kind::Net(_) => {}
+            Kind::Event(_) | Kind::Epoll | Kind::Net(_) | Kind::Timer(_) => {}
         }
         if matches!(kind, Kind::Epoll) {
             self.epolls.insert(fd, HashMap::new());
@@ -140,6 +147,13 @@ impl Table {
             Kind::Event(n) => EPOLLOUT | if self.counters[*n] > 0 { EPOLLIN } else { 0 },
             Kind::Epoll => 0,
             Kind::Net(s) => s.ready(),
+            Kind::Timer(n) => {
+                if self.timers[*n].due(Instant::now()) > 0 {
+                    EPOLLIN
+                } else {
+                    0
+                }
+            }
         }
     }
 
@@ -161,7 +175,7 @@ impl Table {
                 self.chans[r].readers -= 1;
                 self.chans[w].writers -= 1;
             }
-            Kind::Event(_) | Kind::Epoll | Kind::Net(_) => {}
+            Kind::Event(_) | Kind::Epoll | Kind::Net(_) | Kind::Timer(_) => {}
         }
         self.epolls.remove(&fd);
         for w in self.epolls.values_mut() {
@@ -271,6 +285,23 @@ impl Vfd {
                 }
             }),
         );
+        // `syscall`: the timerfd calls (libSystem's wrappers go through it); everything else is bionic's answer.
+        let (v, s) = (self.clone(), st.clone());
+        let inner = bhpc_bionic::builtin("syscall", st);
+        new(
+            "syscall",
+            Arc::new(move |c| match c.reg(0) {
+                timerfd::SYS_CREATE | timerfd::SYS_SETTIME | timerfd::SYS_GETTIME => v.timerfd(c, &s, c.reg(0)),
+                // `eventfd(initval)` (libkqueue's user filter) and `eventfd2(initval, flags)`.
+                SYS_EVENTFD => v.eventfd_new(c, &s, c.reg(1), 0),
+                SYS_EVENTFD2 => v.eventfd_new(c, &s, c.reg(1), c.reg(2)),
+                _ => {
+                    if let Some(f) = &inner {
+                        f(c);
+                    }
+                }
+            }),
+        );
         // `poll` is not forwarded by descriptor (its first argument is an array), see `poll`.
         let (v, s) = (self.clone(), st.clone());
         let inner = bhpc_bionic::builtin("poll", st);
@@ -337,6 +368,11 @@ impl Vfd {
             let mut a = c.args();
             (a.u32(c), a.u32(c))
         };
+        self.eventfd_new(c, st, init, flags);
+    }
+
+    /// Create an eventfd counter and return its descriptor.
+    fn eventfd_new(&self, c: &mut Cpu, st: &Shared, init: u32, flags: u32) {
         let mut t = self.t();
         t.counters.push(u64::from(init));
         let n = t.counters.len() - 1;
@@ -408,6 +444,7 @@ impl Vfd {
         loop {
             let mut ready = Vec::new();
             let net;
+            let timer_wake;
             {
                 let mut t = self.t();
                 let Some(set) = t.epolls.get(&ep).cloned() else {
@@ -417,6 +454,7 @@ impl Vfd {
                 let mut fds: Vec<u32> = set.keys().copied().collect();
                 fds.sort_unstable();
                 net = fds.iter().any(|fd| t.is_net(*fd));
+                timer_wake = fds.iter().filter_map(|fd| t.timer_deadline(*fd)).min();
                 for fd in fds {
                     let w = set[&fd];
                     let bits = t.ready(fd) & (w.events | EPOLLERR | EPOLLHUP);
@@ -445,7 +483,9 @@ impl Vfd {
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 return c.ret_u32(0);
             }
-            if sched::block(c, st, tick(deadline, net), "epoll_wait").is_none() {
+            // Sleep no longer than the next watched timer.
+            let until = tick(deadline, net).map_or(timer_wake, |d| Some(timer_wake.map_or(d, |t| t.min(d))));
+            if sched::block(c, st, until, "epoll_wait").is_none() {
                 return;
             }
         }
@@ -459,6 +499,8 @@ impl Vfd {
         if self.net_read(c, st, fd, buf, n) {
             return;
         }
+        // Until when a blocking read of a timer may sleep.
+        let mut wake: Option<Instant> = None;
         loop {
             let got: Result<Vec<u8>, u32> = {
                 let mut t = self.t();
@@ -493,6 +535,19 @@ impl Vfd {
                             Err(0)
                         }
                     }
+                    Kind::Timer(i) => {
+                        let now = Instant::now();
+                        if n < 8 {
+                            Err(errno::EINVAL)
+                        } else if t.timers[i].due(now) > 0 {
+                            Ok(t.timers[i].take(now).to_le_bytes().to_vec())
+                        } else if nb {
+                            Err(errno::EAGAIN)
+                        } else {
+                            wake = t.timers[i].deadline;
+                            Err(0)
+                        }
+                    }
                     Kind::PipeW(_) | Kind::Epoll | Kind::Net(_) => Err(errno::EBADF),
                 }
             };
@@ -507,7 +562,7 @@ impl Vfd {
                     return;
                 }
                 Err(0) => {
-                    if sched::block(c, st, None, "pipe read").is_none() {
+                    if sched::block(c, st, wake.take(), "pipe read").is_none() {
                         return;
                     }
                 }
@@ -516,7 +571,7 @@ impl Vfd {
         }
     }
 
-    fn write(&self, c: &mut Cpu, st: &Shared) {
+    pub(crate) fn write(&self, c: &mut Cpu, st: &Shared) {
         let (fd, buf, n) = {
             let mut a = c.args();
             (a.u32(c), a.u32(c), a.u32(c))

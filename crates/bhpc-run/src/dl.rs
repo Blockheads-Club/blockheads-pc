@@ -121,7 +121,11 @@ impl DlTable {
             RTLD_DEFAULT | GLOBAL_HANDLE => {
                 self.mods.iter().find_map(|m| m.exports.get(name).copied()).or_else(|| (self.host)(cpu, name))
             }
-            HOST_HANDLE | RTLD_NEXT => (self.host)(cpu, name),
+            HOST_HANDLE => (self.host)(cpu, name),
+            // `RTLD_NEXT` is "what comes after the caller": the host's version of a function a game library wraps
+            // (libgles over `eglSwapBuffers`) first, else a library loaded later (CoreFoundation finds
+            // `_CFSocketStreamCreatePair` in CFNetwork this way; without it every HTTP request fails with EBADF).
+            RTLD_NEXT => (self.host)(cpu, name).or_else(|| self.mods.iter().find_map(|m| m.exports.get(name).copied())),
             h => match (h as usize).checked_sub(1).filter(|i| *i < self.mods.len()) {
                 Some(i) => self.find(i, name),
                 None => {

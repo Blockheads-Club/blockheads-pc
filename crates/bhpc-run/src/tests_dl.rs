@@ -76,6 +76,8 @@ fn table_semantics() {
     assert_eq!(t.dlsym(&mut r.cpu, GLOBAL_HANDLE, "host_fn"), Some(0xABCD));
     assert_eq!(t.dlsym(&mut r.cpu, HOST_HANDLE, "host_fn"), Some(0xABCD));
     assert_eq!(t.dlsym(&mut r.cpu, RTLD_NEXT, "host_fn"), Some(0xABCD));
+    // ... and a symbol only a loaded library has (the host does not know it).
+    assert!(t.dlsym(&mut r.cpu, RTLD_NEXT, "dep_fn").is_some());
     assert!(t.dlsym(&mut r.cpu, HOST_HANDLE, "memcpy").is_some(), "libc through the bionic resolver");
     assert!(t.dlsym(&mut r.cpu, HOST_HANDLE, "no_such_symbol").is_none());
     t.set_trace(true);

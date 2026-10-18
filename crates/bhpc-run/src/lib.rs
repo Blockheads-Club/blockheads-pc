@@ -204,6 +204,8 @@ mod tests_net;
 #[cfg(test)]
 mod tests_script;
 #[cfg(test)]
+mod tests_timerfd;
+#[cfg(test)]
 mod tests_tracks;
 #[cfg(test)]
 mod tests_vfd;
