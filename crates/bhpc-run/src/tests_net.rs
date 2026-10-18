@@ -169,6 +169,7 @@ fn udp_datagrams_with_addresses_flags_and_vectored_io() {
 #[test]
 fn socket_options_and_timeouts() {
     let mut r = rig();
+    r.vfd.set_trace_net(true);
     let s = r.sock(DGRAM);
     r.bind_lo(s);
     // Pass-through option and its read-back.
@@ -213,6 +214,7 @@ fn socket_options_and_timeouts() {
 #[test]
 fn tcp_connect_accept_stream_and_shutdown() {
     let mut r = rig();
+    r.vfd.set_trace_net(true);
     let (l, c, s) = r.tcp_pair();
     assert_eq!(r.write(c, b"abc"), 3);
     assert_eq!(r.read(s, 8), (3, b"abc".to_vec()));
@@ -361,6 +363,7 @@ const FD_NONE: u32 = crate::vfd::FD_BASE + 300;
 #[test]
 fn resolver_builds_addrinfo_hostent_and_nameinfo_in_guest_memory() {
     let mut r = rig();
+    r.vfd.set_trace_net(true);
     let host = r.put(0, b"127.0.0.1\0");
     let svc = r.put(20, b"8080\0");
     let res = r.scratch + 40;
@@ -516,4 +519,27 @@ fn select_and_pselect_over_sockets() {
     let tv0 = r.put(7900, &[0u32, 0].iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>());
     assert!(r.faults("select", &[nfds, rs, EFAULT_ADDR, 0, tv0]));
     let _ = EPOLLOUT;
+}
+
+#[test]
+fn virtual_socket_pairs_speak_the_socket_api() {
+    let mut r = rig();
+    let out = r.scratch + 600;
+    assert_eq!(r.call("socketpair", &[1, 1, 0, out]), 0);
+    let (a, b) = (r.cpu.mem().read_u32(out).unwrap(), r.cpu.mem().read_u32(out + 4).unwrap());
+    let p = r.put(100, b"ping");
+    assert_eq!(r.call("send", &[a, p, 4, 0]), 4);
+    assert_eq!(r.call("recv", &[b, r.scratch + 200, 16, 0]), 4);
+    assert_eq!(r.get(200, 4), b"ping");
+    assert_eq!(r.call("sendto", &[b, p, 2, 0, 0, 0]), 2);
+    assert_eq!(r.call("recvfrom", &[a, r.scratch + 200, 16, 0, 0, 0]), 2);
+    let one = r.put(300, &1u32.to_le_bytes());
+    assert_eq!(r.call("setsockopt", &[a, 1, 2, one, 4]), 0);
+    let lenp = r.put(310, &4u32.to_le_bytes());
+    r.put(320, &[9; 4]);
+    assert_eq!(r.call("getsockopt", &[a, 1, 4, r.scratch + 320, lenp]), 0);
+    assert_eq!(r.get(320, 4), [0; 4]);
+    assert!(r.faults("getsockopt", &[a, 1, 4, EFAULT_ADDR, lenp]));
+    assert!(r.faults("getsockopt", &[a, 1, 4, r.scratch + 320, EFAULT_ADDR]));
+    assert_eq!(r.call("shutdown", &[a, 2]), 0);
 }

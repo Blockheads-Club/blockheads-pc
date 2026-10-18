@@ -71,3 +71,11 @@ Umbrella rules: `../AGENTS.md`.
   `__futex_wait/__futex_wake` use the same ticket queues as condition variables, keyed by the futex word address.
 - `localtime`/`mktime`/`tzset` use the host zone via `HostClock::local_zone` (libc `localtime_r` on unix, UTC on
   Windows for now); `TZ=UTC` in the guest environment forces UTC.
+
+## Gotchas learned in M7 (networking)
+- Guest sockets live in `bhpc-run/src/vfd/net.rs` over non-blocking host sockets (unix only); details and the online
+  join recipe in `docs/m7/net-bringup.md`. `BHPC_TRACE_NET=1` logs socket calls and datagram heads.
+- Anything that rebinds `read`/`poll`/`select` after `vfd::install` silently bypasses the descriptor table
+  (`watch_blocking` did): register wrappers first, the table last.
+- The game runs input handlers on the Android UI guest thread; its CFRunLoop is only serviced by the UI loop's
+  `CFRunLoopRunInMode(..., 0, true)` call, so `performSelector:afterDelay:` from a button works.

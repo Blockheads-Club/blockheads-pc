@@ -11,7 +11,7 @@
 use super::{Entry, Kind, Vfd, EMFILE, EPOLLERR, EPOLLHUP, EPOLLIN, EPOLLOUT};
 use bhpc_bionic::guest::{cstr, rd, rd32, wr, wr32, wr_cstr};
 use bhpc_bionic::layout::errno::{EBADF, EINTR, EINVAL};
-use bhpc_bionic::misc::fail;
+use bhpc_bionic::misc::{fail, get_errno};
 use bhpc_bionic::{lock, sched, Shared};
 use bhpc_cpu::{Cpu, Stop};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
@@ -256,6 +256,9 @@ impl Vfd {
         let r = (|| -> Res {
             let (s, nb) = self.sock(fd)?;
             let a = guest_addr(c, addr, len)?;
+            if self.t().trace_net {
+                eprintln!("[net] connect to {a:?}");
+            }
             if unsafe { libc::connect(s.raw(), a.as_ptr().cast(), a.len() as u32) } == 0 {
                 return Ok(0);
             }
@@ -302,6 +305,9 @@ impl Vfd {
     /// Send `data` (all of it on a blocking stream socket), to `to` when given.
     fn send_core(&self, c: &mut Cpu, st: &Shared, fd: u32, data: &[u8], flags: u32, to: Option<Vec<u8>>) -> Res {
         let (s, nb) = self.sock(fd)?;
+        if self.t().trace_net {
+            eprintln!("[net] send {} bytes to {to:?}: {:02x?}", data.len(), &data[..data.len().min(64)]);
+        }
         let nb = nb || flags & MSG_DONTWAIT != 0;
         let fl = (flags & MSG_KEEP) as i32 | MSG_NOSIGNAL;
         let (dest, dlen) = to.as_ref().map_or((std::ptr::null(), 0), |a| (a.as_ptr().cast(), a.len() as u32));
@@ -340,6 +346,9 @@ impl Vfd {
     /// `send`, `sendto` (`to` is the address argument position) share this.
     fn send_args(&self, c: &mut Cpu, st: &Shared, with_addr: bool) {
         args!(c; fd, buf, n, flags, addr, alen);
+        if self.is_pair(fd) {
+            return self.write(c, st);
+        }
         let r = (|| -> Res {
             let data = rd(c, buf, n.min(MAX_IO)).ok_or(EFAULT)?;
             let to = if with_addr && addr != 0 { Some(guest_addr(c, addr, alen)?) } else { None };
@@ -358,6 +367,9 @@ impl Vfd {
 
     fn recv_args(&self, c: &mut Cpu, st: &Shared, with_addr: bool) {
         args!(c; fd, buf, n, flags, addr, alen);
+        if self.is_pair(fd) {
+            return self.read(c, st);
+        }
         let r = (|| -> Res {
             let (data, from) = self.recv_core(c, st, fd, n, flags)?;
             if !wr(c, buf, &data) {
@@ -438,9 +450,17 @@ impl Vfd {
         done(c, st, r);
     }
 
+    /// True for one end of a virtual `socketpair`: stream I/O goes through `read`/`write`, options are accepted.
+    fn is_pair(&self, fd: u32) -> bool {
+        matches!(self.t().fds.get(&fd), Some(Entry { kind: Kind::Sock(..), .. }))
+    }
+
     pub(super) fn setsockopt(&self, c: &mut Cpu, st: &Shared) {
         args!(c; fd, level, name, val, len);
         let r = (|| -> Res {
+            if self.is_pair(fd) {
+                return Ok(0);
+            }
             let (s, _) = self.sock(fd)?;
             let v = rd(c, val, len.min(MAX_OPT)).ok_or(EFAULT)?;
             if level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO) {
@@ -464,6 +484,11 @@ impl Vfd {
     pub(super) fn getsockopt(&self, c: &mut Cpu, st: &Shared) {
         args!(c; fd, level, name, val, lenp);
         let r = (|| -> Res {
+            if self.is_pair(fd) {
+                // Options of a virtual pair read as zero (`SO_ERROR` included).
+                let room = rd32(c, lenp).ok_or(EFAULT)?.min(MAX_OPT);
+                return if wr(c, val, &vec![0; room as usize]) { Ok(0) } else { Err(EFAULT) };
+            }
             let (s, _) = self.sock(fd)?;
             let room = rd32(c, lenp).ok_or(EFAULT)?.min(MAX_OPT);
             let mut out = vec![0u8; room as usize];
@@ -518,7 +543,11 @@ impl Vfd {
 
     pub(super) fn shutdown(&self, c: &mut Cpu, st: &Shared) {
         args!(c; fd, how);
-        let r = self.sock(fd).and_then(|(s, _)| cvt(unsafe { libc::shutdown(s.raw(), how as i32) } as isize));
+        let r = match self.sock(fd) {
+            Ok((s, _)) => cvt(unsafe { libc::shutdown(s.raw(), how as i32) } as isize),
+            Err(_) if self.is_pair(fd) => Ok(0),
+            Err(e) => Err(e),
+        };
         sched::notify(st);
         done(c, st, r);
     }
@@ -626,7 +655,11 @@ impl Vfd {
             };
             let h =
                 if hints == 0 { [0; 4] } else { std::array::from_fn(|i| rd32(c, hints + i as u32 * 4).unwrap_or(0)) };
-            let list = resolve(host.as_deref(), svc.as_deref(), h)?;
+            let list = resolve(host.as_deref(), svc.as_deref(), h);
+            if self.t().trace_net {
+                eprintln!("[net] getaddrinfo {host:?}:{svc:?} -> {:?}", list.as_ref().map(Vec::len));
+            }
+            let list = list?;
             let canon = if h[0] & AI_CANONNAME != 0 { host.as_deref().unwrap_or("").as_bytes() } else { &[] };
             let size = list.len() as u32 * NODE_SIZE + if canon.is_empty() { 0 } else { canon.len() as u32 + 1 };
             let base = Some(lock(st).heap.calloc(1, size)).filter(|b| *b != 0).ok_or(EAI_MEMORY)?;
@@ -835,7 +868,14 @@ impl Vfd {
     pub(super) fn install_net(&self, cpu: &Cpu, st: &Shared) {
         for &(name, f) in TABLE {
             let (v, s) = (self.clone(), st.clone());
-            let _ = cpu.register_shared_thunk(name, Arc::new(move |c: &mut Cpu| f(&v, c, &s)));
+            let thunk = move |c: &mut Cpu| {
+                let args = [c.reg(0), c.reg(1), c.reg(2), c.reg(3)];
+                f(&v, c, &s);
+                if v.t().trace_net {
+                    eprintln!("[net] {name}({args:x?}) = {} errno {}", c.reg(0) as i32, get_errno(c, &s));
+                }
+            };
+            let _ = cpu.register_shared_thunk(name, Arc::new(thunk));
         }
         for (name, pselect) in [("select", false), ("pselect", true)] {
             let (v, s, inner) = (self.clone(), st.clone(), bhpc_bionic::builtin(name, st));

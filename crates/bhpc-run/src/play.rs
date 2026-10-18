@@ -482,10 +482,12 @@ fn boot(
         }
         bhpc_gles::register_all(cpu, &gles);
         let sles = Sles::install(cpu, mixer.clone()).map_err(other)?;
+        // Before the descriptor table: it rebinds `read`/`poll`/`select` itself, and the logging wrappers must not
+        // replace those with plain bionic builtins.
+        watch_blocking(cpu, st, &blocks);
         let _vfd = crate::vfd::install(cpu, st);
         crate::mmapio::SharedMaps::default().install(cpu, st);
         dl::install(cpu, st, dl_slot.clone());
-        watch_blocking(cpu, st, &blocks);
         parts = Some(Parts { gles, sles });
         let gfx: Arc<dyn GfxHooks> = hooks;
         let audio: Arc<dyn bhpc_jni::AudioHooks> = Arc::new(Tracks::new(mixer.clone(), st.clone()));
@@ -559,6 +561,12 @@ fn boot(
         main_pid: pid,
         st: st.clone(),
         rx: Mutex::new(Some(rx)),
+        run_loop: sess
+            .linker
+            .modules()
+            .iter()
+            .find_map(|m| m.export("CFRunLoopRunInMode"))
+            .zip(sess.linker.modules().iter().find_map(|m| m.export("kCFRunLoopDefaultMode"))),
     };
     if let Err(e) = spawn_ui_thread(&mut sess, ui) {
         report.stop = e;
@@ -608,6 +616,9 @@ struct UiThread {
     main_pid: usize,
     st: bhpc_bionic::Shared,
     rx: Mutex<Option<Receiver<Event>>>,
+    /// `CFRunLoopRunInMode` and the address of `kCFRunLoopDefaultMode`: the game handles input on this thread, so
+    /// timers it arms here (`performSelector:afterDelay:`) must be run from this loop.
+    run_loop: Option<(u32, u32)>,
 }
 
 type StageError = (String, [u32; 16]);
@@ -701,6 +712,14 @@ impl UiThread {
                 Err(Throw::Stop(s)) => return format!("main looper: guest stopped: {s}"),
                 Err(Throw::Exc(e)) => {
                     eprintln!("[play] main looper: Java exception {}", vm.exception_message(e).unwrap_or_default());
+                }
+            }
+            if let Some((run, mode_var)) = self.run_loop {
+                // `CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true)`: the double sits in r2:r3, the flag on the stack.
+                c.set_ticks(FOREVER);
+                let mode = c.mem().read_u32(mode_var).unwrap_or(0);
+                if let Err(e) = c.call(run, &[mode, 0, 0, 0, 1]) {
+                    return format!("UI run loop: guest stopped: {e:?}");
                 }
             }
             match vm.run_layout(c) {
@@ -897,7 +916,7 @@ fn hook_objc(sess: &mut Session) -> Result<(), String> {
         let (cls, sel) = (c.reg(0), c.reg(1));
         let name = c.mem().read_cstr(sel).unwrap_or_default();
         if seen.lock().unwrap_or_else(PoisonError::into_inner).insert((cls, sel)) {
-            eprintln!("[objc] {cls:#x} {name}");
+            eprintln!("[objc] t{} {cls:#x} {name}", sched::ctx().tid);
         }
     })
 }

@@ -89,6 +89,8 @@ struct Table {
     epolls: HashMap<u32, HashMap<u32, Watch>>,
     /// Guest address of the static `hostent` of `gethostbyname`.
     hostent: u32,
+    /// Log every socket call (`BHPC_TRACE_NET` in the environment, or [`Vfd::set_trace_net`]).
+    trace_net: bool,
 }
 
 /// Shared handle to the table.
@@ -187,6 +189,11 @@ type Thunk = Arc<dyn Fn(&mut Cpu) + Send + Sync>;
 impl Vfd {
     fn t(&self) -> std::sync::MutexGuard<'_, Table> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Switch the socket call log on or off.
+    pub fn set_trace_net(&self, on: bool) {
+        self.t().trace_net = on;
     }
 
     /// Number of descriptors this table owns (tests, diagnostics).
@@ -707,6 +714,7 @@ impl Vfd {
 /// Host-side helper for the runner: the table plus the thunks, registered on `cpu`.
 pub fn install(cpu: &Cpu, st: &Shared) -> Vfd {
     let v = Vfd::default();
+    v.set_trace_net(std::env::var_os("BHPC_TRACE_NET").is_some());
     v.install(cpu, st);
     v
 }
