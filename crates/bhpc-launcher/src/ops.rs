@@ -144,6 +144,8 @@ impl LaunchPlan {
     /// The arguments for a game in a window of its own, or with `embed` (a frame file) for the launcher's window.
     pub fn args_for(&self, embed: Option<&Path>) -> Vec<String> {
         let mut a = self.args.clone();
+        // Start-up progress lines for the loading screen (`--embed` implies them).
+        a.push("--progress".to_string());
         if let Some(f) = embed {
             a.extend(["--embed".to_string(), f.display().to_string()]);
         }

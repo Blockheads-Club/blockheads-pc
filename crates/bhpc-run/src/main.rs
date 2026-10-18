@@ -116,6 +116,10 @@ fn run_apk(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn st
         return 2;
     };
     let mut cfg = bhpc_run::apkrun::InitConfig::new(path.into());
+    // Start-up progress lines for the launcher; a plain run prints none.
+    if args.iter().any(|a| a == "--progress" || a == "--embed") {
+        bhpc_launcher::progress::enable();
+    }
     cfg.force = args.iter().any(|a| a == "--force");
     cfg.trace_thunks = args.iter().any(|a| a == "--trace-thunks");
     cfg.trace_fs = args.iter().any(|a| a == "--trace-fs");
@@ -389,6 +393,7 @@ mod tests {
             &trace,
             "--data-dir",
             &data,
+            "--progress",
             "--package",
             "org.example.g",
             "--watchdog",

@@ -23,6 +23,7 @@ use bhpc_gles::{GlWindow, Gles, GlesConfig};
 use bhpc_input::{Bindings, Config as InputConfig, Geometry, HostAction, Input, InputMapper};
 use bhpc_jni::{GfxHooks, Stage, Throw, Vm};
 use bhpc_launcher::embed::{Cmd, FrameWriter};
+use bhpc_launcher::progress::{emit, report as progress, Line, Phase};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::path::PathBuf;
@@ -186,6 +187,8 @@ struct Flags {
     toggle_fullscreen: AtomicBool,
     /// The UI thread finished the Java start-up stages that must precede `nativeRun`.
     startup_done: AtomicBool,
+    /// Launch steps done so far (`nativeRun` entered, four lifecycle stages), for the progress lines.
+    launch_steps: AtomicU32,
     /// Why the UI thread ended (set when it ends normally).
     ui_stop: Mutex<Option<String>>,
     /// Registers of the faulting guest thread.
@@ -327,6 +330,9 @@ impl Hooks {
         }
         self.publish_frame();
         let n = self.flags.swaps.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 1 {
+            emit(Line::Ready);
+        }
         self.flags.swap_times.lock().unwrap_or_else(PoisonError::into_inner).push(Instant::now());
         let wanted: Vec<PathBuf> =
             std::mem::take(&mut *self.flags.shot_requests.lock().unwrap_or_else(PoisonError::into_inner));
@@ -803,6 +809,7 @@ fn boot(
         return Ok(finish(sess, &gles, report, flags, cfg, &blocks));
     }
     eprintln!("[play] constructors done");
+    progress(Phase::Runtime, 0, RUNTIME_STEPS);
 
     if let Some(secs) = cfg.seconds {
         // If a guest thread is stuck in a call that never returns (so the UI loop cannot look at the clock), stop
@@ -873,6 +880,7 @@ fn boot(
     sess.cpu.set_sp(big + MAIN_STACK);
     sess.cpu.set_ticks(FOREVER);
     eprintln!("[play] MainThread.nativeRun starts");
+    flags.launch_step();
     report.stop = match vm.run_stage(&mut sess.cpu, Stage::MainThreadRun) {
         Ok(()) => "MainThread.nativeRun returned".to_string(),
         Err(Throw::Stop(s)) => {
@@ -921,28 +929,50 @@ fn run_stage(c: &mut Cpu, vm: &Vm, stage: Stage) -> Result<(), StageError> {
     }
 }
 
+/// Stages of the Java-side start-up (`Phase::Runtime`).
+const RUNTIME_STEPS: u32 = 6;
+/// `nativeRun` plus the four lifecycle stages that follow it (`Phase::Launch`).
+const LAUNCH_STEPS: u32 = 5;
+
+impl Flags {
+    /// One more step of the launch phase; the last one starts the wait for the first frame.
+    fn launch_step(&self) {
+        let n = self.launch_steps.fetch_add(1, Ordering::SeqCst) + 1;
+        progress(Phase::Launch, n, LAUNCH_STEPS);
+        if n == LAUNCH_STEPS {
+            progress(Phase::Frame, 0, 0);
+        }
+    }
+}
+
 impl UiThread {
     /// Body of the UI thread: the Java start-up sequence, then looper, layout and input until the game ends.
     fn main(&self, c: &mut Cpu) -> Result<String, StageError> {
         let vm = &self.vm;
         run_stage(c, vm, Stage::LibraryInit)?;
+        progress(Phase::Runtime, 1, RUNTIME_STEPS);
         let env = bhpc_jni::native_env(&self.platform);
         c.set_ticks(FOREVER);
         vm.set_native_env(c, &env).map_err(|e| (format!("setenv: {e:?}"), [0; 16]))?;
         vm.attach_main_looper(self.main_pid);
-        for s in [
+        for (i, s) in [
             Stage::ActivityCreate,
             Stage::ActivityStart,
             Stage::ActivityResume,
             Stage::RootGeometry,
             Stage::SurfaceInit,
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             run_stage(c, vm, s)?;
+            progress(Phase::Runtime, i as u32 + 2, RUNTIME_STEPS);
         }
         self.flags.startup_done.store(true, Ordering::SeqCst);
         // These queue blocks on the main run loop, which starts once the main thread enters `nativeRun`.
         for s in [Stage::ContextValid, Stage::SurfaceChanged, Stage::WillEnterForeground, Stage::DidBecomeActive] {
             run_stage(c, vm, s)?;
+            self.flags.launch_step();
         }
         let rx = self.rx.lock().unwrap_or_else(PoisonError::into_inner).take();
         let mut mapper = InputMapper::new(InputConfig {

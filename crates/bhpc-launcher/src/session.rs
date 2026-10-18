@@ -1,5 +1,6 @@
 //! Spawning and supervising one `bhpc-run` process: state for the Home screen, a bounded log, crash detection.
 
+use crate::progress::{self, History, Info, Tracker};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -10,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-/// How long a freshly spawned game counts as "starting" (the game has no readiness signal yet).
+/// How long a game that prints no progress lines (an older runner) counts as "starting".
 pub const LAUNCH_GRACE: Duration = Duration::from_millis(2500);
 /// Log lines kept in memory.
 pub const MAX_LINES: usize = 5000;
@@ -25,7 +26,8 @@ pub fn sidecar_path(exe_dir: &Path) -> PathBuf {
 #[serde(rename_all = "lowercase")]
 pub enum GameState {
     Ready,
-    Launching,
+    /// Booting: the runner has not presented its first frame yet.
+    Starting,
     Running,
     Stopped,
     Crashed,
@@ -88,7 +90,7 @@ impl LogBuffer {
 }
 
 /// State and new log lines, as polled by the UI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Snapshot {
     pub state: GameState,
     /// Seconds since the game started (while it runs).
@@ -99,6 +101,8 @@ pub struct Snapshot {
     pub exit_code: Option<i32>,
     /// Signal that ended the last session (Unix).
     pub signal: Option<i32>,
+    /// Start-up progress (of the running game, or of the last one: where it got to before it ended).
+    pub progress: Option<Info>,
     /// Log lines after the number the poller passed.
     pub lines: Vec<String>,
     /// Pass this next time.
@@ -112,9 +116,12 @@ struct Running {
     /// Lines for the game's stdin (see [`Session::input`]).
     input: Option<Sender<String>>,
     stopping: bool,
+    /// The step durations of this start went into the history.
+    learned: bool,
 }
 
 struct Finished {
+    progress: Option<Info>,
     secs: u64,
     code: Option<i32>,
     signal: Option<i32>,
@@ -126,6 +133,10 @@ pub struct Session {
     run: Option<Running>,
     last: Option<Finished>,
     log: Arc<Mutex<LogBuffer>>,
+    tracker: Arc<Mutex<Tracker>>,
+    /// Where the durations of finished starts are kept (the loading screen's weights come from there).
+    history: Option<PathBuf>,
+    stall: Duration,
     grace: Duration,
 }
 
@@ -135,14 +146,25 @@ impl Default for Session {
     }
 }
 
-fn pump(source: impl Read + Send + 'static, log: Arc<Mutex<LogBuffer>>) -> JoinHandle<()> {
+/// Reads lines into the log. With `track`, progress lines (see [`progress`]) go to the tracker instead of the log.
+fn pump(
+    source: impl Read + Send + 'static,
+    log: Arc<Mutex<LogBuffer>>,
+    track: Option<(Arc<Mutex<Tracker>>, Instant)>,
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(source);
         let mut buf = Vec::new();
         while reader.read_until(b'\n', &mut buf).map(|n| n > 0).unwrap_or(false) {
             let line = String::from_utf8_lossy(&buf).trim_end().to_string();
-            log.lock().expect("log lock").push(line);
             buf.clear();
+            if let Some((tracker, began)) = &track {
+                if let Some(parsed) = progress::parse_line(&line) {
+                    tracker.lock().expect("tracker lock").feed(parsed, began.elapsed());
+                    continue;
+                }
+            }
+            log.lock().expect("log lock").push(line);
         }
     })
 }
@@ -183,7 +205,25 @@ fn signal_of(_: &ExitStatus) -> Option<i32> {
 impl Session {
     /// A session whose process counts as starting for `grace`.
     pub fn new(grace: Duration) -> Self {
-        Session { run: None, last: None, log: Arc::new(Mutex::new(LogBuffer::new(MAX_LINES))), grace }
+        Session {
+            run: None,
+            last: None,
+            log: Arc::new(Mutex::new(LogBuffer::new(MAX_LINES))),
+            tracker: Arc::default(),
+            history: None,
+            stall: progress::STALL,
+            grace,
+        }
+    }
+
+    /// Keeps the step durations of every start in this file and derives the next start's weights from it.
+    pub fn set_history(&mut self, path: PathBuf) {
+        self.history = Some(path);
+    }
+
+    /// How long a starting game may print no progress before it counts as stuck (default [`progress::STALL`]).
+    pub fn set_stall(&mut self, after: Duration) {
+        self.stall = after;
     }
 
     /// Spawns `program args...` (with `env` added) with its output captured. The previous session's log is replaced.
@@ -202,11 +242,14 @@ impl Session {
         hide_console(&mut command);
         let mut child = command.spawn().map_err(|e| SessionError::Spawn(format!("{}: {e}", program.display())))?;
         self.log.lock().expect("log lock").clear();
+        let model = self.history.as_deref().map(History::load).unwrap_or_default().model();
+        *self.tracker.lock().expect("tracker lock") = Tracker::with_stall(model, self.stall);
+        let started = Instant::now();
         let mut readers = Vec::new();
-        readers.extend(child.stdout.take().map(|s| pump(s, self.log.clone())));
-        readers.extend(child.stderr.take().map(|s| pump(s, self.log.clone())));
+        readers.extend(child.stdout.take().map(|s| pump(s, self.log.clone(), Some((self.tracker.clone(), started)))));
+        readers.extend(child.stderr.take().map(|s| pump(s, self.log.clone(), None)));
         let input = child.stdin.take().map(feed);
-        self.run = Some(Running { child, started: Instant::now(), readers, input, stopping: false });
+        self.run = Some(Running { child, started, readers, input, stopping: false, learned: false });
         Ok(())
     }
 
@@ -222,18 +265,24 @@ impl Session {
         self.refresh();
         if let Some(mut run) = self.run.take() {
             run.stopping = true;
-            let _ = run.child.kill();
-            if let Ok(status) = run.child.wait() {
-                self.finish(run, status);
-            }
+            self.kill(run);
         }
+    }
+
+    /// Kills the process, waits for it and records how it ended.
+    fn kill(&mut self, mut run: Running) {
+        let _ = run.child.kill();
+        let waited = run.child.wait();
+        let _ = waited.map(|status| self.finish(run, status));
     }
 
     fn finish(&mut self, run: Running, status: ExitStatus) {
         for r in run.readers {
             let _ = r.join();
         }
+        let progress = self.progress_info(run.started);
         self.last = Some(Finished {
+            progress,
             secs: run.started.elapsed().as_secs(),
             code: status.code(),
             signal: signal_of(&status),
@@ -241,21 +290,54 @@ impl Session {
         });
     }
 
+    /// The tracker's numbers for a game started at `started`, if it printed any progress.
+    fn progress_info(&self, started: Instant) -> Option<Info> {
+        let mut t = self.tracker.lock().expect("tracker lock");
+        t.started().then(|| t.info(started.elapsed()))
+    }
+
     /// Notices a process that ended by itself.
     fn refresh(&mut self) {
-        let exited = self.run.as_mut().and_then(|r| r.child.try_wait().ok().flatten());
-        if let Some(status) = exited {
-            if let Some(run) = self.run.take() {
-                self.finish(run, status);
-            }
+        let Some(status) = self.run.as_mut().and_then(|r| r.child.try_wait().ok().flatten()) else { return };
+        let run = self.run.take().expect("a process that exited was running");
+        self.finish(run, status);
+    }
+
+    /// A game that printed no progress for a minute while starting is stuck: it is killed and counts as crashed.
+    fn stop_if_stalled(&mut self) {
+        let stalled = self.run.as_ref().and_then(|r| self.progress_info(r.started)).is_some_and(|i| i.stalled);
+        if let Some(run) = self.run.take_if(|_| stalled) {
+            self.kill(run);
+        }
+    }
+
+    /// Remembers how long each step took once the first frame is up.
+    fn learn(&mut self) {
+        let Some(run) = self.run.as_mut().filter(|r| !r.learned) else { return };
+        let durations = self.tracker.lock().expect("tracker lock").durations();
+        if let (Some(d), Some(path)) = (durations, &self.history) {
+            run.learned = true;
+            let mut h = History::load(path);
+            h.push(d);
+            let _ = h.save(path);
         }
     }
 
     /// Current state plus the log lines after `since`. `apk_present`: the game file still exists.
     pub fn poll(&mut self, since: usize, apk_present: bool) -> Snapshot {
         self.refresh();
+        self.stop_if_stalled();
+        self.learn();
+        let running = self.run.as_ref().map(|r| (r.started, r.started.elapsed()));
+        let tracker = self.run.as_ref().and_then(|r| self.progress_info(r.started));
+        // A runner that prints no progress at all counts as starting for a short grace period.
+        let booting = match (&tracker, running) {
+            (Some(info), _) => !info.ready,
+            (None, Some((_, elapsed))) => elapsed < self.grace,
+            (None, None) => false,
+        };
         let state = match (&self.run, &self.last) {
-            (Some(r), _) if r.started.elapsed() < self.grace => GameState::Launching,
+            (Some(_), _) if booting => GameState::Starting,
             (Some(_), _) => GameState::Running,
             (None, Some(f)) if f.crashed => GameState::Crashed,
             (None, Some(_)) if apk_present => GameState::Stopped,
@@ -269,6 +351,7 @@ impl Session {
             last_session_secs: self.last.as_ref().map(|f| f.secs),
             exit_code: self.last.as_ref().and_then(|f| f.code),
             signal: self.last.as_ref().and_then(|f| f.signal),
+            progress: tracker.or_else(|| self.last.as_ref().and_then(|f| f.progress.clone())),
             lines,
             next,
         }

@@ -11,6 +11,7 @@
 //! * [`datadir`]: data folder size and copy.
 //! * [`ops`]: the operations behind the app's commands.
 //! * [`embed`]: playing inside the launcher window (frame file, input commands).
+//! * [`progress`]: the runner's start-up progress protocol and the percentage the loading screen shows.
 //! * [`session`]: spawn and supervise `bhpc-run`, keep its log.
 
 pub mod apk;
@@ -21,6 +22,7 @@ pub mod import;
 pub mod keys;
 pub mod ops;
 pub mod prefs;
+pub mod progress;
 pub mod session;
 pub mod window;
 pub mod wizard;
@@ -31,3 +33,5 @@ pub use config::{LaunchConfig, LauncherError};
 mod tests;
 #[cfg(test)]
 mod tests_app;
+#[cfg(test)]
+mod tests_progress;

@@ -210,7 +210,7 @@ mod unix {
     fn until_done(s: &mut Session, apk: bool) -> Snapshot {
         for _ in 0..500 {
             let snap = s.poll(0, apk);
-            if !matches!(snap.state, GameState::Launching | GameState::Running) {
+            if !matches!(snap.state, GameState::Starting | GameState::Running) {
                 return snap;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -295,12 +295,71 @@ mod unix {
         let (prog, args) = sh("exec sleep 30");
         s.start(&prog, &args, &[]).unwrap();
         let snap = s.poll(0, true);
-        assert_eq!(snap.state, GameState::Launching);
+        assert_eq!(snap.state, GameState::Starting);
         assert!(snap.running_secs.is_some());
         assert_eq!(s.start(&prog, &args, &[]), Err(SessionError::AlreadyRunning));
         s.stop();
         let snap = s.poll(0, true);
         assert_eq!((snap.state, snap.signal), (GameState::Stopped, Some(9)));
+    }
+
+    #[test]
+    fn progress_lines_drive_the_state_and_leave_the_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let hist = crate::progress::history_path(dir.path());
+        let mut s = Session::new(Duration::ZERO);
+        s.set_history(hist.clone());
+        // Progress seen, no @ready yet: still starting although the grace period is zero.
+        let (prog, args) = sh("echo '@progress constructors 5 10'; echo hello; exec sleep 30");
+        s.start(&prog, &args, &[]).unwrap();
+        let snap = loop {
+            let snap = s.poll(0, true);
+            if snap.progress.is_some() {
+                break snap;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(snap.state, GameState::Starting);
+        let info = snap.progress.unwrap();
+        assert_eq!((info.phase, info.step, info.ready), ("constructors", 3, false));
+        assert!(info.percent > 28.0 && info.percent < 50.0);
+        assert!(!snap.lines.iter().any(|l| l.starts_with('@')), "{:?}", snap.lines);
+        s.stop();
+        // The half-way point is still known after the stop.
+        assert_eq!(s.poll(0, true).progress.unwrap().phase, "constructors");
+        // @ready: running, and the durations are remembered for the next start.
+        let (prog, args) = sh("echo '@progress apk 0 1'; echo '@ready'; exec sleep 30");
+        s.start(&prog, &args, &[]).unwrap();
+        let snap = loop {
+            let snap = s.poll(0, true);
+            if snap.progress.as_ref().is_some_and(|i| i.ready) {
+                break snap;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(snap.state, GameState::Running);
+        s.poll(0, true);
+        assert_eq!(crate::progress::History::load(&hist).starts.len(), 1, "learned once");
+        s.stop();
+        // Without a history file nothing is written, and a new start has a fresh tracker.
+        let mut plain = Session::new(Duration::ZERO);
+        plain.start(&prog, &args, &[]).unwrap();
+        while plain.poll(0, true).state != GameState::Running {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        plain.stop();
+    }
+
+    #[test]
+    fn a_start_without_progress_for_too_long_is_killed() {
+        let mut s = Session::new(Duration::from_secs(3600));
+        s.set_stall(Duration::from_millis(100));
+        let (prog, args) = sh("echo '@progress frame 0 0'; exec sleep 30");
+        s.start(&prog, &args, &[]).unwrap();
+        let snap = until_done(&mut s, true);
+        assert_eq!((snap.state, snap.signal), (GameState::Crashed, Some(9)));
+        let info = snap.progress.unwrap();
+        assert!(info.stalled && info.phase == "frame");
     }
 
     #[test]
@@ -467,9 +526,10 @@ mod ops_tests {
         assert_eq!(plan.args[3], plan.title);
         assert_eq!(plan.window, c.window);
         assert_eq!(plan.keys, c.keys);
-        assert_eq!(plan.args_for(None), plan.args);
+        assert_eq!(plan.args_for(None)[..plan.args.len()], plan.args);
+        assert_eq!(plan.args_for(None)[plan.args.len()..], ["--progress"]);
         let embedded = plan.args_for(Some(Path::new("/run/f")));
-        assert_eq!(embedded[plan.args.len()..], ["--embed", "/run/f"]);
+        assert_eq!(embedded[plan.args.len()..], ["--progress", "--embed", "/run/f"]);
         Prefs { game_sound: false, ..Prefs::default() }.save(&paths.prefs()).unwrap();
         assert_eq!(launch_plan(&paths, exe).unwrap().env, [("SDL_AUDIODRIVER".to_string(), "dummy".to_string())]);
         c.window.width = 1;

@@ -4,6 +4,7 @@
 use crate::{new_env_with, RunError};
 use bhpc_bionic::{histogram, lock, Hle, Shared};
 use bhpc_cpu::{Cpu, Stop};
+use bhpc_launcher::progress::{report, Phase};
 use bhpc_loader::apk::{Apk, Release};
 use bhpc_loader::init::{
     run_constructors, CallFailure, CtorFailure, CtorInfo, CtorKind, GuestCaller, InitOptions, InitTrace,
@@ -170,6 +171,24 @@ impl CpuCaller<'_> {
     }
 }
 
+/// Counts finished constructors for the launcher's progress and forwards to another trace.
+struct Counting<'a> {
+    inner: &'a mut dyn InitTrace,
+    done: u32,
+    total: u32,
+}
+
+impl InitTrace for Counting<'_> {
+    fn before(&mut self, c: &CtorInfo<'_>) {
+        self.inner.before(c);
+    }
+    fn after(&mut self, c: &CtorInfo<'_>, r: &Result<u32, CallFailure>, t: Duration) {
+        self.inner.after(c, r, t);
+        self.done += 1;
+        report(Phase::Constructors, self.done, self.total);
+    }
+}
+
 /// Prints constructors as they run (`--verbose`).
 struct VerboseTrace;
 
@@ -296,8 +315,10 @@ impl Session {
         log: Option<bhpc_bionic::state::LogSink>,
         setup: &mut Setup<'_>,
     ) -> Result<Session, RunError> {
+        report(Phase::Apk, 0, 1);
         let mut apk = Apk::open(&cfg.apk)?;
         let release = apk.verify(cfg.force)?;
+        report(Phase::Apk, 1, 1);
         let dirs = data_dirs(cfg.data_dir.as_deref(), DataDirs::platform_default());
         dirs.create_all()?;
         let mut vcfg = VfsConfig::new(&cfg.apk, dirs);
@@ -313,11 +334,13 @@ impl Session {
         lock(&st).vfs.trace = cfg.trace_fs;
         let hooks = setup(&mut cpu, &st)?;
         let mut linker = Linker::new(cpu.mem().clone());
+        report(Phase::Libraries, 0, 0);
         let summary = {
             let mut hle = Hle::new(&mut cpu, st.clone());
             linker.load_all(&[ROOT_LIB], &mut apk, &mut hle)?
         };
         register_exidx(&linker, &st);
+        report(Phase::Libraries, 1, 1);
         let mut platform = bhpc_jni::Platform::for_guest(&storage.guest);
         if let Some((w, h)) = cfg.screen {
             (platform.screen_width, platform.screen_height) = (w, h);
@@ -357,13 +380,17 @@ impl Session {
         let opts =
             InitOptions { watchdog_cycles: cfg.watchdog_cycles, keep_going: cfg.keep_going, ..InitOptions::default() };
         let mut rep = bhpc_loader::init::InitReport::default();
+        let mut verbose = VerboseTrace;
+        let mut quiet = bhpc_loader::init::NoTrace;
+        let mut counting = Counting {
+            inner: if cfg.verbose { &mut verbose } else { &mut quiet },
+            done: 0,
+            total: modules.iter().map(|m| m.constructors().len() as u32).sum(),
+        };
+        report(Phase::Constructors, 0, counting.total);
         for m in modules {
             let one = std::slice::from_ref(m);
-            let r = if cfg.verbose {
-                run_constructors(one, &mut caller, &mut VerboseTrace, &opts)
-            } else {
-                run_constructors(one, &mut caller, &mut bhpc_loader::init::NoTrace, &opts)
-            };
+            let r = run_constructors(one, &mut caller, &mut counting, &opts);
             rep.ran += r.ran;
             rep.per_module.extend(r.per_module);
             let ok = r.failures.is_empty();
