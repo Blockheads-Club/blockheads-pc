@@ -12,6 +12,10 @@ pub const SCALE_RANGE: (f32, f32) = (0.5, 4.0);
 pub const FPS_LIMITS: [u32; 5] = [0, 30, 60, 120, 144];
 /// Accepted range of a non-zero frame-rate cap (a hand-edited file may hold any value in it).
 pub const FPS_LIMIT_RANGE: (u32, u32) = (10, 1000);
+/// Game speeds the launcher offers (1 = normal; see `bhpc-run`'s `gamespeed`).
+pub const GAME_SPEEDS: [f64; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
+/// Accepted range of the game speed (a hand-edited file may hold any value in it).
+pub const GAME_SPEED_RANGE: (f64, f64) = (0.25, 4.0);
 
 /// Corner of the game picture the FPS counter sits in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -54,6 +58,8 @@ pub struct WindowOptions {
     /// game's own 30 FPS cap is always lifted (`--unlock-fps`), so this is the only cap; its simulation runs on
     /// measured time, so it does not run faster.
     pub fps_limit: u32,
+    /// How fast the world runs compared to normal (1 = normal; single-player only, see `bhpc-run`'s `gamespeed`).
+    pub game_speed: f64,
 }
 
 impl Default for WindowOptions {
@@ -67,6 +73,7 @@ impl Default for WindowOptions {
             show_fps: false,
             fps_position: FpsPosition::TopLeft,
             fps_limit: 60,
+            game_speed: 1.0,
         }
     }
 }
@@ -86,6 +93,12 @@ impl WindowOptions {
             return Err(format!(
                 "fps_limit {} is outside {}..={} (0 = no limit)",
                 self.fps_limit, FPS_LIMIT_RANGE.0, FPS_LIMIT_RANGE.1
+            ));
+        }
+        if !(GAME_SPEED_RANGE.0..=GAME_SPEED_RANGE.1).contains(&self.game_speed) {
+            return Err(format!(
+                "game_speed {} is outside {}..={}",
+                self.game_speed, GAME_SPEED_RANGE.0, GAME_SPEED_RANGE.1
             ));
         }
         Ok(())

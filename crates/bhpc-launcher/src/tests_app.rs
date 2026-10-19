@@ -181,6 +181,10 @@ fn run_args_and_config_expansion() {
     c.window.show_fps = true;
     c.window.fps_position = FpsPosition::TopLeft;
     assert!(!c.run_args().contains(&"--fps-position".to_string()));
+    // The game speed only when it is not normal (1 leaves the game untouched).
+    assert!(!c.run_args().contains(&"--game-speed".to_string()));
+    c.window.game_speed = 1.5;
+    assert_eq!(c.run_args()[13..], ["--game-speed", "1.5"]);
 
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     assert_eq!(expand_args(&s(&["--init-only"])).unwrap(), s(&["--init-only"]));
