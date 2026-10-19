@@ -220,3 +220,8 @@ html, body { height: 100%; overflow: hidden; }
   background-color: var(--stage);
   background-image: repeating-conic-gradient(from -3deg at 50% 125%, var(--ray) 0deg 7deg, transparent 7deg 22deg);
 }
+
+/* Text selection: off for the app chrome, on where people copy things (fields, logs, paths, addresses, versions,
+   errors, fingerprints, legal text). `.selectable` opts any other element in. */
+body { -webkit-user-select: none; user-select: none; }
+input, textarea, [contenteditable], .selectable, pre, .log, .mono, .legal, .notices, .detail, .path, dd, .note.bad, .addr { -webkit-user-select: text; user-select: text; }

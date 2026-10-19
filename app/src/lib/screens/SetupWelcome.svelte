@@ -54,7 +54,7 @@
   </label>
   <details class="legal">
     <summary>{t('welcome.legalLink')}</summary>
-    <p class="hint">{t('legal.full')}</p>
+    <p class="hint selectable">{t('legal.full')}</p>
   </details>
 </SetupShell>
 
