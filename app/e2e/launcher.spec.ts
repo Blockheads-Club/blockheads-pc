@@ -59,6 +59,7 @@ test('a failed start is reported and Home stays', async ({ page }) => {
 test('language and theme switch and stay usable by keyboard', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Language & theme' }).click();
   await page.getByLabel('Launcher language').selectOption('tr');
   await expect(page.getByRole('heading', { name: 'Dil ve tema' })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'tr');
@@ -92,7 +93,7 @@ test('works from 800 x 600 up on every screen', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /The Blockheads/ })).toBeVisible();
   expect(await noOverflow(page)).toBe(true);
-  for (const name of ['Game & data', 'Controls', 'Updates & about']) {
+  for (const name of ['Game & data', 'Window & graphics', 'Controls', 'Audio', 'Language & theme', 'Updates & about']) {
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name }).click();
     expect(await noOverflow(page)).toBe(true);
@@ -175,4 +176,72 @@ test('a slow start gets the note, and a start that fails shows the step and can 
   await expect(page.getByRole('button', { name: 'Try again' })).toBeFocused();
   await page.getByRole('button', { name: 'Back to Home' }).click();
   await expect(page.getByRole('alert')).toContainText('The game closed unexpectedly');
+});
+
+test('settings: one page per sidebar item, remembered while the app runs', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const nav = page.getByRole('navigation', { name: 'Settings sections' });
+  const pages: [string, string][] = [
+    ['Window & graphics', 'VSync'],
+    ['Controls', 'Tap and drag'],
+    ['Audio', 'Game sound'],
+    ['Language & theme', 'Launcher language'],
+    ['Updates & about', 'Open-source licences'],
+    ['Game & data', 'Data folder']
+  ];
+  for (const [name, text] of pages) {
+    await nav.getByRole('button', { name }).click();
+    await expect(nav.getByRole('button', { name })).toHaveAttribute('aria-current', 'page');
+    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
+    await expect(page.locator('main').getByText(text).first()).toBeVisible();
+    await expect(page).toHaveTitle(`Blockheads PC · Settings · ${name}`);
+  }
+  // Only the selected page is there.
+  await expect(page.getByText('Game sound')).toHaveCount(0);
+  // Keyboard: Tab reaches the items, Enter opens one.
+  await nav.getByRole('button', { name: 'Audio' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('switch', { name: 'Game sound' })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to home' }).click();
+  await page.keyboard.press('Control+,');
+  await expect(nav.getByRole('button', { name: 'Audio' })).toHaveAttribute('aria-current', 'page');
+});
+
+test('settings search finds a setting on any page and opens it', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const box = page.getByRole('searchbox', { name: 'Search settings' });
+  await page.locator('main').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('Control+f');
+  await expect(box).toBeFocused();
+  await box.fill('fps');
+  const results = page.getByRole('region', { name: 'Search results' });
+  await expect(results.getByRole('heading', { name: 'Window & graphics' })).toBeVisible();
+  await expect(results.getByRole('button')).toHaveCount(3);
+  await expect(page.getByRole('navigation', { name: 'Settings sections' }).getByLabel('3 matches')).toBeVisible();
+  await results.getByRole('button', { name: /^Show FPS/ }).click();
+  await expect(results).toHaveCount(0);
+  await expect(page.getByRole('switch', { name: 'Show FPS' })).toBeFocused();
+  await expect(page.locator('#set-gfx-show-fps')).toHaveClass(/flash/);
+
+  // "/" focuses, Turkish words and letters fold, arrows and Enter pick, Esc clears.
+  await page.locator('main').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('/');
+  await expect(box).toBeFocused();
+  await page.keyboard.type('tam ekran');
+  await expect(results.getByRole('button')).toHaveCount(2);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(results.getByRole('button', { name: /^Fullscreen/ })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Controls' })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('button', { name: 'Change binding for Fullscreen' })).toBeFocused();
+  await box.fill('ses düzeyİ');
+  await expect(results.getByRole('button', { name: /^Game sound/ })).toBeVisible();
+  await box.press('Escape');
+  await expect(box).toHaveValue('');
+  await box.fill('nothing like this');
+  await expect(page.getByText('No settings match “nothing like this”')).toBeVisible();
+  expect(await noOverflow(page)).toBe(true);
 });

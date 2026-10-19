@@ -146,14 +146,32 @@ for (const scheme of ['light', 'dark'] as const) {
     test('settings', async ({ page }) => {
       await open(page, 'updates=1', scheme, { width: 1100, height: 900 });
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
-      await shot(page, 'settings-general', scheme);
-      await page.getByRole('button', { name: 'Controls' }).click();
+      const nav = page.getByRole('navigation', { name: 'Settings sections' });
+      for (const [name, file] of [
+        ['Game & data', 'game'],
+        ['Window & graphics', 'graphics'],
+        ['Audio', 'audio'],
+        ['Language & theme', 'language'],
+        ['Updates & about', 'about']
+      ] as const) {
+        await nav.getByRole('button', { name }).click();
+        await shot(page, `settings-${file}`, scheme);
+      }
+      await nav.getByRole('button', { name: 'Controls' }).click();
+      await shot(page, 'settings-controls', scheme);
       await page.getByRole('button', { name: 'Change binding for Back' }).click();
       await page.keyboard.press('F11');
       await expect(page.getByRole('alert')).toContainText('F11 is used twice');
       await shot(page, 'settings-controls-conflict', scheme);
-      await page.getByRole('button', { name: 'Updates & about' }).click();
-      await shot(page, 'settings-about', scheme);
+      const box = page.getByRole('searchbox', { name: 'Search settings' });
+      await box.fill('fps');
+      await shot(page, 'settings-search', scheme);
+      await box.fill('zzz');
+      await shot(page, 'settings-search-empty', scheme);
+      await box.fill('speed');
+      await page.getByRole('region', { name: 'Search results' }).getByRole('button', { name: /^Game speed/ }).click();
+      await page.waitForTimeout(150);
+      await shot(page, 'settings-search-opened', scheme);
     });
 
     test('small window 800 x 600', async ({ page }) => {
@@ -173,6 +191,8 @@ for (const scheme of ['light', 'dark'] as const) {
       await shot(page, 'small-settings-general', scheme);
       await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Controls' }).click();
       await shot(page, 'small-settings-controls', scheme);
+      await page.getByRole('searchbox', { name: 'Search settings' }).fill('sound');
+      await shot(page, 'small-settings-search', scheme);
     });
 
     for (const os of ['windows', 'macos', 'linux'] as const) {
