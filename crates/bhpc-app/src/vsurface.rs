@@ -5,7 +5,7 @@
 //! between the contexts of the window (they share objects); framebuffer objects are not, so each context gets its own
 //! that points at the shared storage.
 
-use crate::hud::Hud;
+use crate::hud::{Hud, Sprite};
 use crate::surface::{fit, pack, unpack, Viewport};
 use bhpc_gles::Overlay;
 use std::collections::HashMap;
@@ -179,6 +179,8 @@ struct Shared {
     overlay: Layer,
     /// The FPS counter (top-left corner of the game picture).
     hud: Layer,
+    /// The sprites (controller cursor, messages), one texture each.
+    sprites: Vec<Layer>,
     /// Colour texture of the pixel read-back target ([`VirtualSurface::compose_read`]), its size and a number that
     /// changes when it was recreated.
     out_tex: u32,
@@ -205,6 +207,7 @@ pub struct VirtualSurface {
     state: Mutex<State>,
     overlay: Mutex<Option<Overlay>>,
     hud: Mutex<Option<Hud>>,
+    sprites: Mutex<Vec<Sprite>>,
 }
 
 fn cstr(s: &str) -> CString {
@@ -219,6 +222,7 @@ impl VirtualSurface {
             state: Mutex::new(State::default()),
             overlay: Mutex::new(None),
             hud: Mutex::new(None),
+            sprites: Mutex::new(Vec::new()),
         }
     }
 
@@ -236,11 +240,18 @@ impl VirtualSurface {
         *self.hud.lock().unwrap_or_else(PoisonError::into_inner) = hud;
     }
 
+    /// Set the sprites drawn over the game picture (keep each one at the same index while it shows: the index is its
+    /// texture slot).
+    pub fn set_sprites(&self, sprites: Vec<Sprite>) {
+        *self.sprites.lock().unwrap_or_else(PoisonError::into_inner) = sprites;
+    }
+
     /// The overlays to draw this time.
-    fn layers(&self) -> (Option<Overlay>, Option<Hud>) {
+    fn layers(&self) -> (Option<Overlay>, Option<Hud>, Vec<Sprite>) {
         (
             self.overlay.lock().unwrap_or_else(PoisonError::into_inner).clone(),
             self.hud.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            self.sprites.lock().unwrap_or_else(PoisonError::into_inner).clone(),
         )
     }
 
@@ -282,7 +293,7 @@ impl VirtualSurface {
     /// the surface in this context.
     pub fn compose(&self, ctx: usize, drawable: (u32, u32), loader: &dyn Fn(&str) -> *const c_void) {
         let Some(size) = self.size() else { return };
-        let (overlay, hud) = self.layers();
+        let (overlay, hud, sprites) = self.layers();
         self.with_gl(loader, |g, st| {
             if !st.fbos.contains_key(&ctx) {
                 return;
@@ -290,7 +301,7 @@ impl VirtualSurface {
             // SAFETY: as in `framebuffer`; the original GL state is restored before returning.
             unsafe {
                 ensure(g, st, ctx, size);
-                let layers = Layers { overlay: overlay.as_ref(), hud: hud.as_ref(), drawable };
+                let layers = Layers { overlay: overlay.as_ref(), hud: hud.as_ref(), sprites: &sprites, drawable };
                 draw(g, &mut st.shared, fit(size, drawable), &layers, 0);
             }
         });
@@ -310,7 +321,7 @@ impl VirtualSurface {
         if drawable.0 == 0 || drawable.1 == 0 {
             return None;
         }
-        let (overlay, hud) = self.layers();
+        let (overlay, hud, sprites) = self.layers();
         self.with_gl(loader, |g, st| {
             if !st.fbos.contains_key(&ctx) {
                 return None;
@@ -319,7 +330,7 @@ impl VirtualSurface {
             unsafe {
                 ensure(g, st, ctx, size);
                 let target = ensure_out(g, st, ctx, drawable)?;
-                let layers = Layers { overlay: overlay.as_ref(), hud: hud.as_ref(), drawable };
+                let layers = Layers { overlay: overlay.as_ref(), hud: hud.as_ref(), sprites: &sprites, drawable };
                 draw(g, &mut st.shared, fit(size, drawable), &layers, target);
                 let mut prev = 0;
                 (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut prev);
@@ -553,6 +564,7 @@ struct Attrib {
 struct Layers<'a> {
     overlay: Option<&'a Overlay>,
     hud: Option<&'a Hud>,
+    sprites: &'a [Sprite],
     drawable: (u32, u32),
 }
 
@@ -613,6 +625,14 @@ unsafe fn draw(g: &Gl, sh: &mut Shared, vp: Viewport, layers: &Layers, target: u
         let (x, y) = h.origin((vp.x, vp.y, vp.w, vp.h));
         let at = Viewport { x, y, w: h.overlay.width as i32, h: h.overlay.height as i32 };
         draw_overlay(g, (op, os), &mut sh.hud, &h.overlay, at);
+    }
+    if sh.sprites.len() < layers.sprites.len() {
+        sh.sprites.resize_with(layers.sprites.len(), Layer::default);
+    }
+    for (sp, layer) in layers.sprites.iter().zip(sh.sprites.iter_mut()) {
+        let (x, y) = sp.origin((vp.x, vp.y, vp.w, vp.h));
+        let at = Viewport { x, y, w: sp.overlay.width as i32, h: sp.overlay.height as i32 };
+        draw_overlay(g, (op, os), layer, &sp.overlay, at);
     }
 
     // Put everything back.

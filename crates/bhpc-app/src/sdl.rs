@@ -48,6 +48,16 @@ pub fn translate(ev: Sdl, metrics: Metrics) -> Option<Event> {
         Sdl::FingerDown { finger_id, x, y, .. } => touch(finger_id, TouchPhase::Down, x, y, metrics),
         Sdl::FingerMotion { finger_id, x, y, .. } => touch(finger_id, TouchPhase::Move, x, y, metrics),
         Sdl::FingerUp { finger_id, x, y, .. } => touch(finger_id, TouchPhase::Up, x, y, metrics),
+        Sdl::ControllerButtonDown { which, button, .. } => {
+            Event::PadButton { id: which, button: button as i32 as u8, pressed: true }
+        }
+        Sdl::ControllerButtonUp { which, button, .. } => {
+            Event::PadButton { id: which, button: button as i32 as u8, pressed: false }
+        }
+        Sdl::ControllerAxisMotion { which, axis, value, .. } => {
+            Event::PadAxis { id: which, axis: axis as i32 as u8, value }
+        }
+        Sdl::ControllerDeviceRemoved { which, .. } => Event::PadRemoved(which),
         _ => return None,
     })
 }
@@ -84,6 +94,9 @@ pub struct SdlBackend {
     window: sdl2::video::Window,
     pump: sdl2::EventPump,
     alive: Arc<AtomicBool>,
+    /// The game controller subsystem (when controllers are enabled) and the controllers opened so far.
+    controller: Option<sdl2::GameControllerSubsystem>,
+    pads: Vec<sdl2::controller::GameController>,
 }
 
 impl Drop for SdlBackend {
@@ -144,6 +157,12 @@ impl SdlBackend {
         let window = b.build().map_err(|e| e.to_string())?;
         let pump = sdl.event_pump()?;
         video.text_input().start();
+        // Every controller already plugged in is announced as an added device once the pump runs.
+        let controller = if cfg.controllers {
+            sdl.game_controller().map_err(|e| eprintln!("[sdl] no game controller support: {e}")).ok()
+        } else {
+            None
+        };
         let alive = Arc::new(AtomicBool::new(true));
         let gl = Arc::new(SdlGl {
             window: window.raw(),
@@ -151,7 +170,7 @@ impl SdlBackend {
             vsync: AtomicBool::new(true),
             surface: crate::vsurface::VirtualSurface::new(),
         });
-        Ok((SdlBackend { _sdl: sdl, audio: None, video, window, pump, alive }, gl))
+        Ok((SdlBackend { _sdl: sdl, audio: None, video, window, pump, alive, controller, pads: Vec::new() }, gl))
     }
 
     /// Open the default audio device (stereo `i16`, `rate` Hz) and start pulling samples from `fill`.
@@ -181,6 +200,15 @@ impl SdlBackend {
         self.window.set_size(width, height).is_ok()
     }
 
+    /// Open the controller at joystick index `index` (it was just plugged in, or was there at start-up).
+    fn open_pad(&mut self, index: u32) -> Option<Event> {
+        let pad = self.controller.as_ref()?.open(index).map_err(|e| eprintln!("[sdl] controller {index}: {e}")).ok()?;
+        let id = pad.instance_id();
+        eprintln!("[sdl] controller connected: {} (id {id})", pad.name());
+        self.pads.push(pad);
+        Some(Event::PadAdded(id))
+    }
+
     /// Name of the active video driver (for logs).
     pub fn driver(&self) -> &'static str {
         self.video.current_video_driver()
@@ -193,6 +221,15 @@ impl Backend for SdlBackend {
         loop {
             let ev = if wait > 0 { self.pump.wait_event_timeout(wait) } else { self.pump.poll_event() }?;
             wait = 0;
+            if let Sdl::ControllerDeviceAdded { which, .. } = ev {
+                if let Some(e) = self.open_pad(which) {
+                    return Some(e);
+                }
+                continue;
+            }
+            if let Sdl::ControllerDeviceRemoved { which, .. } = ev {
+                self.pads.retain(|p| p.instance_id() != which);
+            }
             if let Some(e) = translate(ev, self.metrics()) {
                 return Some(e);
             }
@@ -237,6 +274,11 @@ impl SdlGl {
     /// screenshots alike).
     pub fn set_hud(&self, hud: Option<crate::hud::Hud>) {
         self.surface.set_hud(hud);
+    }
+
+    /// Set the pictures drawn over the game picture at given spots (the controller cursor, messages).
+    pub fn set_sprites(&self, sprites: Vec<crate::hud::Sprite>) {
+        self.surface.set_sprites(sprites);
     }
 
     /// The window as `compose` would draw it, read back into `px` as RGBA (bottom row first); returns its size; rendered into a
@@ -496,6 +538,22 @@ mod tests {
             assert_eq!(ev(e), Some(Event::Touch { id: 7, phase, x: 400.0, y: 100.0 }));
         }
         assert_eq!(ev(Sdl::AppDidEnterBackground { timestamp: 0 }), None);
+        use sdl2::controller::{Axis, Button};
+        assert_eq!(
+            ev(Sdl::ControllerButtonDown { timestamp: 0, which: 3, button: Button::Y }),
+            Some(Event::PadButton { id: 3, button: 3, pressed: true })
+        );
+        assert_eq!(
+            ev(Sdl::ControllerButtonUp { timestamp: 0, which: 3, button: Button::DPadRight }),
+            Some(Event::PadButton { id: 3, button: 14, pressed: false })
+        );
+        assert_eq!(
+            ev(Sdl::ControllerAxisMotion { timestamp: 0, which: 3, axis: Axis::RightY, value: -5 }),
+            Some(Event::PadAxis { id: 3, axis: 3, value: -5 })
+        );
+        assert_eq!(ev(Sdl::ControllerDeviceRemoved { timestamp: 0, which: 3 }), Some(Event::PadRemoved(3)));
+        // Opening a new controller needs the backend (`poll_event`).
+        assert_eq!(ev(Sdl::ControllerDeviceAdded { timestamp: 0, which: 0 }), None);
     }
 
     /// Needs a display or `SDL_VIDEODRIVER=offscreen` with Mesa: opens a window, then drives the real GLES driver

@@ -77,4 +77,22 @@ pub enum Event {
         x: f32,
         y: f32,
     },
+    /// A game controller was connected (`id`: its instance id, stable while it stays connected).
+    PadAdded(u32),
+    /// A game controller was disconnected.
+    PadRemoved(u32),
+    /// A controller button; `button` is an `SDL_GameControllerButton` value (A = 0, B, X, Y, back, guide, start,
+    /// left stick, right stick, left shoulder, right shoulder, D-pad up, down, left, right).
+    PadButton {
+        id: u32,
+        button: u8,
+        pressed: bool,
+    },
+    /// A controller axis; `axis` is an `SDL_GameControllerAxis` value (left x, left y, right x, right y, left
+    /// trigger, right trigger), `value` SDL's raw `-32768..=32767`.
+    PadAxis {
+        id: u32,
+        axis: u8,
+        value: i16,
+    },
 }

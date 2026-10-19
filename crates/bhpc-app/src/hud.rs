@@ -1,6 +1,6 @@
-//! The heads-up FPS counter: a tiny built-in 5x7 bitmap font (digits, "FPS" and space) rendered as light text on a
-//! semi-transparent dark rounded box. The picture is premultiplied RGBA, top row first, ready to be blended over the
-//! game picture by the window (`vsurface`).
+//! What the window draws over the game picture: the FPS counter and short messages (a tiny built-in 5x7 bitmap font,
+//! light text on a semi-transparent dark rounded box) and the controller cursor ([`Sprite`]s placed anywhere on the
+//! game picture). Pictures are premultiplied RGBA, top row first, ready to be blended by the window (`vsurface`).
 
 use bhpc_gles::Overlay;
 use std::sync::Arc;
@@ -14,9 +14,9 @@ pub const TEXT: [u8; 4] = [245, 245, 245, 255];
 pub const BOX_ALPHA: f32 = 0.85;
 
 /// Rows of a glyph, the top row first, bit 4 = leftmost column. `None` for characters the font does not have
-/// (they are drawn as blanks).
+/// (they are drawn as blanks). Letters are upper case only (lower case is drawn the same).
 pub fn glyph(c: char) -> Option<[u8; 7]> {
-    Some(match c {
+    Some(match c.to_ascii_uppercase() {
         '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
         '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
         '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
@@ -30,6 +30,37 @@ pub fn glyph(c: char) -> Option<[u8; 7]> {
         'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
         'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
         'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+        'D' => [0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
+        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
+        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+        'N' => [0b10001, 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010],
+        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        'Y' => [0b10001, 0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100],
+        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+        '+' => [0, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0],
+        '.' => [0, 0, 0, 0, 0, 0b01100, 0b01100],
+        ':' => [0, 0b01100, 0b01100, 0, 0b01100, 0b01100, 0],
+        '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
+        '(' => [0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010],
+        ')' => [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
+        '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0, 0b00100],
         _ => return None,
     })
 }
@@ -168,6 +199,69 @@ pub fn fps_hud(fps: f32, serial: u64, height: u32, corner: Corner) -> Hud {
     Hud { overlay: Overlay { width: p.width, height: p.height, serial, rgba: Arc::new(p.rgba) }, margin: 4 * s, corner }
 }
 
+/// A picture placed anywhere on the game picture (the controller cursor, a message).
+#[derive(Debug, Clone)]
+pub struct Sprite {
+    pub overlay: Overlay,
+    /// Where its centre goes, as fractions of the game picture (0, 0 is the top-left corner).
+    pub at: (f32, f32),
+}
+
+impl Sprite {
+    /// The lower-left pixel of the sprite inside the game picture `(x, y, w, h)` of a GL viewport (rows counted from
+    /// the bottom).
+    pub fn origin(&self, (x, y, w, h): (i32, i32, i32, i32)) -> (i32, i32) {
+        let (ow, oh) = (self.overlay.width as f32, self.overlay.height as f32);
+        let cx = x as f32 + self.at.0 * w as f32;
+        let cy = y as f32 + (1.0 - self.at.1) * h as f32;
+        ((cx - ow / 2.0).round() as i32, (cy - oh / 2.0).round() as i32)
+    }
+}
+
+/// Cursor colours: a light frame with a dark outline (premultiplied, opaque).
+pub const CURSOR_LIGHT: [u8; 4] = [255, 236, 140, 255];
+pub const CURSOR_DARK: [u8; 4] = [20, 20, 20, 255];
+
+/// The controller cursor: the corners of a `size` x `size` pixel frame (one tile on screen) and a dot in the middle,
+/// light with a dark outline so it shows on any background.
+pub fn cursor_picture(size: u32) -> Picture {
+    let s = size.clamp(12, 512);
+    let t = (s / 16).max(2); // line thickness
+    let arm = (s / 4).max(3 * t); // corner arm length
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    let light = |x: u32, y: u32| {
+        let (ex, ey) = (x.min(s - 1 - x), y.min(s - 1 - y)); // distance from the nearest edges
+        let corner = ex >= 1 && ey >= 1 && ((ex <= t && ey <= arm) || (ey <= t && ex <= arm));
+        let (cx, cy) = (x.abs_diff(s / 2), y.abs_diff(s / 2));
+        corner || (cx < t && cy < t)
+    };
+    for y in 0..s {
+        for x in 0..s {
+            let px = if light(x, y) {
+                CURSOR_LIGHT
+            } else {
+                // The outline: next to a light pixel.
+                let near = (x.saturating_sub(1)..=(x + 1).min(s - 1))
+                    .any(|nx| (y.saturating_sub(1)..=(y + 1).min(s - 1)).any(|ny| light(nx, ny)));
+                if near {
+                    CURSOR_DARK
+                } else {
+                    continue;
+                }
+            };
+            let at = ((y * s + x) * 4) as usize;
+            rgba[at..at + 4].copy_from_slice(&px);
+        }
+    }
+    Picture { width: s, height: s, rgba }
+}
+
+/// A short message: `text` on the counter's box, `scale` as for [`hud_scale`].
+pub fn message_sprite(text: &str, scale: u32, serial: u64, at: (f32, f32)) -> Sprite {
+    let p = render_label(text, scale);
+    Sprite { overlay: Overlay { width: p.width, height: p.height, serial, rgba: Arc::new(p.rgba) }, at }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,7 +274,7 @@ mod tests {
             assert!(g.iter().any(|r| *r != 0), "{c} is not blank");
         }
         assert_eq!(glyph(' '), None);
-        assert_eq!(glyph('x'), None);
+        assert_eq!(glyph('#'), None);
         let all: Vec<_> = "0123456789FPS".chars().map(|c| glyph(c).unwrap()).collect();
         for (i, a) in all.iter().enumerate() {
             assert!(all[i + 1..].iter().all(|b| b != a), "glyphs are distinct");
@@ -259,5 +353,50 @@ mod tests {
         assert_eq!(at(Corner::TopRight), (240 + 1920 - 12 - 123, 1080 - 12 - 39));
         assert_eq!(at(Corner::BottomLeft), (252, 12));
         assert_eq!(at(Corner::BottomRight), (240 + 1920 - 12 - 123, 12));
+    }
+
+    #[test]
+    fn the_font_has_letters_and_punctuation() {
+        let set = "ABCDEFGHIJKLMNOPQRSTUVWXYZ-+.:/()!";
+        let all: Vec<_> = set.chars().filter_map(glyph).collect();
+        assert_eq!(all.len(), set.len(), "every character has a glyph");
+        for (i, a) in all.iter().enumerate() {
+            assert!(a.iter().all(|r| *r < 32) && a.iter().any(|r| *r != 0));
+            assert!(all[i + 1..].iter().all(|b| b != a), "glyphs are distinct");
+        }
+        assert_eq!(glyph('h'), glyph('H'));
+        assert_ne!(glyph('O'), glyph('0'));
+    }
+
+    #[test]
+    fn sprites_centre_on_their_spot_of_the_game_picture() {
+        let p = cursor_picture(40);
+        let s = Sprite {
+            overlay: Overlay { width: p.width, height: p.height, serial: 1, rgba: Arc::new(p.rgba) },
+            at: (0.25, 0.5),
+        };
+        // A 1000x500 picture at x 100: the centre is at x 100 + 250, y 250 from the bottom.
+        assert_eq!(s.origin((100, 0, 1000, 500)), (330, 230));
+        let top = Sprite { at: (0.5, 0.0), ..s.clone() };
+        assert_eq!(top.origin((0, 0, 800, 600)), (380, 580));
+        let m = message_sprite("HIDDEN", 2, 9, (0.5, 0.1));
+        assert_eq!((m.overlay.serial, m.at), (9, (0.5, 0.1)));
+        assert_eq!((m.overlay.width, m.overlay.height), (render_label("HIDDEN", 2).width, 26));
+    }
+
+    #[test]
+    fn the_cursor_is_corner_brackets_and_a_dot_with_an_outline() {
+        let p = cursor_picture(32);
+        assert_eq!((p.width, p.height), (32, 32));
+        // Corners: light 1 px in from the edge, outlined outside; the middle of an edge is empty.
+        assert_eq!(p.pixel(1, 1), CURSOR_LIGHT);
+        assert_eq!(p.pixel(0, 1), CURSOR_DARK);
+        assert_eq!(p.pixel(30, 30), CURSOR_LIGHT);
+        assert_eq!(p.pixel(16, 1), [0, 0, 0, 0]);
+        assert_eq!(p.pixel(16, 16), CURSOR_LIGHT);
+        assert_eq!(p.pixel(8, 16), [0, 0, 0, 0]);
+        // Sizes are clamped.
+        assert_eq!(cursor_picture(2).width, 12);
+        assert_eq!(cursor_picture(9999).width, 512);
     }
 }

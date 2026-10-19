@@ -38,10 +38,18 @@ pub struct WindowConfig {
     pub resizable: bool,
     /// Request a high-DPI drawable.
     pub high_dpi: bool,
+    /// Open game controllers and report their input.
+    pub controllers: bool,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
-        WindowConfig { title: "The Blockheads".into(), size: (1280, 720), resizable: true, high_dpi: true }
+        WindowConfig {
+            title: "The Blockheads".into(),
+            size: (1280, 720),
+            resizable: true,
+            high_dpi: true,
+            controllers: true,
+        }
     }
 }
