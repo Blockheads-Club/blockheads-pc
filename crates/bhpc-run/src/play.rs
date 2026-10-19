@@ -76,6 +76,10 @@ pub struct PlayConfig {
     pub fullscreen: bool,
     /// The game may use vsync.
     pub vsync: bool,
+    /// Present at most this many frames per second (`None`: no cap besides vsync).
+    pub fps_limit: Option<u32>,
+    /// Draw the FPS counter over the game picture.
+    pub show_fps: bool,
     /// Window title.
     pub title: String,
     /// What the buttons, wheel and keys do.
@@ -106,6 +110,8 @@ impl PlayConfig {
             shot_dir: PathBuf::from("."),
             fullscreen: false,
             vsync: true,
+            fps_limit: None,
+            show_fps: false,
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
             embed: None,
@@ -226,6 +232,8 @@ struct Hooks {
     embed: Option<Mutex<EmbedOut>>,
     /// The SDL window, for the read-back that does not depend on the window's own surface (in-window mode).
     sdl: Arc<bhpc_app::sdl::SdlGl>,
+    /// The frame-rate cap and the FPS counter.
+    pace: Mutex<crate::pace::SwapPacer>,
 }
 
 /// Frame file and scratch buffer of the in-window mode.
@@ -323,6 +331,12 @@ impl Hooks {
 
     /// Count a presented frame (and take the screenshot when it is due); call right before the swap.
     fn before_swap(&self) {
+        // The frame is drawn: wait for its slot under the frame-rate cap (other guest threads keep running), then
+        // present it. The game measures real time between frames, so a capped game just sees longer frames.
+        let height = self.window.surface_size().1.min(self.window.drawable_size().1);
+        if let Some(hud) = self.pace.lock().unwrap_or_else(PoisonError::into_inner).frame(height) {
+            self.sdl.set_hud(Some(hud));
+        }
         // The Java views (popups) go over the game's frame, also in screenshots.
         let vm = self.flags.vm.lock().unwrap_or_else(PoisonError::into_inner).clone();
         if let Some(vm) = vm {
@@ -718,6 +732,7 @@ fn boot(
         None => None,
     });
     let (shot, shot_at, check_gl) = (cfg.shot.clone(), cfg.shot_at, cfg.check_gl);
+    let (fps_limit, show_fps) = (cfg.fps_limit, cfg.show_fps);
     let mut sess = Session::open_setup(&icfg, Box::new(std::io::stdout()), None, &mut |cpu, st| {
         let primary = window
             .create_context(None)
@@ -746,6 +761,7 @@ fn boot(
             shot_at,
             overlay: crate::overlay::OverlayFeed::default(),
             sdl: sdl.clone(),
+            pace: Mutex::new(crate::pace::SwapPacer::new(lock(st).sched.clone(), fps_limit, show_fps)),
             embed: embed_out.lock().unwrap_or_else(PoisonError::into_inner).take().map(Mutex::new),
         });
         // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.

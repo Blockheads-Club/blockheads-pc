@@ -56,6 +56,9 @@ struct FakeClock {
     sleeps: Vec<Duration>,
     /// Work done per frame (added to the clock when polled for a frame).
     tick: Duration,
+    /// Busy-wait steps; each one advances the clock by `spin_step` (100 µs when zero).
+    spins: u32,
+    spin_step: Duration,
 }
 
 impl Clock for FakeClock {
@@ -65,6 +68,10 @@ impl Clock for FakeClock {
     fn sleep(&mut self, d: Duration) {
         self.sleeps.push(d);
         self.t += d;
+    }
+    fn spin(&mut self) {
+        self.spins += 1;
+        self.t += if self.spin_step.is_zero() { Duration::from_micros(100) } else { self.spin_step };
     }
 }
 
@@ -301,6 +308,81 @@ fn small_types() {
     let t0 = c.now();
     c.sleep(Duration::from_millis(2));
     assert!(c.now() - t0 >= Duration::from_millis(2));
+    // The default precise wait (sleep, then spin) on the real clock.
+    let t1 = c.now() + Duration::from_millis(3);
+    c.sleep_until(t1);
+    assert!(c.now() >= t1);
+    c.sleep_until(Duration::ZERO);
     let c = FakeClock { tick: Duration::ZERO, ..Default::default() };
     assert_eq!(c.tick, Duration::ZERO);
+}
+
+#[test]
+fn precise_waits_sleep_most_of_the_way_then_spin() {
+    let mut c = FakeClock::default();
+    c.sleep_until(Duration::from_millis(10));
+    assert_eq!(c.sleeps, [Duration::from_millis(10) - pacer::SPIN_MARGIN]);
+    assert_eq!(c.spins, 15, "the last 1.5 ms in 100 µs steps");
+    assert_eq!(c.t, Duration::from_millis(10));
+    // A short wait only spins; a past deadline returns at once.
+    let mut c = FakeClock::default();
+    c.sleep_until(Duration::from_micros(300));
+    assert!(c.sleeps.is_empty());
+    assert_eq!(c.spins, 3);
+    c.sleep_until(Duration::ZERO);
+    assert_eq!(c.spins, 3);
+    // An oversleeping OS: the spin phase absorbs nothing and the wait still ends past the deadline.
+    let mut c = FakeClock { spin_step: Duration::from_millis(1), ..Default::default() };
+    c.sleep_until(Duration::from_millis(5));
+    assert!(c.t >= Duration::from_millis(5) && c.t < Duration::from_millis(6));
+}
+
+#[test]
+fn a_frame_cap_holds_its_rate_on_an_absolute_schedule() {
+    for (fps, work_ms) in [(30u32, 5u64), (60, 3), (144, 1)] {
+        let mut clock = FakeClock::default();
+        let mut p = FramePacer::new(Some(fps));
+        let mut counter = FpsCounter::default();
+        let mut rates = Vec::new();
+        let mut presents = Vec::new();
+        for _ in 0..(fps * 4) {
+            clock.t += Duration::from_millis(work_ms);
+            p.end_frame(&mut clock);
+            presents.push(clock.t);
+            rates.extend(counter.frame(clock.t));
+        }
+        // Never faster than the cap: every gap is at least one period (within the fake spin step).
+        let period = Duration::from_secs_f64(1.0 / fps as f64);
+        for w in presents.windows(2) {
+            assert!(w[1] - w[0] + Duration::from_micros(100) >= period, "{fps}: gap {:?}", w[1] - w[0]);
+        }
+        // No drift: frame n is presented within one spin step of start + n periods.
+        let n = presents.len() - 1;
+        let ideal = presents[0] + period * n as u32;
+        assert!(presents[n] >= ideal && presents[n] - ideal <= Duration::from_micros(100), "{fps}: drifted");
+        assert!(rates.len() >= 7, "{fps}: about two updates a second, got {}", rates.len());
+        for r in &rates[1..] {
+            assert!((r - fps as f32).abs() < 0.6, "{fps}: measured {r}");
+        }
+    }
+}
+
+#[test]
+fn the_fps_counter_reports_about_twice_a_second() {
+    let mut c = FpsCounter::default();
+    let ms = Duration::from_millis;
+    assert_eq!(c.frame(ms(0)), None, "the first frame starts the window");
+    for i in 1..25 {
+        assert_eq!(c.frame(ms(i * 20)), None);
+    }
+    assert_eq!(c.frame(ms(500)), Some(50.0));
+    // The next window starts at the report.
+    assert_eq!(c.frame(ms(600)), None);
+    assert_eq!(c.frame(ms(1000)), Some(4.0));
+    // A stall reports its real rate; a zero window is clamped to 1 ms.
+    assert_eq!(c.frame(ms(3000)), Some(0.5));
+    let mut z = FpsCounter::new(Duration::ZERO);
+    assert_eq!(z.frame(ms(0)), None);
+    assert_eq!(z.frame(ms(0)), None);
+    assert!((z.frame(ms(1)).unwrap() - 2000.0).abs() < 0.01);
 }

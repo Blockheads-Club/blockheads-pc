@@ -17,7 +17,9 @@ fn flags_default_to_the_plain_desktop_window() {
             vsync: true,
             title: None,
             bindings: bhpc_input::Bindings::default(),
-            embed: None
+            embed: None,
+            fps_limit: None,
+            show_fps: false
         }
     );
 }
@@ -27,6 +29,9 @@ fn flags_carry_the_launcher_settings() {
     let f = parse_play_flags(&s(&[
         "--fullscreen",
         "--no-vsync",
+        "--fps-limit",
+        "30",
+        "--show-fps",
         "--title",
         "Blockheads PC · Playing",
         "--embed",
@@ -40,7 +45,10 @@ fn flags_carry_the_launcher_settings() {
         "touch=Right",
     ]))
     .unwrap();
-    assert!(f.fullscreen && !f.vsync);
+    assert!(f.fullscreen && !f.vsync && f.show_fps);
+    assert_eq!(f.fps_limit, Some(30));
+    // The first --fps-limit wins (explicit flags come before the config's); 0 means no cap.
+    assert_eq!(parse_play_flags(&s(&["--fps-limit", "0", "--fps-limit", "60"])).unwrap().fps_limit, None);
     assert_eq!(f.title.as_deref(), Some("Blockheads PC · Playing"));
     assert_eq!(f.embed, Some("/run/f".into()));
     assert_eq!(f.bindings.touch.input, Input::Mouse(bhpc_input::MouseButton::Middle));
@@ -53,6 +61,8 @@ fn bad_flags_are_reported() {
     assert!(parse_play_flags(&s(&["--bind"])).is_ok(), "a dangling --bind has nothing to apply");
     assert!(parse_play_flags(&s(&["--title"])).unwrap_err().contains("--title"));
     assert!(parse_play_flags(&s(&["--embed"])).unwrap_err().contains("--embed"));
+    assert!(parse_play_flags(&s(&["--fps-limit"])).unwrap_err().contains("--fps-limit"));
+    assert!(parse_play_flags(&s(&["--fps-limit", "fast"])).unwrap_err().contains("--fps-limit"));
 }
 
 #[test]

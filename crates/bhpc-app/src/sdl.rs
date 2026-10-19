@@ -233,6 +233,12 @@ impl SdlGl {
         self.vsync.store(allowed, Ordering::SeqCst);
     }
 
+    /// Set (or clear) the FPS counter blended into the top-left corner of the game picture (window, read-back and
+    /// screenshots alike).
+    pub fn set_hud(&self, hud: Option<crate::hud::Hud>) {
+        self.surface.set_hud(hud);
+    }
+
     /// The window as `compose` would draw it, read back into `px` as RGBA (bottom row first); returns its size; rendered into a
     /// texture of the drawable's size, so it is right even when the window's own surface is not (the offscreen video
     /// driver keeps the surface size it was created with). Needs the game's context to be current.

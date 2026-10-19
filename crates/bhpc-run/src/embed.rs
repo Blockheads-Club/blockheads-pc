@@ -20,6 +20,10 @@ pub struct PlayFlags {
     pub bindings: Bindings,
     /// Render for the launcher window instead of a window of our own: the frame file (`--embed FILE`).
     pub embed: Option<PathBuf>,
+    /// Present at most this many frames per second (`--fps-limit N`; absent or 0: no cap).
+    pub fps_limit: Option<u32>,
+    /// Draw the FPS counter over the game picture (`--show-fps`).
+    pub show_fps: bool,
 }
 
 /// Reads the flags above from a command line.
@@ -38,6 +42,11 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
         title: value("--title").map(|v| v.ok_or("--title needs a text")).transpose()?,
         bindings: keys.to_bindings(),
         embed: value("--embed").map(|v| v.map(PathBuf::from).ok_or("--embed needs a file")).transpose()?,
+        fps_limit: value("--fps-limit")
+            .map(|v| v.and_then(|n| n.parse::<u32>().ok()).ok_or("--fps-limit needs a number (0 = no limit)"))
+            .transpose()?
+            .filter(|n| *n > 0),
+        show_fps: args.iter().any(|a| a == "--show-fps"),
     })
 }
 

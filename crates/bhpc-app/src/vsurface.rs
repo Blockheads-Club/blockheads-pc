@@ -5,7 +5,8 @@
 //! between the contexts of the window (they share objects); framebuffer objects are not, so each context gets its own
 //! that points at the shared storage.
 
-use crate::surface::{fit, pack, unpack};
+use crate::hud::Hud;
+use crate::surface::{fit, pack, unpack, Viewport};
 use bhpc_gles::Overlay;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CString};
@@ -144,6 +145,14 @@ gl_table! {
     glGetVertexAttribPointerv: fn(u32, u32, *mut *mut c_void);
 }
 
+/// A texture holding an [`Overlay`]: its name, size and the serial of the pixels it holds.
+#[derive(Default)]
+struct Layer {
+    tex: u32,
+    size: (u32, u32),
+    serial: Option<u64>,
+}
+
 /// Storage shared by all contexts.
 #[derive(Default)]
 struct Shared {
@@ -160,10 +169,10 @@ struct Shared {
     sampler: i32,
     overlay_program: u32,
     overlay_sampler: i32,
-    /// The overlay texture, its size and the serial of the pixels it holds.
-    overlay_tex: u32,
-    overlay_size: (u32, u32),
-    overlay_serial: Option<u64>,
+    /// The Java views picture (over the whole drawable).
+    overlay: Layer,
+    /// The FPS counter (top-left corner of the game picture).
+    hud: Layer,
     /// Colour texture of the pixel read-back target ([`VirtualSurface::compose_read`]), its size and a number that
     /// changes when it was recreated.
     out_tex: u32,
@@ -189,6 +198,7 @@ pub struct VirtualSurface {
     gl: Mutex<Option<Gl>>,
     state: Mutex<State>,
     overlay: Mutex<Option<Overlay>>,
+    hud: Mutex<Option<Hud>>,
 }
 
 fn cstr(s: &str) -> CString {
@@ -202,6 +212,7 @@ impl VirtualSurface {
             gl: Mutex::new(None),
             state: Mutex::new(State::default()),
             overlay: Mutex::new(None),
+            hud: Mutex::new(None),
         }
     }
 
@@ -212,6 +223,19 @@ impl VirtualSurface {
     /// Set (or clear) the picture [`VirtualSurface::compose`] blends over the whole drawable.
     pub fn set_overlay(&self, overlay: Option<Overlay>) {
         *self.overlay.lock().unwrap_or_else(PoisonError::into_inner) = overlay;
+    }
+
+    /// Set (or clear) the FPS counter drawn in the top-left corner of the game picture.
+    pub fn set_hud(&self, hud: Option<Hud>) {
+        *self.hud.lock().unwrap_or_else(PoisonError::into_inner) = hud;
+    }
+
+    /// The overlays to draw this time.
+    fn layers(&self) -> (Option<Overlay>, Option<Hud>) {
+        (
+            self.overlay.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            self.hud.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+        )
     }
 
     pub fn size(&self) -> Option<(u32, u32)> {
@@ -252,7 +276,7 @@ impl VirtualSurface {
     /// the surface in this context.
     pub fn compose(&self, ctx: usize, drawable: (u32, u32), loader: &dyn Fn(&str) -> *const c_void) {
         let Some(size) = self.size() else { return };
-        let overlay = self.overlay.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let (overlay, hud) = self.layers();
         self.with_gl(loader, |g, st| {
             if !st.fbos.contains_key(&ctx) {
                 return;
@@ -260,7 +284,8 @@ impl VirtualSurface {
             // SAFETY: as in `framebuffer`; the original GL state is restored before returning.
             unsafe {
                 ensure(g, st, ctx, size);
-                draw(g, &mut st.shared, fit(size, drawable), overlay.as_ref().map(|o| (o, drawable)), 0);
+                let layers = Layers { overlay: overlay.as_ref(), hud: hud.as_ref(), drawable };
+                draw(g, &mut st.shared, fit(size, drawable), &layers, 0);
             }
         });
     }
@@ -279,7 +304,7 @@ impl VirtualSurface {
         if drawable.0 == 0 || drawable.1 == 0 {
             return None;
         }
-        let overlay = self.overlay.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let (overlay, hud) = self.layers();
         self.with_gl(loader, |g, st| {
             if !st.fbos.contains_key(&ctx) {
                 return None;
@@ -288,7 +313,8 @@ impl VirtualSurface {
             unsafe {
                 ensure(g, st, ctx, size);
                 let target = ensure_out(g, st, ctx, drawable)?;
-                draw(g, &mut st.shared, fit(size, drawable), overlay.as_ref().map(|o| (o, drawable)), target);
+                let layers = Layers { overlay: overlay.as_ref(), hud: hud.as_ref(), drawable };
+                draw(g, &mut st.shared, fit(size, drawable), &layers, target);
                 let mut prev = 0;
                 (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut prev);
                 (g.glBindFramebuffer)(FRAMEBUFFER, target);
@@ -517,14 +543,16 @@ struct Attrib {
     pointer: usize,
 }
 
-/// Draw the surface texture into framebuffer `target` (0: the window) inside `vp`, restoring every piece of state it touches.
-unsafe fn draw(
-    g: &Gl,
-    sh: &mut Shared,
-    vp: crate::surface::Viewport,
-    overlay: Option<(&Overlay, (u32, u32))>,
-    target: u32,
-) {
+/// What goes over the game picture, and the size of the drawable it is composed into.
+struct Layers<'a> {
+    overlay: Option<&'a Overlay>,
+    hud: Option<&'a Hud>,
+    drawable: (u32, u32),
+}
+
+/// Draw the surface texture into framebuffer `target` (0: the window) inside `vp`, then the overlays, restoring every
+/// piece of state it touches.
+unsafe fn draw(g: &Gl, sh: &mut Shared, vp: Viewport, layers: &Layers, target: u32) {
     let (mut fb, mut prog, mut buf, mut tex, mut unit) = (0, 0, 0, 0, 0);
     let (mut view, mut mask, mut clear) = ([0i32; 4], [0u8; 4], [0f32; 4]);
     (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut fb);
@@ -569,8 +597,16 @@ unsafe fn draw(
     (g.glEnableVertexAttribArray)(0);
     (g.glEnableVertexAttribArray)(1);
     (g.glDrawArrays)(TRIANGLE_STRIP, 0, 4);
-    if let Some((ov, drawable)) = overlay {
-        draw_overlay(g, sh, ov, drawable);
+    let (op, os) = (sh.overlay_program, sh.overlay_sampler);
+    if let Some(ov) = layers.overlay {
+        let full = Viewport { x: 0, y: 0, w: layers.drawable.0 as i32, h: layers.drawable.1 as i32 };
+        draw_overlay(g, (op, os), &mut sh.overlay, ov, full);
+    }
+    if let Some(h) = layers.hud {
+        // One texel per pixel at the game picture's top-left corner (GL counts rows from the bottom).
+        let (w, ht, m) = (h.overlay.width as i32, h.overlay.height as i32, h.margin as i32);
+        let at = Viewport { x: vp.x + m, y: vp.y + vp.h - m - ht, w, h: ht };
+        draw_overlay(g, (op, os), &mut sh.hud, &h.overlay, at);
     }
 
     // Put everything back.
@@ -607,25 +643,26 @@ unsafe fn draw(
     (g.glBindFramebuffer)(FRAMEBUFFER, fb as u32);
 }
 
-/// Blend the overlay picture over the whole drawable. Runs inside [`draw`], with the quad's buffer and attributes set
-/// up and framebuffer 0 bound; changes the program, texture, viewport, blend state (restored by the caller, except the
-/// blend function which is restored here).
-unsafe fn draw_overlay(g: &Gl, sh: &mut Shared, ov: &Overlay, drawable: (u32, u32)) {
+/// Blend an overlay picture into `at` (the whole drawable for the Java views, a corner for the FPS counter) with
+/// `program` (the overlay program and its sampler), keeping its texture in `layer`. Runs inside [`draw`], with the
+/// quad's buffer and attributes set up and the target framebuffer bound; changes the program, texture, viewport, blend
+/// state (restored by the caller, except the blend function which is restored here).
+unsafe fn draw_overlay(g: &Gl, program: (u32, i32), layer: &mut Layer, ov: &Overlay, at: Viewport) {
     let (w, h) = (ov.width as usize, ov.height as usize);
-    if w == 0 || h == 0 || ov.rgba.len() != w * h * 4 || sh.overlay_program == 0 {
+    if w == 0 || h == 0 || ov.rgba.len() != w * h * 4 || program.0 == 0 {
         return;
     }
-    if sh.overlay_tex == 0 {
-        (g.glGenTextures)(1, &mut sh.overlay_tex);
+    if layer.tex == 0 {
+        (g.glGenTextures)(1, &mut layer.tex);
     }
-    (g.glBindTexture)(TEXTURE_2D, sh.overlay_tex);
-    if sh.overlay_serial != Some(ov.serial) || sh.overlay_size != (ov.width, ov.height) {
+    (g.glBindTexture)(TEXTURE_2D, layer.tex);
+    if layer.serial != Some(ov.serial) || layer.size != (ov.width, ov.height) {
         // Rows go bottom first in GL.
         let mut flipped = Vec::with_capacity(ov.rgba.len());
         for row in ov.rgba.chunks_exact(w * 4).rev() {
             flipped.extend_from_slice(row);
         }
-        if sh.overlay_size != (ov.width, ov.height) || sh.overlay_serial.is_none() {
+        if layer.size != (ov.width, ov.height) || layer.serial.is_none() {
             (g.glTexImage2D)(
                 TEXTURE_2D,
                 0,
@@ -648,16 +685,16 @@ unsafe fn draw_overlay(g: &Gl, sh: &mut Shared, ov: &Overlay, drawable: (u32, u3
         } else {
             (g.glTexSubImage2D)(TEXTURE_2D, 0, 0, 0, w as i32, h as i32, RGBA, UNSIGNED_BYTE, flipped.as_ptr().cast());
         }
-        sh.overlay_serial = Some(ov.serial);
-        sh.overlay_size = (ov.width, ov.height);
+        layer.serial = Some(ov.serial);
+        layer.size = (ov.width, ov.height);
     }
     let mut blend = [0i32; 4];
     for (i, p) in [BLEND_SRC_RGB, BLEND_DST_RGB, BLEND_SRC_ALPHA, BLEND_DST_ALPHA].into_iter().enumerate() {
         (g.glGetIntegerv)(p, &mut blend[i]);
     }
-    (g.glViewport)(0, 0, drawable.0 as i32, drawable.1 as i32);
-    (g.glUseProgram)(sh.overlay_program);
-    (g.glUniform1i)(sh.overlay_sampler, 0);
+    (g.glViewport)(at.x, at.y, at.w, at.h);
+    (g.glUseProgram)(program.0);
+    (g.glUniform1i)(program.1, 0);
     (g.glEnable)(BLEND);
     (g.glBlendFuncSeparate)(ONE, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
     (g.glDrawArrays)(TRIANGLE_STRIP, 0, 4);

@@ -5,12 +5,14 @@
 //! * Two modes: `render_in_loop` (this thread renders, used by tests and the first-frame milestone) or event
 //!   pump only (the guest's GLThread renders through `bhpc-gles` and the loop forwards input with
 //!   [`ForwardHandler`]).
+//! * [`hud`] renders the optional FPS counter that the window blends over the game picture.
 //! * The SDL2 backend (`sdl` feature) creates a GLES 2.0 window and implements `bhpc_gles::GlWindow`.
 //!
 //! Everything except the SDL glue is platform independent and tested headlessly with a fake backend.
 
 pub mod app;
 pub mod event;
+pub mod hud;
 pub mod metrics;
 pub mod pacer;
 #[cfg(feature = "sdl")]
@@ -25,7 +27,7 @@ mod tests_app;
 pub use app::{App, AppOptions, Backend, Flow, ForwardHandler, Frame, Handler, RunStats};
 pub use event::{Event, Key, Mods, MouseButton, TouchPhase};
 pub use metrics::Metrics;
-pub use pacer::{Clock, FramePacer, FrameTiming, SystemClock};
+pub use pacer::{Clock, FpsCounter, FramePacer, FrameTiming, SystemClock};
 
 /// Window creation parameters.
 #[derive(Debug, Clone)]

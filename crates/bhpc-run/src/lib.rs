@@ -9,6 +9,7 @@ pub mod input;
 pub mod mainq;
 pub mod mmapio;
 pub mod overlay;
+pub mod pace;
 #[cfg(feature = "play")]
 pub mod play;
 pub mod png;
