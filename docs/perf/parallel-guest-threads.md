@@ -1,7 +1,8 @@
 # Parallel guest threads
 
-Status: implemented behind a flag, **off by default** (`--parallel-guest` / `BHPC_PARALLEL_GUEST=1` turns it on,
-`--serial-guest` / `BHPC_PARALLEL_GUEST=0` forces the old scheduler). See "Results" for why it is not the default yet.
+Status: **on by default**. `--serial-guest` / `BHPC_PARALLEL_GUEST=0` (the launcher's "Run game threads in
+parallel" switch, Window & graphics, off) bring back the old scheduler for troubleshooting; `--parallel-guest` is still
+accepted. See "Results" and "Turning it on by default".
 
 ## Before: the baton
 
@@ -33,7 +34,7 @@ deadlock check counts exactly the waiters without a deadline that nothing has wo
 epoch"). The pthread HLE uses the mutex / condition variable / futex word / once control / rwlock / thread handle as
 key. This alone removes the idle workers' CPU burn, in the serial mode too.
 
-### 2. The baton becomes a host lock (`--parallel-guest`)
+### 2. The baton becomes a host lock (parallel mode)
 
 `bhpc_cpu::HostGate` is a hook the CPU calls around guest code: `Cpu::run` gives the gate up before it enters the JIT
 and takes it back when the JIT returns; the `svc` callback takes it before a thunk and gives it up after. A thread
@@ -42,7 +43,8 @@ cores. `Sched` implements the gate (`sched::enable_parallel`, called by `bhpc-ru
 
 * the lock is an atomic owner word with a short spin (256 iterations, yielding every 64) and then parking on a
   condition variable. It is not FIFO: a convoy of hand-overs at every thunk would be much slower;
-* `yield_now` releases only when another thread wants the lock, and waits until it got it;
+* `yield_now` releases only when another thread wants the lock, and waits until one got it (no time limit: a
+  yielder that gave up and took the lock back could keep it for good, see "Turning it on by default");
 * blocking (`wait_on`) releases the lock, sleeps, and takes it back; a host thread that does not hold it (the OpenSL ES
   pump, which drives its own guest CPU) is left alone (`leave` returns false), so it no longer races the guest threads
   in host code either: its thunks now take the lock;
@@ -132,7 +134,52 @@ seconds are the steadier signal.
   does not show a gain that stands out of the noise here: The Blockheads does almost all of its work on its main
   thread (game logic and GL), so there is little to run in parallel, and what is gained is partly eaten by host-lock
   traffic (`pthread_mutex_lock/unlock` alone are ~2.5 M calls per run) and lock-holder preemption on an overloaded
-  host. That is why the flag stays off by default.
+  host. That is why the flag first stayed off by default.
+
+## Turning it on by default
+
+Done on a quiet host (load average 4-10, mostly other desktop programs), same binary for both modes.
+
+Stability, parallel mode:
+
+* 10/10 boots to the menu (screenshot of the menu, exit 0).
+* 5 scripted sessions under Xvfb of 6-9 minutes each (about 3.5 minutes in a first world, then about 2 in a second
+  one): warp in, skip the tutorial, walk, dig, select an item and place, open the blockhead's inventory and the
+  portal's crafting, pause and resume, pan; then pause, "Exit to menu" (the world is saved) and create and enter
+  another world. All exited normally; no deadlock, no stall in the frame times (max frame 0.6 s, world creation).
+  "Re-entering" means a new world: saved worlds are not listed on the world carousel in either mode, also with
+  older builds (`--serial-guest` and the build before the parallel work show the same), a separate issue.
+* The embedded path (`--embed` with a reader that takes frames like the launcher, EGL, 1024x768): one short run
+  and one 6-minute session with the same script, exit 0.
+* `cargo test --release -p bhpc-cpu -p bhpc-bionic -p bhpc-run` three times in a row, plus the ignored APK tests.
+  This found one hang: `sched::tests::the_parallel_host_lock` hung in about 1 of 20 runs under load (7/150 in a
+  loop). `yield_now` waited at most 256 `sched_yield`s for the contender to take the lock and then took it back; the
+  woken contender, slow to be scheduled on a busy host, then parked again behind a holder that kept the lock (the test
+  joins it). In the game a yielder gives the lock up again at its next guest code, so it cost latency there rather
+  than a hang, but the hand-over did not do what it promised. The wait now lasts until a contender has the lock (every
+  contender keeps trying until it does). 0 hangs in 550 runs since, and the suites passed three times.
+
+Measurement: `bench.script` as above (5 s menu, create a world, 25 s in it), `--unlock-fps --fps-limit 0 --no-vsync`,
+Xvfb/llvmpipe, five interleaved rounds of `--serial-guest` / default, medians (range):
+
+| median of 5 | serial | parallel |
+| --- | --- | --- |
+| world created (s from the last click to the popup) | 0.6 | 0.6 |
+| menu + world creation FPS | 79.3 (74-87) | 80.9 (66-89) |
+| menu + world creation frame time p50 / p99 (ms) | 10.2 / 26.6 | 10.8 / 31.2 |
+| world FPS | 91.5 (78-99) | 93.0 (83-99) |
+| world frame time p50 / p99 (ms) | 9.9 / 29.9 | 10.1 / 30.2 |
+| CPU of the guest threads (s per run) | 38.5 | 39.3 |
+| CPU of the whole process (s per run) | 341 | 346 |
+| runs reaching the world | 5/5 | 5/5 |
+
+* On a quiet host the two modes are equal within the run-to-run spread. The world popup comes up within the
+  script's 0.6 s poll in every run, so that number cannot tell them apart. Most of the process CPU is llvmpipe
+  rendering uncapped frames. The guest threads use about 0.5 core in both modes, so there is little left to
+  run in parallel (as above).
+* Parallel mode is the default because it is as stable as the serial one in everything above. It is the basis for the
+  remaining work (gate-free GL and heap), and with real GPU drivers more of the frame is guest work. The launcher's
+  switch and `--serial-guest` stay for troubleshooting.
 
 ## Remaining work
 
@@ -140,5 +187,4 @@ seconds are the steadier signal.
   stay gated because the frame hook delivers input natives), `malloc`/`free` (one `State` section each), `vsnprintf`,
   `qsort`/`bsearch`.
 * Split the single `State` mutex: gate-free functions now contend on it.
-* Run the long-session stress (hours in a world) and a TSan build of the runner on an idle machine, then consider
-  turning the flag on by default.
+* Run a long-session stress (hours in a world) and a TSan build of the runner on an idle machine.
