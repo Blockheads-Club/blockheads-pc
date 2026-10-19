@@ -6,6 +6,7 @@ pub mod dl;
 pub mod embed;
 pub mod fpsunlock;
 pub mod framestats;
+pub mod gamespeed;
 pub mod input;
 pub mod mainq;
 pub mod mmapio;
@@ -218,6 +219,8 @@ mod tests_dl;
 mod tests_embed;
 #[cfg(test)]
 mod tests_fpsunlock;
+#[cfg(test)]
+mod tests_gamespeed;
 #[cfg(test)]
 mod tests_input;
 #[cfg(test)]

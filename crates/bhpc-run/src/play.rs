@@ -84,6 +84,8 @@ pub struct PlayConfig {
     pub fps_position: bhpc_app::hud::Corner,
     /// Let the game draw at every display refresh instead of every second one (`fpsunlock`).
     pub unlock_fps: bool,
+    /// World speed multiplier, single-player only (`gamespeed`; 1: no hook).
+    pub game_speed: f64,
     /// Window title.
     pub title: String,
     /// What the buttons, wheel and keys do.
@@ -118,6 +120,7 @@ impl PlayConfig {
             show_fps: false,
             fps_position: bhpc_app::hud::Corner::TopLeft,
             unlock_fps: false,
+            game_speed: 1.0,
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
             embed: None,
@@ -819,6 +822,12 @@ fn boot(
             Err(e) => eprintln!("[play] cannot unlock the 30 FPS cap: {e}"),
         }
     }
+    if cfg.game_speed != 1.0 {
+        match game_speed(&mut sess, cfg.game_speed) {
+            Ok(()) => eprintln!("[play] game speed {}x (single-player)", cfg.game_speed),
+            Err(e) => eprintln!("[play] cannot change the game speed: {e}"),
+        }
+    }
     for f in &cfg.trace_fn {
         if let Err(e) = hook_trace(&mut sess, f) {
             eprintln!("[play] cannot trace {f}: {e}");
@@ -1343,6 +1352,27 @@ fn unlock_fps(sess: &mut Session) -> Result<usize, String> {
     })?;
     sess.cpu.clear_cache();
     Ok(patched)
+}
+
+/// The "Game speed" option (see `gamespeed`): scale the steps `-[World update:accurateDT:pinchScale:dragInProgress:]`
+/// gets while the world is not part of a multiplayer game.
+fn game_speed(sess: &mut Session, speed: f64) -> Result<(), String> {
+    let export = |name: &str| sess.linker.modules().iter().find_map(|m| m.export(name)).ok_or(format!("no {name}"));
+    let class = export("OBJC_CLASS_$_World")?;
+    let (client, server) = (export("OBJC_IVAR_$_World.client")?, export("OBJC_IVAR_$_World.server")?);
+    let sel = "update:accurateDT:pinchScale:dragInProgress:";
+    let imp = crate::fpsunlock::find_method(sess.cpu.mem(), class, sel, false).ok_or(format!("no -[World {sel}]"))?;
+    hook_at(sess, imp, "-[World update:accurateDT:pinchScale:dragInProgress:]", move |c| {
+        let ivar = |c: &Cpu, at: u32| {
+            let off = c.mem().read_u32(at).unwrap_or(0);
+            c.mem().read_u32(c.reg(0).wrapping_add(off)).unwrap_or(0)
+        };
+        let (cl, sv) = (ivar(c, client), ivar(c, server));
+        for r in [2, 3] {
+            let v = crate::gamespeed::scaled_step(c.reg(r), speed, cl, sv);
+            c.set_reg(r, v);
+        }
+    })
 }
 
 /// Log the selector of every Objective-C method-cache miss (`lookUpMethod`), once per (class, selector).

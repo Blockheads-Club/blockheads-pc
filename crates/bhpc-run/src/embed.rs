@@ -28,6 +28,8 @@ pub struct PlayFlags {
     pub fps_position: bhpc_app::hud::Corner,
     /// Lift the game's 30 FPS cap (`--unlock-fps`, see `fpsunlock`).
     pub unlock_fps: bool,
+    /// World speed multiplier (`--game-speed F`, default 1: untouched; see `gamespeed`).
+    pub game_speed: f64,
 }
 
 /// Reads the flags above from a command line.
@@ -56,6 +58,15 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             .transpose()?
             .unwrap_or_default(),
         unlock_fps: args.iter().any(|a| a == "--unlock-fps"),
+        game_speed: value("--game-speed")
+            .map(|v| {
+                v.as_deref().and_then(crate::gamespeed::parse_speed).ok_or_else(|| {
+                    let (lo, hi) = crate::gamespeed::GAME_SPEED_RANGE;
+                    format!("--game-speed needs a number from {lo} to {hi}")
+                })
+            })
+            .transpose()?
+            .unwrap_or(1.0),
     })
 }
 
