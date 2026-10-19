@@ -27,6 +27,9 @@ pub struct WindowOptions {
     pub show_fps: bool,
     /// Present at most this many frames per second (0 = no cap; with vsync on, the lower of the two applies).
     pub fps_limit: u32,
+    /// Lift the game's own 30 FPS cap (it asks for every second refresh of a 60 Hz display); the game then draws as
+    /// often as `fps_limit` and vsync allow. Its simulation runs on measured time, so it does not run faster.
+    pub unlock_fps: bool,
 }
 
 impl Default for WindowOptions {
@@ -39,6 +42,7 @@ impl Default for WindowOptions {
             ui_scale: 1.0,
             show_fps: false,
             fps_limit: 60,
+            unlock_fps: false,
         }
     }
 }

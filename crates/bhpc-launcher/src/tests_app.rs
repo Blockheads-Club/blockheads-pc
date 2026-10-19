@@ -155,9 +155,20 @@ fn run_args_and_config_expansion() {
     c.window.height = 900;
     c.window.show_fps = true;
     c.window.fps_limit = 0;
+    c.window.unlock_fps = true;
     assert_eq!(
         c.run_args()[4..],
-        ["--window", "1600x900", "--fps-limit", "0", "--force", "--fullscreen", "--no-vsync", "--show-fps"]
+        [
+            "--window",
+            "1600x900",
+            "--fps-limit",
+            "0",
+            "--force",
+            "--fullscreen",
+            "--no-vsync",
+            "--show-fps",
+            "--unlock-fps"
+        ]
     );
 
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
