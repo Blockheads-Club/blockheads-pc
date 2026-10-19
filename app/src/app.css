@@ -225,3 +225,16 @@ html, body { height: 100%; overflow: hidden; }
    errors, fingerprints, legal text). `.selectable` opts any other element in. */
 body { -webkit-user-select: none; user-select: none; }
 input, textarea, [contenteditable], .selectable, pre, .log, .mono, .legal, .notices, .detail, .path, dd, .note.bad, .addr { -webkit-user-select: text; user-select: text; }
+
+/* Settings search: the setting a result opened lights up for a moment (with reduced motion it just stays lit
+   until the class goes). */
+.flash {
+  background-color: var(--primary-soft);
+  box-shadow: 0 0 0 8px var(--primary-soft);
+  border-radius: var(--r-sm);
+  animation: flash 1.8s ease-out forwards;
+}
+@keyframes flash {
+  0%, 35% { background-color: var(--primary-soft); box-shadow: 0 0 0 8px var(--primary-soft); }
+  100% { background-color: transparent; box-shadow: 0 0 0 8px transparent; }
+}

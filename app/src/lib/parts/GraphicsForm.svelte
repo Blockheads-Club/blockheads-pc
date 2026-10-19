@@ -49,7 +49,7 @@
 </script>
 
 {#if w}
-  <Row title={t('gfx.mode')} titleId="{uid}-m" first>
+  <Row id="set-gfx-mode" title={t('gfx.mode')} titleId="{uid}-m" first>
     <Segmented
       label={t('gfx.mode')}
       value={w.fullscreen ? 'full' : 'window'}
@@ -60,13 +60,13 @@
       onchange={(v) => store.patchConfig((c) => (c.window.fullscreen = v === 'full'))}
     />
   </Row>
-  <Row title={t('gfx.size')} hint={t('gfx.sizeHint')}>
+  <Row id="set-gfx-size" title={t('gfx.size')} hint={t('gfx.sizeHint')}>
     <SelectField label={t('gfx.size')} hideLabel value={sizeKey} options={sizes} onchange={size} />
   </Row>
-  <Row title={t('gfx.vsync')} hint={t('gfx.vsyncHint')} titleId="{uid}-v">
+  <Row id="set-gfx-vsync" title={t('gfx.vsync')} hint={t('gfx.vsyncHint')} titleId="{uid}-v">
     <Toggle label={t('gfx.vsync')} hideLabel checked={w.vsync} onchange={(v) => store.patchConfig((c) => (c.window.vsync = v))} />
   </Row>
-  <Row title={t('gfx.fpsLimit')} hint={t('gfx.fpsLimitHint')}>
+  <Row id="set-gfx-fps-limit" title={t('gfx.fpsLimit')} hint={t('gfx.fpsLimitHint')}>
     <SelectField
       label={t('gfx.fpsLimit')}
       hideLabel
@@ -75,11 +75,11 @@
       onchange={(v) => store.patchConfig((c) => (c.window.fps_limit = Number(v)))}
     />
   </Row>
-  <Row title={t('gfx.showFps')} hint={t('gfx.showFpsHint')} titleId="{uid}-f">
+  <Row id="set-gfx-show-fps" title={t('gfx.showFps')} hint={t('gfx.showFpsHint')} titleId="{uid}-f">
     <Toggle label={t('gfx.showFps')} hideLabel checked={w.show_fps} onchange={(v) => store.patchConfig((c) => (c.window.show_fps = v))} />
   </Row>
   {#if w.show_fps}
-    <Row title={t('gfx.fpsPosition')} hint={t('gfx.fpsPositionHint')}>
+    <Row id="set-gfx-fps-position" title={t('gfx.fpsPosition')} hint={t('gfx.fpsPositionHint')}>
       <SelectField
         label={t('gfx.fpsPosition')}
         hideLabel
@@ -89,7 +89,7 @@
       />
     </Row>
   {/if}
-  <Row title={t('gfx.gameSpeed')} hint={t('gfx.gameSpeedHint')}>
+  <Row id="set-gfx-speed" title={t('gfx.gameSpeed')} hint={t('gfx.gameSpeedHint')}>
     <SelectField
       label={t('gfx.gameSpeed')}
       hideLabel
@@ -98,7 +98,7 @@
       onchange={(v) => store.patchConfig((c) => (c.window.game_speed = Number(v)))}
     />
   </Row>
-  <Row title={t('gfx.scale')} hint={t('gfx.scaleHint')}>
+  <Row id="set-gfx-scale" title={t('gfx.scale')} hint={t('gfx.scaleHint')}>
     <input
       type="range"
       min="75"

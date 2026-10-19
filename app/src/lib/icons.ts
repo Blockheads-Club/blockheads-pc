@@ -34,6 +34,7 @@ export const ICONS = {
   'refresh': '<path d="M20 11a8 8 0 0 0-14.5-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.5 4.5L20 16M20 20v-4h-4"/>',
   'reset': '<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/>',
   'rocket': '<path d="M12 3c3 2 5 5 5 9l-2 3H9l-2-3c0-4 2-7 5-9z"/><circle cx="12" cy="10" r="1.5"/><path d="M9 15l-3 3v3l3-2M15 15l3 3v3l-3-2"/>',
+  'search': '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/>',
   'server': '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   'shield': '<path d="M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
   'skip': '<path d="M5 5l9 7-9 7zM18 5v14"/>',

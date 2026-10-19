@@ -3,11 +3,11 @@
   import { t } from '../i18n.svelte';
   import { store } from '../store.svelte';
   import type { ActionId } from '../types';
+  import { ACTIONS } from '../settings-index';
   import { conflicts, keyToBinding, mouseToBinding, wheelToBinding } from '../util';
   import BindingChips from '../ui/BindingChips.svelte';
   import Button from '../ui/Button.svelte';
 
-  const ACTIONS: ActionId[] = ['touch', 'pan', 'zoom', 'pinch', 'back', 'fullscreen'];
   /** Show the orange "changed" dot and its legend (Settings), not in setup. Per-row reset shows in both. */
   let { marks = false }: { marks?: boolean } = $props();
 
@@ -68,7 +68,7 @@
   <div class="table" role="table" aria-label={t('ctl.tableLabel')}>
     {#each ACTIONS as a (a)}
       {@const other = clash(a)}
-      <div class={['br', listening === a && 'listen', other && 'conf']} role="row">
+      <div class={['br', listening === a && 'listen', other && 'conf']} role="row" id={`set-ctl-${a}`}>
         <span class="a" role="rowheader">
           {names(a)}
           {#if marks && changed(a)}<span class="chg" role="img" aria-label={t('ctl.changed')}></span>{/if}
@@ -113,6 +113,7 @@
     padding: 8px 16px;
     border-top: 1px solid var(--line);
     min-height: 60px;
+    scroll-margin: 24px;
   }
   .br:first-child { border-top: 0; border-radius: 14px 14px 0 0; }
   .br:last-child { border-radius: 0 0 14px 14px; }

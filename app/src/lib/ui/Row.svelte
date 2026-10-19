@@ -3,6 +3,8 @@
 
   interface Props {
     title: string;
+    /** Stable id of the setting (Settings search scrolls to it). */
+    id?: string;
     hint?: string;
     mono?: boolean;
     titleId?: string;
@@ -10,10 +12,10 @@
     children?: Snippet;
     lead?: Snippet;
   }
-  let { title, hint, mono = false, titleId, first = false, children, lead }: Props = $props();
+  let { title, id, hint, mono = false, titleId, first = false, children, lead }: Props = $props();
 </script>
 
-<div class={['row', first && 'first']}>
+<div class={['row', first && 'first']} {id}>
   <div class="row-l">
     {#if lead}{@render lead()}{/if}
     <div class="txt">
@@ -35,6 +37,7 @@
     flex-wrap: wrap;
   }
   .row.first { border-top: 0; }
+  .row { scroll-margin: 24px; }
   .row-l { flex: 1 1 220px; min-width: 0; display: flex; gap: 14px; align-items: center; }
   .txt { min-width: 0; }
   .t { font-weight: 700; }
