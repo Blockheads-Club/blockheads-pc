@@ -2,6 +2,8 @@
 //! this file only converts types and talks to the window system.
 
 mod embed;
+#[cfg(target_os = "linux")]
+mod embed_gl;
 mod tray;
 
 use bhpc_launcher::apk::{self, ApkReport};

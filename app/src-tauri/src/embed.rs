@@ -1,8 +1,9 @@
 //! The game inside the launcher window (Linux): a GTK drawing area laid over the webview (a `GtkOverlay` in the window's box).
 //!
 //! The game runs as `bhpc-run --embed FILE` (crash isolation, see `docs/launcher.md`, "Playing in the launcher
-//! window"). It renders offscreen and publishes frames into a frame file; this widget paints the newest one with cairo
-//! once per display frame and sends mouse, keyboard, text, wheel, focus and size to the runner as text lines
+//! window"). It renders offscreen and publishes frames into a frame file; the newest one is shown once per display
+//! frame, by a `GtkGLArea` under the input widget when GL works (`embed_gl`; off with `BHPC_EMBED_GL=0`), else painted
+//! with cairo by the input widget itself and sends mouse, keyboard, text, wheel, focus and size to the runner as text lines
 //! (`bhpc_launcher::embed::Cmd`). The webview keeps the whole window with the title bar and the control strip; the
 //! widget is an overlay over the part below them, at the height the page reports (`layout`). All GTK work happens on the main thread.
 //!
@@ -56,8 +57,9 @@ mod tests {
 
 #[cfg(target_os = "linux")]
 mod imp {
+    use crate::embed_gl::{Dialect, GlPainter};
     use bhpc_input::{Input, Trigger};
-    use bhpc_launcher::embed::{hid_from_evdev, Cmd, FrameReader, MOD_ALT, MOD_CTRL, MOD_SHIFT};
+    use bhpc_launcher::embed::{hid_from_evdev, Cmd, FrameReader, Layout, MOD_ALT, MOD_CTRL, MOD_SHIFT};
     use gtk::cairo::{Format, ImageSurface};
     use gtk::gdk::{self, EventMask, ModifierType, ScrollDirection};
     use gtk::glib::{self, Propagation};
@@ -90,6 +92,8 @@ mod imp {
         vbox: gtk::Box,
         /// Holds the webview with the game view laid over its stage.
         overlay: gtk::Overlay,
+        /// The GL picture under `area` (when GL is on).
+        gl: Option<gtk::GLArea>,
         paint: Rc<RefCell<Paint>>,
     }
 
@@ -100,6 +104,35 @@ mod imp {
         reader: Option<FrameReader>,
         buf: Vec<u8>,
         surface: Option<ImageSurface>,
+        /// The GL painter once its area is realized; `None` paints with cairo.
+        gl: Option<GlPainter>,
+        /// Sequence number of the newest frame the GL path has seen announced.
+        gl_seq: u64,
+        stats: Option<Stats>,
+    }
+
+    /// `BHPC_EMBED_STATS=1`: time spent showing frames, printed every 10 seconds.
+    struct Stats {
+        frames: u32,
+        busy: Duration,
+        since: Instant,
+    }
+
+    impl Stats {
+        fn add(stats: &mut Option<Stats>, began: Instant, how: &str) {
+            let Some(s) = stats.as_mut() else { return };
+            s.frames += 1;
+            s.busy += began.elapsed();
+            let secs = s.since.elapsed().as_secs_f64();
+            if secs >= 10.0 {
+                let ms = s.busy.as_secs_f64() * 1000.0 / f64::from(s.frames.max(1));
+                eprintln!(
+                    "[embed] view: {how}, {:.1} frames/s shown, {ms:.2} ms per frame",
+                    f64::from(s.frames) / secs
+                );
+                *s = Stats { frames: 0, busy: Duration::ZERO, since: Instant::now() };
+            }
+        }
     }
 
     thread_local! {
@@ -158,9 +191,18 @@ mod imp {
                     | EventMask::KEY_RELEASE_MASK
                     | EventMask::FOCUS_CHANGE_MASK,
             );
-            let paint =
-                Rc::new(RefCell::new(Paint { first: None, reader: Some(opts.frame), buf: Vec::new(), surface: None }));
-            wire_paint(&area, &paint);
+            let stats = std::env::var("BHPC_EMBED_STATS").is_ok_and(|v| v == "1");
+            let paint = Rc::new(RefCell::new(Paint {
+                first: None,
+                reader: Some(opts.frame),
+                buf: Vec::new(),
+                surface: None,
+                gl: None,
+                gl_seq: 0,
+                stats: stats.then(|| Stats { frames: 0, busy: Duration::ZERO, since: Instant::now() }),
+            }));
+            let gl = std::env::var("BHPC_EMBED_GL").map_or(true, |v| v != "0").then(|| gl_area(&paint, &opts.input));
+            wire_paint(&area, &paint, gl.clone());
             wire_input(&area, opts.input, opts.fullscreen_key, win.clone(), opts.app);
             area.set_halign(gtk::Align::Fill);
             area.set_valign(gtk::Align::Fill);
@@ -168,6 +210,10 @@ mod imp {
             let overlay = gtk::Overlay::new();
             vbox.remove(&webview);
             overlay.add(&webview);
+            if let Some(g) = &gl {
+                overlay.add_overlay(g);
+                overlay.set_overlay_pass_through(g, true);
+            }
             overlay.add_overlay(&area);
             // Until the first frame the page shows its loading screen and must get the mouse (Cancel).
             overlay.set_overlay_pass_through(&area, true);
@@ -175,17 +221,114 @@ mod imp {
             overlay.show();
             // Hidden until the page has reported where the stage starts (`layout`): the runner sizes its first frame
             // by the first size it hears, which must be the real one.
-            VIEW.with(|v| *v.borrow_mut() = Some(View { area, webview, vbox, overlay, paint }));
+            VIEW.with(|v| *v.borrow_mut() = Some(View { area, webview, vbox, overlay, gl, paint }));
             Ok(())
         })?
     }
 
-    fn wire_paint(area: &gtk::DrawingArea, paint: &Rc<RefCell<Paint>>) {
+    /// The GL picture: realized with a context of its own, it asks the runner for frames as read back and draws them
+    /// on `render`. Any GL failure hands the picture back to cairo (and the runner back to the cairo layout).
+    fn gl_area(paint: &Rc<RefCell<Paint>>, input: &Sender<String>) -> gtk::GLArea {
+        let g = gtk::GLArea::new();
+        g.set_has_alpha(true);
+        g.set_auto_render(false);
+        g.set_hexpand(true);
+        g.set_vexpand(true);
+        g.set_halign(gtk::Align::Fill);
+        g.set_valign(gtk::Align::Fill);
+        let (p, tx) = (paint.clone(), input.clone());
+        g.connect_realize(move |g| {
+            g.make_current();
+            let made = match (g.error(), g.context()) {
+                (None, Some(ctx)) => {
+                    let dialect = if ctx.uses_es() {
+                        Dialect::Es
+                    } else if ctx.is_legacy() {
+                        Dialect::Legacy
+                    } else {
+                        Dialect::Core
+                    };
+                    GlPainter::new(dialect)
+                }
+                (e, _) => Err(e.map_or("no GL context".into(), |e| e.to_string())),
+            };
+            match made {
+                Ok(painter) => {
+                    p.borrow_mut().gl = Some(painter);
+                    send(&tx, Cmd::Layout(Layout::GlRgba));
+                }
+                Err(e) => {
+                    eprintln!("in-window game view: GL unavailable ({e}); painting with cairo");
+                    g.hide();
+                }
+            }
+        });
+        let p = paint.clone();
+        g.connect_unrealize(move |g| {
+            g.make_current();
+            if let Some(painter) = p.borrow_mut().gl.take() {
+                painter.destroy();
+            }
+        });
+        let p = paint.clone();
+        g.connect_render(move |g, _| {
+            let began = Instant::now();
+            let mut p = p.borrow_mut();
+            let Paint { first, reader, gl, stats, .. } = &mut *p;
+            let (Some(painter), Some(first)) = (gl.as_mut(), *first) else { return Propagation::Stop };
+            let fresh = reader.as_mut().and_then(|r| r.read_with(|info, px| painter.upload(info, px)).ok().flatten());
+            let s = g.scale_factor();
+            painter.draw((g.allocated_width() * s, g.allocated_height() * s), fade_alpha(first) as f32);
+            if fresh.is_some() {
+                Stats::add(stats, began, "GL texture");
+            }
+            Propagation::Stop
+        });
+        g
+    }
+
+    /// How far the game has faded in since its first frame (at once without animations, the desktop's setting).
+    fn fade_alpha(first: Instant) -> f64 {
+        let animate = gtk::Settings::default().is_some_and(|s| s.is_gtk_enable_animations());
+        if animate {
+            (first.elapsed().as_secs_f64() / FADE.as_secs_f64()).min(1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// The first frame is there: the view takes the mouse and the keyboard from the page.
+    fn first_frame(w: &gtk::DrawingArea, first: &mut Option<Instant>) {
+        if first.is_none() {
+            *first = Some(Instant::now());
+            if let Some(o) = w.parent().and_then(|p| p.downcast::<gtk::Overlay>().ok()) {
+                o.set_overlay_pass_through(w, false);
+            }
+            w.grab_focus();
+        }
+    }
+
+    fn wire_paint(area: &gtk::DrawingArea, paint: &Rc<RefCell<Paint>>, gl: Option<gtk::GLArea>) {
         let p = paint.clone();
         area.add_tick_callback(move |w, _| {
             let mut p = p.borrow_mut();
-            let Paint { first, reader, buf, surface } = &mut *p;
-            if let Some(info) = reader.as_mut().and_then(|r| r.read(buf).ok().flatten()) {
+            if let (Some(g), true) = (&gl, p.gl.is_some()) {
+                // GL: the area reads and uploads the frame itself when it renders.
+                let seq = p.reader.as_ref().and_then(|r| r.seq().ok()).unwrap_or(0);
+                if seq != 0 && seq != p.gl_seq {
+                    p.gl_seq = seq;
+                    first_frame(w, &mut p.first);
+                    g.queue_render();
+                } else if p.first.is_some_and(|f| f.elapsed() < FADE) {
+                    g.queue_render();
+                }
+                return glib::ControlFlow::Continue;
+            }
+            let began = Instant::now();
+            let Paint { first, reader, buf, surface, stats, .. } = &mut *p;
+            let fresh = reader.as_mut().and_then(|r| r.read(buf).ok().flatten());
+            // A frame in the GL layout (sent before the runner heard that GL is off) is skipped; the next is cairo's.
+            if let Some(info) = fresh.filter(|i| i.layout == Layout::Bgra) {
                 let (iw, ih) = (info.width as i32, info.height as i32);
                 let fits = surface.as_ref().is_some_and(|s| s.width() == iw && s.height() == ih);
                 if !fits {
@@ -199,14 +342,9 @@ mod imp {
                         data.copy_from_slice(buf);
                     }
                 }
-                if first.is_none() {
-                    *first = Some(Instant::now());
-                    if let Some(o) = w.parent().and_then(|p| p.downcast::<gtk::Overlay>().ok()) {
-                        o.set_overlay_pass_through(w, false);
-                    }
-                    w.grab_focus();
-                }
+                first_frame(w, first);
                 w.queue_draw();
+                Stats::add(stats, began, "cairo");
             } else if first.is_some_and(|f| f.elapsed() < FADE) {
                 w.queue_draw();
             }
@@ -215,10 +353,9 @@ mod imp {
         let p = paint.clone();
         area.connect_draw(move |_, cr| {
             let p = p.borrow();
-            let Some(first) = p.first else { return Propagation::Stop };
-            // Without animations (the desktop's setting) the game appears at once.
-            let animate = gtk::Settings::default().is_some_and(|s| s.is_gtk_enable_animations());
-            let alpha = if animate { (first.elapsed().as_secs_f64() / FADE.as_secs_f64()).min(1.0) } else { 1.0 };
+            // With GL the picture is the area underneath: this widget stays transparent.
+            let (Some(first), false) = (p.first, p.gl.is_some()) else { return Propagation::Stop };
+            let alpha = fade_alpha(first);
             cr.set_source_rgba(0.0, 0.0, 0.0, alpha);
             let _ = cr.paint();
             if let Some(s) = p.surface.as_ref() {
@@ -422,13 +559,24 @@ mod imp {
             VIEW.with(|v| {
                 let v = v.borrow();
                 let Some(v) = v.as_ref() else { return };
+                // The GL picture follows the input widget (unless GL failed: then it stays hidden).
+                let gl = v.gl.as_ref().filter(|g| !g.is_realized() || v.paint.borrow().gl.is_some());
                 if top < 0 {
                     v.area.hide();
+                    if let Some(g) = gl {
+                        g.hide();
+                    }
                     return;
                 }
                 v.area.set_margin_top(top);
                 if !v.area.is_visible() {
                     v.area.show();
+                }
+                if let Some(g) = gl {
+                    g.set_margin_top(top);
+                    if !g.is_visible() {
+                        g.show();
+                    }
                 }
                 // Before the first frame the page's loading screen keeps the keyboard (Esc cancels).
                 if v.paint.borrow().first.is_some() && !v.area.has_focus() {
@@ -443,6 +591,9 @@ mod imp {
             if let Some(v) = v.borrow_mut().take() {
                 v.overlay.remove(&v.webview);
                 v.overlay.remove(&v.area);
+                if let Some(g) = &v.gl {
+                    v.overlay.remove(g);
+                }
                 v.vbox.remove(&v.overlay);
                 v.vbox.pack_start(&v.webview, true, true, 0);
                 v.webview.show();

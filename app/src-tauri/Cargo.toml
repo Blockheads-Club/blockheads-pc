@@ -33,6 +33,8 @@ tauri = { version = "2", features = ["tray-icon"] }
 # The in-window game view is a GTK widget next to the webview (Linux; see src/embed.rs). Tauri uses the same version.
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+# dlopen of the GL library GDK uses (src/embed_gl.rs).
+libc = "0.2"
 # Tray: StatusNotifierItem over D-Bus directly (left click, tooltip and title work, unlike appindicator).
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 
