@@ -602,3 +602,159 @@ fn a_view_cycle_or_a_dead_child_does_not_hang_the_renderer() {
     e.vm.ui_update(v, |i| i.children.push(Obj(u32::MAX)));
     assert!(e.vm.render_ui().is_some());
 }
+
+// Golden images: popups as the game builds them (the welcome popup's view tree, from `dumpviews`), rendered on the
+// game's 1024x768 window. The pixels are pinned by a hash; `BHPC_GOLDEN_DIR=dir` also writes them as PAM files to look at.
+
+/// A bitmap with a deterministic pattern: a vertical gradient from `top` to `bottom` with a 2-pixel `edge` border.
+fn panel_bitmap(e: &mut Env, w: i32, h: i32, top: [u8; 3], bottom: [u8; 3], edge: [u8; 4]) -> Obj {
+    let b = bitmap(e, w, h, [0; 4]);
+    let (_, _, ptr) = crate::jlib::bitmap_info(&e.vm, b).unwrap();
+    let mut px = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            if x < 2 || y < 2 || x >= w - 2 || y >= h - 2 {
+                px.extend_from_slice(&edge);
+            } else {
+                let t = y as f32 / (h - 1) as f32;
+                let mix = |i: usize| (f32::from(top[i]) * (1.0 - t) + f32::from(bottom[i]) * t).round() as u8;
+                px.extend_from_slice(&[mix(0), mix(1), mix(2), 255]);
+            }
+        }
+    }
+    e.mem().write_bytes(ptr, &px).unwrap();
+    b
+}
+
+fn styled_label(e: &mut Env, parent: Obj, frame: [f32; 4], text: &str, size: f32, lines: i32) -> Obj {
+    let l = label(e, parent, frame, text);
+    let f = face(e, "fonts/Face.ttf");
+    set_font(e, l, f, size);
+    set(e, l, "setTextAlignment", "(I)V", &[Value::Int(1)]);
+    set(e, l, "setNumberOfLines", "(I)V", &[Value::Int(lines)]);
+    set(e, l, "_setBackgroundColor", "(I)V", &[Value::Int(0)]);
+    l
+}
+
+/// The welcome popup: scrim, panel image, title, wrapped message and two buttons with caption labels.
+/// Returns the OK button.
+fn welcome_popup(e: &mut Env) -> Obj {
+    e.vm.set_screen_size(1024, 768);
+    let window = view(e, "Window", 1, [0.0; 4]);
+    let root = view(e, "View", 2, [0.0, 0.0, 1024.0, 768.0]);
+    let scrim = view(e, "View", 3, [0.0, 0.0, 768.0, 1024.0]);
+    add(e, window, root);
+    add(e, root, scrim);
+    set(e, scrim, "_setBackgroundColor", "(I)V", &[Value::Int(0xab10_215a_u32 as i32)]);
+    let panel = view(e, "View", 4, [244.0, 380.0, 524.0, 643.0]);
+    add(e, scrim, panel);
+    let img = view(e, "ImageView", 5, [0.0, 0.0, 280.0, 263.0]);
+    add(e, panel, img);
+    let bmp = panel_bitmap(e, 280, 263, [16, 30, 80], [8, 20, 60], [255, 255, 255, 255]);
+    set(e, img, "setImage", "(Landroid/graphics/Bitmap;II)V", &[Value::Ref(Some(bmp)), Value::Int(0), Value::Int(0)]);
+    styled_label(e, panel, [10.0, 10.0, 270.0, 30.0], "WELCOME TO THE BLOCKHEADS!", 16.0, 0);
+    let msg = "YOU'RE IN A MASSIVE WORLD FULL OF THINGS TO FIND, EXPLORE, COLLECT AND CREATE, FROM CAVE TROLLS TO \
+               STEAM TRAINS!\n\nBUT YOU CAN'T DO IT ALONE.\n\nTO START, WARP IN YOUR FIRST BLOCKHEAD BY TAPPING ON \
+               THE PORTAL.";
+    styled_label(e, panel, [10.0, 40.0, 270.0, 203.0], msg, 13.0, 0);
+    let mut ok = None;
+    for (i, (x, caption, colour)) in
+        [(10.0, "SKIP", [40u8, 70, 150]), (145.0, "OK", [20, 130, 30])].into_iter().enumerate()
+    {
+        let btn = view(e, "Button", 10 + i as i32, [x, 213.0, x + 125.0, 253.0]);
+        add(e, panel, btn);
+        let dark = colour.map(|c| c / 2);
+        let normal = panel_bitmap(e, 240, 80, colour, dark, [200, 200, 200, 255]);
+        let lit_up = panel_bitmap(e, 240, 80, [255, 255, 255], colour, [200, 200, 200, 255]);
+        for (state, b) in [(0, normal), (1, lit_up)] {
+            set(
+                e,
+                btn,
+                "setBackgroundDrawable",
+                "(Landroid/graphics/Bitmap;I)V",
+                &[Value::Ref(Some(b)), Value::Int(state)],
+            );
+        }
+        styled_label(e, btn, [20.0, 10.0, 105.0, 30.0], caption, 16.0, 1);
+        ok = Some(btn);
+    }
+    ok.unwrap()
+}
+
+/// FNV-1a over the pixels (and the size).
+fn pixel_hash(f: &UiFrame) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for b in f.width.to_le_bytes().iter().chain(&f.height.to_le_bytes()).chain(f.rgba.iter()) {
+        h = (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+fn golden(name: &str, f: &UiFrame, want: u64) {
+    if let Some(dir) = std::env::var_os("BHPC_GOLDEN_DIR") {
+        let mut out =
+            format!("P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", f.width, f.height)
+                .into_bytes();
+        out.extend_from_slice(&f.rgba);
+        std::fs::write(std::path::Path::new(&dir).join(format!("{name}.pam")), out).unwrap();
+    }
+    assert_eq!(pixel_hash(f), want, "golden image {name} changed (hash {:#018x})", pixel_hash(f));
+}
+
+#[test]
+fn golden_welcome_popup() {
+    let mut e = env_with_font();
+    let ok = welcome_popup(&mut e);
+    golden("welcome", &e.vm.render_ui().unwrap(), 0xd9d2_0767_e05f_fad3);
+    set(&mut e, ok, "setHighlighted", "(Z)V", &[Value::Int(1)]);
+    golden("welcome_ok_pressed", &e.vm.render_ui().unwrap(), 0x5a6d_d7b3_3a0b_3d31);
+    set(&mut e, ok, "setHighlighted", "(Z)V", &[Value::Int(0)]);
+    golden("welcome", &e.vm.render_ui().unwrap(), 0xd9d2_0767_e05f_fad3);
+}
+
+/// Text fields, a scrolled clipping view, a half transparent view and shadowed, shrunk, right-aligned text.
+#[test]
+fn golden_dialog_with_fields() {
+    let mut e = env_with_font();
+    e.vm.set_screen_size(1024, 768);
+    let window = view(&mut e, "Window", 1, [0.0; 4]);
+    let root = view(&mut e, "View", 2, [0.0, 0.0, 1024.0, 768.0]);
+    add(&mut e, window, root);
+    let dialog = view(&mut e, "View", 3, [200.0, 300.0, 560.0, 600.0]);
+    add(&mut e, root, dialog);
+    set(&mut e, dialog, "_setBackgroundColor", "(I)V", &[Value::Int(argb(230, 30, 30, 40))]);
+    let field = view(&mut e, "TextField", 4, [20.0, 20.0, 340.0, 60.0]);
+    add(&mut e, dialog, field);
+    set(&mut e, field, "_setBackgroundColor", "(I)V", &[Value::Int(argb(255, 250, 250, 250))]);
+    let t = e.string("My World 1");
+    set(&mut e, field, "setText", "(Ljava/lang/String;)V", &[t]);
+    set(&mut e, field, "setTextColor", "(I)V", &[Value::Int(argb(255, 0, 0, 0))]);
+    let f = face(&mut e, "fonts/Face.ttf");
+    set_font(&mut e, field, f, 20.0);
+    let scroll = view(&mut e, "View", 5, [20.0, 80.0, 340.0, 200.0]);
+    add(&mut e, dialog, scroll);
+    set(&mut e, scroll, "setClipsToBounds", "(Z)V", &[Value::Int(1)]);
+    let r = rect(&mut e, [0.0, 50.0, 0.0, 0.0]);
+    set(&mut e, scroll, "setBounds", "(Landroid/graphics/RectF;)V", &[r]);
+    for i in 0..6 {
+        let y = i as f32 * 40.0;
+        let row = styled_label(
+            &mut e,
+            scroll,
+            [0.0, y, 320.0, y + 36.0],
+            &format!("WORLD NUMBER {i} WITH A LONG NAME"),
+            18.0,
+            1,
+        );
+        set(&mut e, row, "setMinimumFontSize", "(F)V", &[Value::Float(10.0)]);
+        set(&mut e, row, "_setBackgroundColor", "(I)V", &[Value::Int(argb(255, 60, 60 + 30 * i as u8, 90))]);
+        set(&mut e, row, "setTextAlignment", "(I)V", &[Value::Int(2)]);
+        set(&mut e, row, "setShadowColor", "(I)V", &[Value::Int(argb(200, 0, 0, 0))]);
+        set(&mut e, row, "setShadowOffset", "(FF)V", &[Value::Float(1.0), Value::Float(2.0)]);
+    }
+    let faded = view(&mut e, "View", 6, [20.0, 220.0, 340.0, 280.0]);
+    add(&mut e, dialog, faded);
+    set(&mut e, faded, "_setBackgroundColor", "(I)V", &[Value::Int(argb(255, 200, 40, 40))]);
+    set(&mut e, faded, "_setAlpha", "(F)V", &[Value::Float(0.5)]);
+    golden("dialog", &e.vm.render_ui().unwrap(), 0xab89_6260_cf12_7458);
+}
