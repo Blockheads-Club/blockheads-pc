@@ -86,6 +86,8 @@ impl View {
 #[derive(Default)]
 pub(crate) struct UiState {
     pub views: HashMap<Obj, View>,
+    /// Bumped by every change the renderer may draw differently after ([`Vm::ui_changed`]).
+    pub generation: u64,
     /// The control that got the touch-down being played (button or text field).
     pub capture: Option<Obj>,
 }
@@ -126,9 +128,15 @@ impl Vm {
         }
     }
 
+    /// Something the views are drawn from changed (the tree, or the pixels of a bitmap): the renderer looks again.
+    pub(crate) fn ui_changed(&self) {
+        self.st().ui.generation += 1;
+    }
+
     /// Record a new view.
     pub(crate) fn ui_create(&self, view: Obj, kind: &str, handle: i32, frame: [f32; 4]) {
         self.pin(view);
+        self.ui_changed();
         self.st().ui.views.insert(
             view,
             View {
@@ -156,14 +164,17 @@ impl Vm {
 
     /// Change a recorded view (unknown views are ignored).
     pub(crate) fn ui_update(&self, view: Obj, f: impl FnOnce(&mut View)) {
-        if let Some(v) = self.st().ui.views.get_mut(&view) {
+        let mut st = self.st();
+        if let Some(v) = st.ui.views.get_mut(&view) {
             f(v);
+            st.ui.generation += 1;
         }
     }
 
     /// `parent.addSubview(child)` / `insertSubview(child, at)`; a view has one parent.
     pub(crate) fn ui_attach(&self, parent: Obj, child: Obj, at: Option<usize>) {
         let mut st = self.st();
+        st.ui.generation += 1;
         let views = &mut st.ui.views;
         if !views.contains_key(&parent) || !views.contains_key(&child) || parent == child {
             return;
@@ -181,6 +192,7 @@ impl Vm {
     /// `parent.removeSubview(child)`.
     pub(crate) fn ui_detach(&self, child: Obj) {
         let mut st = self.st();
+        st.ui.generation += 1;
         let views = &mut st.ui.views;
         let Some(parent) = views.get_mut(&child).and_then(|c| c.parent.take()) else { return };
         views.entry(parent).and_modify(|p| p.children.retain(|c| *c != child));

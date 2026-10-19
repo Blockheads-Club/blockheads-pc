@@ -5,7 +5,8 @@ use bhpc_gles::{GlWindow, Overlay};
 use bhpc_jni::UiFrame;
 use std::sync::{Arc, Mutex, PoisonError};
 
-/// Remembers which frame the window already has, so a picture is copied only when it changed.
+/// Remembers which frame the window already has, so a picture is handed over (shared, not copied) only when it
+/// changed.
 #[derive(Default)]
 pub struct OverlayFeed {
     /// `Some(serial)` while the window shows an overlay.
@@ -23,7 +24,7 @@ impl OverlayFeed {
                     width: f.width,
                     height: f.height,
                     serial: f.serial,
-                    rgba: Arc::new(f.rgba.clone()),
+                    rgba: f.rgba.clone(),
                 }));
                 *sent = Some(f.serial);
             }

@@ -97,6 +97,7 @@ pub(crate) fn install(vm: &Vm) {
             let n = (w as u64 * h as u64 * 4).min(cap.max(0) as u64) as u32;
             if let Ok(bytes) = c.vm.mem().read_bytes(addr as u32, n) {
                 let _ = c.vm.mem().write_bytes(ptr, &bytes);
+                c.vm.ui_changed();
             }
             void()
         });

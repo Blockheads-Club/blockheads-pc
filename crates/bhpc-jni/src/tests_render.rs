@@ -758,3 +758,147 @@ fn golden_dialog_with_fields() {
     set(&mut e, faded, "_setAlpha", "(F)V", &[Value::Float(0.5)]);
     golden("dialog", &e.vm.render_ui().unwrap(), 0xab89_6260_cf12_7458);
 }
+
+/// The picture drawn from scratch, without the renderer's cache (which is kept for the next frame).
+fn full_render(e: &Env) -> Option<Vec<u8>> {
+    let cache = std::mem::take(&mut e.vm.st().render);
+    e.vm.set_ui_dirty_tracking(false);
+    let f = e.vm.render_ui().map(|f| f.rgba.to_vec());
+    e.vm.st().render = cache;
+    f
+}
+
+/// Every change, drawn by repainting only what changed, gives the pixels of a drawing from scratch.
+#[test]
+fn partial_redraws_match_full_ones() {
+    let mut e = env_with_font();
+    let ok = welcome_popup(&mut e);
+    let first = e.vm.render_ui().unwrap();
+    let label = view(&mut e, "Label", 40, [0.0, 0.0, 0.0, 0.0]);
+    let parent = e.vm.st().ui.views[&ok].parent.unwrap();
+    add(&mut e, parent, label);
+    type Change = Box<dyn Fn(&mut Env)>;
+    let changes: Vec<Change> = vec![
+        Box::new(move |e| set(e, ok, "setHighlighted", "(Z)V", &[Value::Int(1)])),
+        Box::new(move |e| set(e, ok, "setHighlighted", "(Z)V", &[Value::Int(0)])),
+        Box::new(move |e| {
+            let r = rect(e, [30.0, 150.0, 250.0, 175.0]);
+            set(e, label, "setFrame", "(Landroid/graphics/RectF;)V", &[r]);
+            let t = e.string("A NEW LINE OF TEXT");
+            set(e, label, "setText", "(Ljava/lang/String;)V", &[t]);
+            set(e, label, "setShadowColor", "(I)V", &[Value::Int(argb(255, 0, 0, 0))]);
+            set(e, label, "setShadowOffset", "(FF)V", &[Value::Float(-3.0), Value::Float(4.0)]);
+        }),
+        Box::new(move |e| set(e, label, "_setBackgroundColor", "(I)V", &[Value::Int(argb(128, 200, 100, 0))])),
+        Box::new(move |e| set(e, ok, "_setAlpha", "(F)V", &[Value::Float(0.4)])),
+        Box::new(move |e| set(e, label, "setHidden", "(Z)V", &[Value::Int(1)])),
+        Box::new(move |e| set(e, ok, "setEnabled", "(Z)V", &[Value::Int(0)])),
+        Box::new(move |e| {
+            // Moved off the window's edge: only the part inside is drawn.
+            let r = rect(e, [-300.0, -20.0, -200.0, 20.0]);
+            set(e, ok, "setFrame", "(Landroid/graphics/RectF;)V", &[r]);
+        }),
+        Box::new(move |e| set(e, parent, "removeSubview", "(Lcom/apportable/ui/View;)V", &[Value::Ref(Some(ok))])),
+    ];
+    let mut serial = first.serial;
+    for (n, change) in changes.iter().enumerate() {
+        change(&mut e);
+        let f = e.vm.render_ui().unwrap();
+        assert!(f.serial >= serial);
+        serial = f.serial;
+        assert!(*f.rgba == full_render(&e).unwrap(), "change {n} drawn like from scratch");
+    }
+}
+
+/// Unchanged views are not even looked at again, except now and then; bitmap writes through the bitmap interfaces
+/// count as changes.
+#[test]
+fn unchanged_views_are_answered_from_the_cache() {
+    let mut e = Env::new();
+    let (_, container) = scene(&mut e);
+    let container = holder(&mut e, container);
+    let img = view(&mut e, "ImageView", 4, [0.0, 0.0, 2.0, 2.0]);
+    add(&mut e, container, img);
+    let bmp = bitmap(&mut e, 2, 2, [255, 0, 0, 255]);
+    set(
+        &mut e,
+        img,
+        "setImage",
+        "(Landroid/graphics/Bitmap;II)V",
+        &[Value::Ref(Some(bmp)), Value::Int(0), Value::Int(0)],
+    );
+    let (_, _, ptr) = crate::jlib::bitmap_info(&e.vm, bmp).unwrap();
+    let a = e.vm.render_ui().unwrap();
+    // A write the renderer is not told of shows within RECHECK_FRAMES frames.
+    e.mem().write_bytes(ptr, &[0, 0, 255, 255]).unwrap();
+    for _ in 0..crate::render::RECHECK_FRAMES {
+        assert!(Arc::ptr_eq(&e.vm.render_ui().unwrap(), &a));
+    }
+    let b = e.vm.render_ui().unwrap();
+    assert_eq!(px(&b, OX, 140)[..3], [0, 0, 255]);
+    // `copyPixelsFromBuffer` and a lock of the pixels are changes.
+    let src = e.bytes(&[0, 255, 0, 255].repeat(4), 0);
+    let buf = e.jni("NewDirectByteBuffer", &[src, 16, 0]).r0;
+    let buf = e.vm.resolve(buf).unwrap();
+    e.call(bmp, "copyPixelsFromBuffer", "(Ljava/nio/Buffer;)V", &[Value::Ref(Some(buf))]).unwrap();
+    assert_eq!(px(&e.vm.render_ui().unwrap(), OX, 140)[..3], [0, 255, 0]);
+    let g = e.vm.st().ui.generation;
+    e.vm.ui_changed();
+    assert!(e.vm.st().ui.generation > g);
+    // Nothing shown is cached as well.
+    set(&mut e, img, "setHidden", "(Z)V", &[Value::Int(1)]);
+    assert!(e.vm.render_ui().is_none());
+    assert!(e.vm.render_ui().is_none());
+    // With the tracking off every frame looks again.
+    set(&mut e, img, "setHidden", "(Z)V", &[Value::Int(0)]);
+    e.vm.set_ui_dirty_tracking(false);
+    let c = e.vm.render_ui().unwrap();
+    e.mem().write_bytes(ptr, &[9, 9, 9, 255]).unwrap();
+    let d = e.vm.render_ui().unwrap();
+    assert!(d.serial > c.serial);
+    assert_eq!(px(&d, OX, 140)[..3], [9, 9, 9]);
+}
+
+/// Cost of the renderer on the welcome popup: `cargo test --release -p bhpc-jni bench_popup -- --ignored --nocapture`.
+#[test]
+#[ignore = "benchmark"]
+fn bench_popup() {
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    // CPU time of this thread: what the work costs, also on a busy machine.
+    let cpu = || {
+        let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: valid out pointer.
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+        t.tv_sec as f64 * 1e6 + t.tv_nsec as f64 / 1e3
+    };
+    let time = |f: &mut dyn FnMut()| {
+        let t = cpu();
+        f();
+        cpu() - t
+    };
+    let mut e = env_with_font();
+    let ok = welcome_popup(&mut e);
+    let first = median(
+        (0..9)
+            .map(|_| {
+                e.vm.st().render = Default::default();
+                time(&mut || drop(e.vm.render_ui()))
+            })
+            .collect(),
+    );
+    let steady = median((0..2000).map(|_| time(&mut || drop(e.vm.render_ui()))).collect());
+    let mut on = 0;
+    let toggle = median(
+        (0..60)
+            .map(|_| {
+                on ^= 1;
+                set(&mut e, ok, "setHighlighted", "(Z)V", &[Value::Int(on)]);
+                time(&mut || drop(e.vm.render_ui()))
+            })
+            .collect(),
+    );
+    println!("[bench] welcome popup: first {first:.0} us, unchanged {steady:.1} us, button highlight {toggle:.0} us");
+}

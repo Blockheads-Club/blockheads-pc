@@ -167,6 +167,8 @@ fn bitmap_interface(vm: &Vm) -> Vec<(String, SharedThunkFn)> {
         let (b, out) = (j.obj(), j.u32());
         match b.and_then(|b| crate::jlib::bitmap_info(j.vm, b)) {
             Some((_, _, ptr)) => {
+                // The pixels may change from here on until the unlock (which says so again).
+                j.vm.ui_changed();
                 j.write_u32(out, ptr);
                 j.ret(0);
             }
@@ -175,6 +177,9 @@ fn bitmap_interface(vm: &Vm) -> Vec<(String, SharedThunkFn)> {
     };
     let unlock = |j: &mut J| {
         let ok = j.obj().is_some_and(|b| crate::jlib::bitmap_info(j.vm, b).is_some());
+        if ok {
+            j.vm.ui_changed();
+        }
         j.ret(if ok { 0 } else { u32::MAX });
     };
     vec![

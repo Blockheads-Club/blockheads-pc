@@ -13,6 +13,7 @@ bhpc-vfs.workspace = true
 ab_glyph = { version = "0.2", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+libc.workspace = true
 bhpc-loader.workspace = true
 bhpc-bionic = { path = "../bhpc-bionic" }
 zip = { version = "2.4", default-features = false }

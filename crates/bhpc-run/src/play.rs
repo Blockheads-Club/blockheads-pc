@@ -835,6 +835,11 @@ fn boot(
     }
     let mut report = PlayReport::default();
     let vm = sess.jni.vm.clone();
+    // Off switch of the popup renderer's change tracking (redraw only what changed): BHPC_UI_DIRTY=0.
+    if std::env::var_os("BHPC_UI_DIRTY").is_some_and(|v| v == "0") {
+        eprintln!("[play] Java view change tracking off (BHPC_UI_DIRTY=0)");
+        vm.set_ui_dirty_tracking(false);
+    }
     *flags.vm.lock().unwrap_or_else(PoisonError::into_inner) = Some(vm.clone());
     let pid = sess.cpu.processor_id();
 

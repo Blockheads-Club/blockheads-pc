@@ -33,7 +33,7 @@ impl GlWindow for Window {
 }
 
 fn frame(serial: u64) -> Option<Arc<UiFrame>> {
-    Some(Arc::new(UiFrame { width: 2, height: 1, rgba: vec![0; 8], serial }))
+    Some(Arc::new(UiFrame { width: 2, height: 1, rgba: Arc::new(vec![0; 8]), serial }))
 }
 
 #[test]
