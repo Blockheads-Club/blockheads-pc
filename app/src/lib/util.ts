@@ -88,6 +88,9 @@ export function chips(binding: string, label: (m: 'Left' | 'Right' | 'Middle' | 
 /** Two-digit zero padded clock, for log timestamps. */
 export const pad2 = (n: number) => String(n).padStart(2, '0');
 
+/** Frame-rate caps offered in the dropdown (0 = unlimited; matches `FPS_LIMITS` in crates/bhpc-launcher/src/window.rs). */
+export const FPS_LIMITS = [0, 30, 60, 120, 144];
+
 /** Window sizes offered in the dropdown, smallest first. */
 export const SIZES: [number, number][] = [
   [1024, 768],

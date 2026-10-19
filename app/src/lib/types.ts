@@ -10,6 +10,10 @@ export interface WindowOptions {
   vsync: boolean;
   /** 0.5 to 4; the UI shows percent. */
   ui_scale: number;
+  /** Draw a frames-per-second counter in the top-left corner of the game. */
+  show_fps: boolean;
+  /** Frames per second at most; 0 = no limit (vsync, when on, still applies). */
+  fps_limit: number;
 }
 
 export interface KeyBindings {

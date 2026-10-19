@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from '../i18n.svelte';
   import { store } from '../store.svelte';
-  import { SIZES, recommendedSize } from '../util';
+  import { FPS_LIMITS, SIZES, recommendedSize } from '../util';
   import Row from '../ui/Row.svelte';
   import Segmented from '../ui/Segmented.svelte';
   import SelectField from '../ui/SelectField.svelte';
@@ -20,6 +20,13 @@
     });
   });
   const scale = $derived(Math.round(store.cfg!.window.ui_scale * 100));
+  /** Unlimited, the usual caps, and a hand-edited value from launcher.toml when it is none of those. */
+  const fpsLimits = $derived.by(() => {
+    const values = [...FPS_LIMITS];
+    const cur = store.cfg!.window.fps_limit;
+    if (!values.includes(cur)) values.push(cur);
+    return values.map((n) => ({ value: String(n), label: n === 0 ? t('gfx.fpsUnlimited') : t('gfx.fpsN', { n }) }));
+  });
   const uid = $props.id();
 
   function size(v: string) {
@@ -48,6 +55,18 @@
   </Row>
   <Row title={t('gfx.vsync')} hint={t('gfx.vsyncHint')} titleId="{uid}-v">
     <Toggle label={t('gfx.vsync')} hideLabel checked={w.vsync} onchange={(v) => store.patchConfig((c) => (c.window.vsync = v))} />
+  </Row>
+  <Row title={t('gfx.fpsLimit')} hint={t('gfx.fpsLimitHint')}>
+    <SelectField
+      label={t('gfx.fpsLimit')}
+      hideLabel
+      value={String(w.fps_limit)}
+      options={fpsLimits}
+      onchange={(v) => store.patchConfig((c) => (c.window.fps_limit = Number(v)))}
+    />
+  </Row>
+  <Row title={t('gfx.showFps')} hint={t('gfx.showFpsHint')} titleId="{uid}-f">
+    <Toggle label={t('gfx.showFps')} hideLabel checked={w.show_fps} onchange={(v) => store.patchConfig((c) => (c.window.show_fps = v))} />
   </Row>
   <Row title={t('gfx.scale')} hint={t('gfx.scaleHint')}>
     <input

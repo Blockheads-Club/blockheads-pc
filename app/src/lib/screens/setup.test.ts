@@ -220,6 +220,30 @@ describe('Window and graphics step', () => {
     expect(scale).toHaveAttribute('aria-valuetext', '150 %');
   });
 
+  it('sets the FPS limit and the FPS counter', async () => {
+    render(SetupGraphics);
+    const limit = screen.getByLabelText('FPS limit') as HTMLSelectElement;
+    expect([...limit.options].map((o) => o.textContent)).toEqual(['Unlimited (VSync only)', '30 FPS', '60 FPS', '120 FPS', '144 FPS']);
+    expect(limit.value).toBe('60');
+    await fireEvent.change(limit, { target: { value: '144' } });
+    expect(store.draft?.window.fps_limit).toBe(144);
+    await fireEvent.change(limit, { target: { value: '0' } });
+    expect(store.draft?.window.fps_limit).toBe(0);
+    const counter = screen.getByRole('switch', { name: 'Show FPS' });
+    expect(counter).not.toBeChecked();
+    await fireEvent.click(counter);
+    expect(store.draft?.window.show_fps).toBe(true);
+    expect(screen.getByText('A small frame-rate counter in the top-left corner of the game.')).toBeVisible();
+  });
+
+  it('keeps a hand-edited FPS limit selectable', () => {
+    store.draft = makeConfig({ window: { ...makeConfig().window, fps_limit: 75 } });
+    render(SetupGraphics);
+    const limit = screen.getByLabelText('FPS limit') as HTMLSelectElement;
+    expect(limit.value).toBe('75');
+    expect([...limit.options].map((o) => o.textContent)).toContain('75 FPS');
+  });
+
   it('renders nothing editable without a draft', () => {
     store.draft = null;
     render(SetupGraphics);
@@ -231,7 +255,7 @@ describe('Window and graphics step', () => {
 
   it('works without a detected display and lists an unusual current size', () => {
     store.display = null;
-    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1 } });
+    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_limit: 60 } });
     render(SetupGraphics);
     expect(screen.queryByText(/Detected/)).toBeNull();
     expect([...(screen.getByLabelText('Window size') as HTMLSelectElement).options].map((o) => o.textContent)).toContain('1111 × 700');
@@ -377,11 +401,11 @@ describe('Ready step', () => {
 
   it('summarises the choices and starts the launcher', async () => {
     store.apk = makeReport();
-    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25 } });
+    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_limit: 60 } });
     store.importSummary = { written: 3, skipped_existing: 0, ignored: 0, items: [] };
     render(SetupReady);
     expect(screen.getByRole('heading', { name: 'You’re ready to play!' })).toBeVisible();
-    expect(screen.getByText('Window · 1600 × 900 · VSync on · UI 125 %')).toBeVisible();
+    expect(screen.getByText('Window · 1600 × 900 · VSync on · Max 60 FPS · UI 125 %')).toBeVisible();
     expect(screen.getByText(/1 changed/)).toBeVisible();
     expect(screen.getByText(/Back → Backspace/)).toBeVisible();
     expect(screen.getByText('3 files imported from your phone')).toBeVisible();
@@ -401,10 +425,10 @@ describe('Ready step', () => {
     store.apk = makeReport({ status: 'unknown', version: null });
     store.draft = makeConfig({
       keys: { ...makeConfig().keys, back: 'F11' },
-      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1 }
+      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_limit: 0 }
     });
     render(SetupReady);
-    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · UI 100 %')).toBeVisible();
+    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · FPS counter · UI 100 %')).toBeVisible();
     expect(screen.getByText('Two actions share a key. Fix it in Settings.')).toBeVisible();
     expect(screen.getByText('Nothing imported')).toBeVisible();
     expect(screen.getByText('Unknown build · experimental')).toBeVisible();

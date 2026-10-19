@@ -19,7 +19,14 @@
   const dups = $derived(d ? conflicts(d.keys) : []);
   const gfx = $derived(
     d
-      ? `${d.window.fullscreen ? t('gfx.fullscreen') : t('gfx.window')} · ${d.window.width} × ${d.window.height} · ${d.window.vsync ? t('ready.vsyncOn') : t('ready.vsyncOff')} · ${t('ready.ui', { n: Math.round(d.window.ui_scale * 100) })}`
+      ? [
+          d.window.fullscreen ? t('gfx.fullscreen') : t('gfx.window'),
+          `${d.window.width} × ${d.window.height}`,
+          d.window.vsync ? t('ready.vsyncOn') : t('ready.vsyncOff'),
+          d.window.fps_limit ? t('ready.fpsLimit', { n: d.window.fps_limit }) : t('ready.fpsUnlimited'),
+          ...(d.window.show_fps ? [t('ready.showFps')] : []),
+          t('ready.ui', { n: Math.round(d.window.ui_scale * 100) })
+        ].join(' · ')
       : ''
   );
   const imported = $derived(store.importSummary?.written ?? 0);
