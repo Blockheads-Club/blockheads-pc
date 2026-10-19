@@ -298,7 +298,8 @@ enum Flush {
 const CODE_LOG: usize = 1024;
 
 impl Shared {
-    fn publish(&self, f: Flush) {
+    /// Log `f` for the other CPUs; returns its generation.
+    fn publish(&self, f: Flush) -> u64 {
         let mut log = self.code_log.lock().unwrap_or_else(PoisonError::into_inner);
         let gen = self.code_gen.load(Ordering::Relaxed) + 1;
         if log.len() == CODE_LOG {
@@ -306,6 +307,7 @@ impl Shared {
         }
         log.push_back((gen, f));
         self.code_gen.store(gen, Ordering::Release);
+        gen
     }
 }
 
@@ -659,13 +661,16 @@ impl Cpu {
     /// Drop all translated code: at once in this CPU's whole nested-call chain, and in every other CPU of the guest
     /// the next time it enters the JIT or returns from a thunk.
     pub fn clear_cache(&mut self) {
+        let gen = self.shared.publish(Flush::All);
         let mut c = Some(self.root());
         while let Some(cpu) = c {
             // SAFETY: valid jit.
             unsafe { ffi::bhpc_jit_clear_cache(cpu.jit) };
+            // Everything older is dropped too, so the chain need not replay its own flush at the next thunk return
+            // (which would halt a stepping run).
+            cpu.code_seen = cpu.code_seen.max(gen);
             c = cpu.child.as_deref_mut();
         }
-        self.shared.publish(Flush::All);
     }
 
     /// Invalidate translated code for `[start, start+len)` (cacheflush): at once in this CPU's whole nested-call

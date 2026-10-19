@@ -463,6 +463,10 @@ fn traced_call_visits_every_instruction() {
     put(&cpu, CODE + 0x40, &[0xE591_0000]); // ldr r0,[r1] with r1 unmapped
     cpu.set_reg(1, 0x0009_0000);
     assert!(matches!(cpu.call_traced(CODE + 0x40, &[], &mut |_| {}), Err(Stop::Fault(_))));
+    // The CPU's own clear_cache is not replayed to it when a thunk returns, so a traced call still completes.
+    let nop = cpu.register_thunk("nop", Box::new(|_: &mut Cpu| {})).unwrap();
+    cpu.clear_cache();
+    cpu.call_traced(nop, &[], &mut |_| {}).unwrap();
     let t = cpu.register_thunk("flush", Box::new(|c: &mut Cpu| c.invalidate(0x2000, 64))).unwrap();
     assert!(matches!(cpu.call_traced(t, &[], &mut |_| {}), Err(Stop::Halted(_))));
     // Nested use is refused here as well.
