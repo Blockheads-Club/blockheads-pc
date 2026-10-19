@@ -24,6 +24,7 @@
           `${d.window.width} × ${d.window.height}`,
           d.window.vsync ? t('ready.vsyncOn') : t('ready.vsyncOff'),
           d.window.fps_limit ? t('ready.fpsLimit', { n: d.window.fps_limit }) : t('ready.fpsUnlimited'),
+          ...(d.window.unlock_fps ? [t('ready.unlockFps')] : []),
           ...(d.window.show_fps ? [t('ready.showFps')] : []),
           t('ready.ui', { n: Math.round(d.window.ui_scale * 100) })
         ].join(' · ')

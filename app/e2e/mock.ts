@@ -13,13 +13,13 @@ export async function mockTauri(page: Page) {
       apk: '',
       data_dir: '/home/mira/.local/share/blockheads-pc',
       force: false,
-      window: { width: 1280, height: 720, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_limit: 60 },
+      window: { width: 1280, height: 720, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_limit: 60, unlock_fps: false },
       keys: { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11' }
     };
     const saved = {
       ...defaults,
       apk: '/home/mira/.local/share/blockheads-pc/game/TheBlockheads.apk',
-      window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_limit: 60 }
+      window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_limit: 60, unlock_fps: false }
     };
     const s: any = {
       config: q.get('first') ? null : structuredClone(saved),
