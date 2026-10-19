@@ -104,4 +104,7 @@
     .scrim { align-items: flex-end; padding: 0; }
     .dlg { max-width: none; border-radius: var(--r-xl) var(--r-xl) 0 0; max-height: 92vh; }
   }
+  /* Desktop: the title bar stays usable above the scrim (move, resize, close the window). */
+  :global(html.has-tb) .scrim { top: var(--titlebar-h); }
+  :global(html.has-tb) .dlg { max-height: calc(100vh - var(--titlebar-h) - 48px); }
 </style>

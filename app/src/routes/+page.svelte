@@ -66,6 +66,11 @@
     };
     void api.splashSet(state).catch(() => {});
   });
+  /** Our title bar is up (not in fullscreen play): dialogs leave it free so the window stays movable. */
+  const titleBar = $derived(!(s === 'playing' && store.embedded && store.fullscreen));
+  $effect(() => {
+    document.documentElement.classList.toggle('has-tb', titleBar);
+  });
   /** The tray menu follows the UI language. */
   $effect(() => {
     void api.trayLabels(t('tray.show'), t('tray.quit')).catch(() => {});
@@ -138,7 +143,7 @@
 <a class="skip" href="#main">{t('common.skipContent')}</a>
 <div class={['frame', round && 'round']}>
 <div class="win">
-  {#if !(s === 'playing' && store.embedded && store.fullscreen)}
+  {#if titleBar}
   <TitleBar {os} {ctx} {onStage} native={store.info?.native_controls ?? false} />
   {/if}
   <div class="content">
