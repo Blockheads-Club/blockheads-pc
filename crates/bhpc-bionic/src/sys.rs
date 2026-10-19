@@ -330,8 +330,10 @@ fn readlink(c: &mut Cpu, st: &Shared) {
 
 /// `struct dirent` (kernel `dirent64` layout): ino u64, off s64, reclen u16, type u8, name[256].
 const DIRENT_SIZE: u32 = 280;
-/// A `DIR` is `[fd][pad][dirent]`.
-const DIR_BLOCK: u32 = 8 + DIRENT_SIZE;
+/// A `DIR` has bionic's layout: `int fd_`, `size_t available_bytes_`, `dirent* next_`, `pthread_mutex_t mutex_`,
+/// then the entry buffer. Only `fd_` and the first entry of the buffer are used here.
+const DIR_DIRENT: u32 = 16;
+const DIR_BLOCK: u32 = DIR_DIRENT + DIRENT_SIZE;
 
 fn opendir(c: &mut Cpu, st: &Shared) {
     let p = c.args().u32(c);
@@ -360,13 +362,22 @@ fn opendir(c: &mut Cpu, st: &Shared) {
     c.ret_u32(dir);
 }
 
-/// Next entry of `dir` written into the dirent at `at`: `Some(false)` at the end (or on a bad `DIR`),
-/// `None` if the guest faulted writing it.
+/// The descriptor behind `dir`: one of ours, or a `DIR` the guest built itself. libv's `__wrap_opendir` does
+/// that: it `open`s the directory, fills a bionic-layout `DIR` (descriptor in the first word) from its own
+/// allocator and hands it to the libc `readdir`/`readdir_r`. `None` if the guest faulted reading it.
+fn dir_fd(c: &mut Cpu, st: &Shared, dir: u32) -> Option<i32> {
+    let ours = lock(st).dirs.get(&dir).copied();
+    match ours {
+        Some(fd) => Some(fd),
+        None => rd32(c, dir).map(|fd| fd as i32),
+    }
+}
+
+/// Next entry of `dir` written into the dirent at `at`: `Some(false)` at the end (or on a descriptor that is
+/// not an open directory), `None` if the guest faulted.
 fn next_entry(c: &mut Cpu, st: &Shared, dir: u32, at: u32) -> Option<bool> {
-    let mut s = lock(st);
-    let Some(fd) = s.dirs.get(&dir).copied() else { return Some(false) };
-    let Ok(Some(e)) = s.vfs.readdir(fd) else { return Some(false) };
-    drop(s);
+    let fd = dir_fd(c, st, dir)?;
+    let Ok(Some(e)) = lock(st).vfs.readdir(fd) else { return Some(false) };
     let mut b = vec![0u8; DIRENT_SIZE as usize];
     b[0..8].copy_from_slice(&e.ino.to_le_bytes());
     b[16..18].copy_from_slice(&(DIRENT_SIZE as u16).to_le_bytes());
@@ -377,11 +388,11 @@ fn next_entry(c: &mut Cpu, st: &Shared, dir: u32, at: u32) -> Option<bool> {
     wr(c, at, &b).then_some(true)
 }
 
+/// `readdir`: the entry goes into the `DIR`'s own buffer, as bionic does.
 fn readdir(c: &mut Cpu, st: &Shared) {
     let dir = c.args().u32(c);
-    // (A fault while writing the entry cannot happen: the dirent lives in the mapped DIR block.)
-    let found = next_entry(c, st, dir, dir + 8) == Some(true);
-    c.ret_u32(if found { dir + 8 } else { 0 });
+    let Some(found) = next_entry(c, st, dir, dir + DIR_DIRENT) else { return };
+    c.ret_u32(if found { dir + DIR_DIRENT } else { 0 });
 }
 
 fn readdir_r(c: &mut Cpu, st: &Shared) {
@@ -400,6 +411,8 @@ fn closedir(c: &mut Cpu, st: &Shared) {
         return fail(c, st, errno::EBADF);
     };
     let _ = s.vfs.close(fd);
+    // A stale `DIR` must not name a descriptor that gets reused.
+    let _ = s.mem.write_u32(dir, u32::MAX);
     s.heap.free(dir);
     drop(s);
     c.ret_u32(0);
@@ -1183,6 +1196,48 @@ mod tests {
         let __p = put(&s, A, "/");
         assert_eq!(call(&mut s, "opendir", &[__p]), 0);
         assert_eq!(s.errno(), errno::ENOMEM);
+    }
+
+    #[test]
+    fn readdir_takes_a_dir_the_guest_built_itself() {
+        // libv's `__wrap_opendir` opens the directory and builds a bionic `DIR` (descriptor first, entry buffer at
+        // 16) in its own memory, then calls the libc `readdir`/`readdir_r` on it.
+        let (mut e, tmp) = fs_env();
+        std::fs::create_dir(tmp.0.join("rw/saves")).unwrap();
+        std::fs::create_dir(tmp.0.join("rw/saves/w1")).unwrap();
+        std::fs::write(tmp.0.join("rw/saves/f"), b"1").unwrap();
+        let p = put(&e, A, "/data/data/pkg/saves");
+        let fd = call(&mut e, "open", &[p, vfs::O_DIRECTORY, 0]);
+        let dir = SCRATCH + 0x2000;
+        e.mem().write_u32(dir, fd).unwrap();
+        let mut names = Vec::new();
+        loop {
+            let ent = call(&mut e, "readdir", &[dir]);
+            if ent == 0 {
+                break;
+            }
+            assert_eq!(ent, dir + DIR_DIRENT, "into the DIR's own buffer");
+            names.push((e.get_str(ent + 19), e.mem().read_bytes(ent + 18, 1).unwrap()[0]));
+        }
+        assert_eq!(names, [(".".into(), 4), ("..".into(), 4), ("f".into(), 8), ("w1".into(), 4)]);
+        // readdir_r on a fresh one.
+        let fd2 = call(&mut e, "open", &[p, vfs::O_DIRECTORY, 0]);
+        e.mem().write_u32(dir, fd2).unwrap();
+        let entry = SCRATCH + 0x3000;
+        let mut count = 0;
+        while call(&mut e, "readdir_r", &[dir, entry, OUT]) == 0 && e.mem().read_u32(OUT).unwrap() == entry {
+            count += 1;
+        }
+        assert_eq!(count, 4);
+        // A descriptor that is no directory, or none at all, yields nothing.
+        let f = put(&e, B, "/data/data/pkg/saves/f");
+        let file = call(&mut e, "open", &[f, 0, 0]);
+        e.mem().write_u32(dir, file).unwrap();
+        assert_eq!(call(&mut e, "readdir", &[dir]), 0);
+        e.mem().write_u32(dir, 999).unwrap();
+        assert_eq!(call(&mut e, "readdir", &[dir]), 0);
+        assert!(matches!(e.try_call("readdir", &[BAD]), Err(Stop::Fault(_))));
+        assert!(matches!(e.try_call("readdir_r", &[BAD, entry, OUT]), Err(Stop::Fault(_))));
     }
 
     #[test]

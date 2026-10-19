@@ -48,6 +48,11 @@ Umbrella rules: `../AGENTS.md`.
   root (home/, cache/, sdcard/, ...); without it the per-user default is used. The fake JVM is `bhpc-jni`
   (`bhpc_jni::install`): lenient, so unknown Java classes/members are invented and counted, calls answer 0/NULL.
 - Never `lock(st)` twice in one expression/`match` scrutinee (the fake JNI deadlocked once that way).
+- libv's `__wrap_opendir` does not call our `opendir`: it `open`s the directory (O_DIRECTORY), builds a bionic-layout
+  `DIR` (fd in word 0, entry buffer at +16) in its own memory and calls the libc `readdir`/`readdir_r` on it. Our
+  `readdir` must therefore accept any `DIR` by its first word; when it did not, the world list (Foundation's
+  `contentsOfDirectoryAtPath:` on `Library/Application Support/saves`) came back empty and no saved world showed.
+  `BHPC_APK=... cargo test -p bhpc-run --test saves_apk -- --ignored` checks it on the real libv.
 
 ## Gotchas learned in M3 (play mode)
 - `bhpc-run --apk X` without `--init-only` needs `--features play` (SDL window); notes and flags in
