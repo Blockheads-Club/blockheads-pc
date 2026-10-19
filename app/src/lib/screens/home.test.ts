@@ -157,12 +157,6 @@ describe('Home', () => {
     cleanup();
     render(Home);
     await click('Switch to dark mode');
-    await click('Fullscreen');
-    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
-    store.fullscreen = true;
-    await fireEvent.click(await screen.findByRole('button', { name: 'Exit fullscreen' }));
-    expect(mock.win.setFullscreen).toHaveBeenLastCalledWith(false);
-    store.fullscreen = false;
     await click('How to join a server');
     expect(store.dialog).toBe('join');
     await click('Game file');
@@ -175,18 +169,9 @@ describe('Home', () => {
     }
   });
 
-  it('offers fullscreen left of the join help in the full top bar', async () => {
+  it('has no fullscreen on Home: only the game goes fullscreen', () => {
     render(Home);
-    viewport.compact = false;
-    const bar = screen.getByRole('button', { name: 'Fullscreen' });
-    expect(bar.nextElementSibling).toBe(screen.getByRole('button', { name: 'Join a server' }));
-    await fireEvent.click(bar);
-    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
-    cleanup();
-    store.fullscreen = true;
-    render(Home);
-    await fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }));
-    expect(mock.win.setFullscreen).toHaveBeenLastCalledWith(false);
+    expect(screen.queryByRole('button', { name: 'Fullscreen' })).toBeNull();
   });
 
   it('copes without a saved configuration or a known version', () => {
@@ -213,8 +198,7 @@ describe('Playing', () => {
     expect(screen.getByRole('list', { name: 'Controls in the game' })).toBeVisible();
     await click('Home');
     expect(store.screen).toBe('home');
-    await click('Fullscreen');
-    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole('button', { name: 'Fullscreen' })).toBeNull(); // the game has its own window here
     await click('How to join a server');
     expect(store.dialog).toBe('join');
     await click('View logs');
@@ -242,7 +226,9 @@ describe('Playing inside the window', () => {
     await waitFor(() => expect(top().at(-1)).toBe(-1));
     store.dialog = null;
     await waitFor(() => expect(top().at(-1)).toBe(0));
-    // Fullscreen hides the strip.
+    // The strip's Fullscreen button makes the game fullscreen, which hides the strip.
+    await fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    expect(mock.api.embedFullscreen).toHaveBeenCalledWith(true);
     expect(screen.getByRole('button', { name: 'Stop game' })).toBeVisible();
     store.fullscreen = true;
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop game' })).toBeNull());

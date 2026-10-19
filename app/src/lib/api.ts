@@ -69,7 +69,6 @@ export const win = {
   close: () => getCurrentWindow().close(),
   isMaximized: () => getCurrentWindow().isMaximized(),
   isFullscreen: () => getCurrentWindow().isFullscreen(),
-  setFullscreen: (on: boolean) => getCurrentWindow().setFullscreen(on),
   onResized: (cb: () => void) => getCurrentWindow().onResized(cb),
   onFocus: (cb: (focused: boolean) => void) => getCurrentWindow().onFocusChanged((e) => cb(e.payload)),
   onFileDrop: (cb: (paths: string[]) => void) =>

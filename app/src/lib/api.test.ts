@@ -7,7 +7,6 @@ const win = vi.hoisted(() => ({
   close: vi.fn(),
   isMaximized: vi.fn(),
   isFullscreen: vi.fn(),
-  setFullscreen: vi.fn(),
   onResized: vi.fn(),
   onFocusChanged: vi.fn()
 }));
@@ -102,8 +101,6 @@ describe('api', () => {
     await winApi.close();
     await winApi.isMaximized();
     await winApi.isFullscreen();
-    await winApi.setFullscreen(true);
-    expect(win.setFullscreen).toHaveBeenCalledWith(true);
     expect([win.minimize, win.toggleMaximize, win.close, win.isMaximized, win.isFullscreen].every((f) => f.mock.calls.length === 1)).toBe(true);
     const cb = vi.fn();
     await winApi.onResized(cb);

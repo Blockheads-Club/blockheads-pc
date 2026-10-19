@@ -1,4 +1,4 @@
-import { api, win } from './api';
+import { api } from './api';
 import { errText, setLang, t } from './i18n.svelte';
 import { setTheme } from './theme.svelte';
 import { toast } from './ui/toast.svelte';
@@ -481,12 +481,11 @@ export class AppStore {
     }
   }
 
-  /** Fullscreen on or off: the game view while one is shown in the window, else the launcher window itself. */
+  /** The game fullscreen on or off (only while it is shown in the window; the launcher itself never goes fullscreen). */
   async toggleFullscreen() {
-    const on = !this.fullscreen;
+    if (!this.embedded) return;
     try {
-      if (this.embedded) await api.embedFullscreen(on);
-      else await win.setFullscreen(on);
+      await api.embedFullscreen(!this.fullscreen);
     } catch (e) {
       this.fail(e);
     }

@@ -244,12 +244,12 @@ describe('page', () => {
     expect(mock.api.embedFullscreen).toHaveBeenLastCalledWith(false);
   });
 
-  it('F11 makes the launcher window fullscreen when no game view is shown', async () => {
+  it('F11 does nothing without a game view: the launcher never goes fullscreen', async () => {
     mock.api.boot = vi.fn(async () => makeBoot());
     render(Page);
     await screen.findByRole('heading', { name: /The Blockheads/ });
     await fireEvent.keyDown(window, { key: 'F11' });
-    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
+    expect(mock.api.embedFullscreen).not.toHaveBeenCalled();
   });
 
   it('survives a window without close events and picks the OS from the user agent', async () => {
