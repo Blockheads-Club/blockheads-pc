@@ -1,5 +1,6 @@
 import { api } from './api';
 import { errText, setLang, t } from './i18n.svelte';
+import type { SettingsPage } from './settings-index';
 import { setTheme } from './theme.svelte';
 import { toast } from './ui/toast.svelte';
 import type {
@@ -9,7 +10,7 @@ import type {
 import { baseName, copyText, recommendedSize } from './util';
 
 export type Screen = 'splash' | 'setup' | 'home' | 'playing' | 'settings';
-export type Section = 'general' | 'controls' | 'about';
+export type Section = SettingsPage;
 export type DialogName = 'join' | 'update' | 'logs' | 'close' | 'import' | 'resetKeys' | null;
 export const SETUP_STEPS = 6;
 export const MAX_LOG = 5000;
@@ -44,7 +45,8 @@ export class AppStore {
   bootError = $state('');
   firstRun = $state(false);
   step = $state(1);
-  section = $state<Section>('general');
+  /** The Settings page shown; kept while the app runs, so Settings reopens where it was left. */
+  section = $state<Section>('game');
   dialog = $state<DialogName>(null);
   /** The setup draft; the saved config takes over when setup finishes. */
   draft = $state<LaunchConfig | null>(null);
@@ -173,8 +175,8 @@ export class AppStore {
     this.dialog = null;
   }
 
-  openSettings(section: Section = 'general') {
-    this.section = section;
+  openSettings(section?: Section) {
+    if (section) this.section = section;
     this.go('settings');
   }
 

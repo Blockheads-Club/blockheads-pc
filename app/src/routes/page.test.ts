@@ -132,11 +132,11 @@ describe('page', () => {
     // Ctrl+, opens Settings; Enter is ignored while the game runs.
     await fireEvent.keyDown(window, { key: ',', ctrlKey: true });
     expect(store.screen).toBe('settings');
-    expect(document.title).toBe('Blockheads PC · Settings');
+    expect(document.title).toBe('Blockheads PC · Settings · Game & data');
     store.section = 'controls';
     await waitFor(() => expect(document.title).toBe('Blockheads PC · Settings · Controls'));
     store.section = 'about';
-    await waitFor(() => expect(document.title).toBe('Blockheads PC · Settings · About'));
+    await waitFor(() => expect(document.title).toBe('Blockheads PC · Settings · Updates & about'));
     expect(await screen.findByText('Updates')).toBeVisible();
     store.section = 'controls';
     expect(await screen.findByRole('heading', { name: 'Controls' })).toBeVisible();

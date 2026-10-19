@@ -104,8 +104,9 @@ describe('navigation', () => {
     store.dialog = 'join';
     store.openSettings('controls');
     expect([store.screen, store.section, store.dialog]).toEqual(['settings', 'controls', null]);
+    // Without a page, Settings reopens on the last one.
     store.openSettings();
-    expect(store.section).toBe('general');
+    expect(store.section).toBe('controls');
     store.go('home');
     expect(store.screen).toBe('home');
   });

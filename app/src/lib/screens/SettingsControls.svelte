@@ -3,7 +3,6 @@
   import { store } from '../store.svelte';
   import { conflicts } from '../util';
   import ControlsEditor from '../parts/ControlsEditor.svelte';
-  import SettingsShell from '../layout/SettingsShell.svelte';
   import Alert from '../ui/Alert.svelte';
   import Button from '../ui/Button.svelte';
   import Dialog from '../ui/Dialog.svelte';
@@ -15,22 +14,20 @@
   let confirm = $state(false);
 </script>
 
-<SettingsShell>
-  <div class="head">
-    <h1>{t('ctl.title')}</h1>
-    <Button size="sm" icon="reset" onclick={() => (confirm = true)}>{t('ctl.resetAllConfirm')}</Button>
-  </div>
-  {#if first}
-    <Alert tone="bad" title={t('ctl.dupTitle', { key: dupKey })}>
-      {t('ctl.dupBody', { a: name(first[0]), b: name(first[1]) })}
-      {#snippet actions()}
-        <Button size="sm" onclick={() => (store.focusAction = first[0])}>{t('ctl.changeNamed', { action: name(first[0]) })}</Button>
-        {#if store.undoKeys}<Button size="sm" variant="ghost" onclick={() => store.undoBinding()}>{t('ctl.undo')}</Button>{/if}
-      {/snippet}
-    </Alert>
-  {/if}
-  <ControlsEditor marks />
-</SettingsShell>
+<div class="head" id="set-ctl-reset">
+  <h1>{t('ctl.title')}</h1>
+  <Button size="sm" icon="reset" onclick={() => (confirm = true)}>{t('ctl.resetAllConfirm')}</Button>
+</div>
+{#if first}
+  <Alert tone="bad" title={t('ctl.dupTitle', { key: dupKey })}>
+    {t('ctl.dupBody', { a: name(first[0]), b: name(first[1]) })}
+    {#snippet actions()}
+      <Button size="sm" onclick={() => (store.focusAction = first[0])}>{t('ctl.changeNamed', { action: name(first[0]) })}</Button>
+      {#if store.undoKeys}<Button size="sm" variant="ghost" onclick={() => store.undoBinding()}>{t('ctl.undo')}</Button>{/if}
+    {/snippet}
+  </Alert>
+{/if}
+<ControlsEditor marks />
 
 {#if confirm}
   <Dialog title={t('ctl.resetTitle')} description={t('ctl.resetBody')} onclose={() => (confirm = false)}>

@@ -19,7 +19,7 @@ export function resetStore(overrides: Partial<Record<keyof AppStore, unknown>> =
     bootError: '',
     firstRun: false,
     step: 1,
-    section: 'general',
+    section: 'game',
     dialog: null,
     draft: null,
     legalOk: false,

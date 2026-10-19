@@ -27,7 +27,7 @@
   const file = $derived(baseName(store.config?.apk ?? ''));
 
   const quick = $derived<{ icon: IconName; title: string; hint: string; short: string; run: () => void }[]>([
-    { icon: 'file', title: t('home.q.file'), hint: `${version} · ${file}`, short: t('home.q.fileShort'), run: () => store.openSettings('general') },
+    { icon: 'file', title: t('home.q.file'), hint: `${version} · ${file}`, short: t('home.q.fileShort'), run: () => store.openSettings('game') },
     { icon: 'map', title: t('home.q.import'), hint: t('home.q.importHint'), short: t('home.q.importShort'), run: () => { store.resetImport(); store.dialog = 'import'; } },
     { icon: 'folder', title: t('home.q.data'), hint: t('home.q.dataHint'), short: t('home.q.dataShort'), run: () => store.openDataFolder() },
     { icon: 'terminal', title: t('home.q.logs'), hint: t('home.q.logsHint'), short: t('home.q.logsShort'), run: () => (store.dialog = 'logs') },

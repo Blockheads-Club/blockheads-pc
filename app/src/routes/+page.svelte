@@ -10,9 +10,7 @@
   import JoinDialog from '$lib/screens/JoinDialog.svelte';
   import LogsDialog from '$lib/screens/LogsDialog.svelte';
   import Playing from '$lib/screens/Playing.svelte';
-  import SettingsAbout from '$lib/screens/SettingsAbout.svelte';
-  import SettingsControls from '$lib/screens/SettingsControls.svelte';
-  import SettingsGeneral from '$lib/screens/SettingsGeneral.svelte';
+  import Settings from '$lib/screens/Settings.svelte';
   import SetupApk from '$lib/screens/SetupApk.svelte';
   import SetupControls from '$lib/screens/SetupControls.svelte';
   import SetupGraphics from '$lib/screens/SetupGraphics.svelte';
@@ -20,6 +18,7 @@
   import SetupReady from '$lib/screens/SetupReady.svelte';
   import SetupWelcome from '$lib/screens/SetupWelcome.svelte';
   import UpdateDialog from '$lib/screens/UpdateDialog.svelte';
+  import { PAGES } from '$lib/settings-index';
   import { SETUP_STEPS, store } from '$lib/store.svelte';
   import { initTheme } from '$lib/theme.svelte';
   import Toasts from '$lib/ui/Toasts.svelte';
@@ -36,7 +35,7 @@
   const onStage = $derived(s === 'playing');
   const ctx = $derived.by(() => {
     if (s === 'setup') return t('tb.setup', { n: store.step, total: SETUP_STEPS });
-    if (s === 'settings') return store.section === 'controls' ? t('tb.settingsControls') : store.section === 'about' ? t('tb.settingsAbout') : t('tb.settings');
+    if (s === 'settings') return t('tb.settingsPage', { page: t(PAGES.find((p) => p.id === store.section)!.labelKey) });
     if (s === 'playing') return t('tb.playing', { v: store.version });
     if (store.dialog === 'join') return t('tb.help');
     return s === 'home' ? t('tb.home') : '';
@@ -45,10 +44,11 @@
     document.title = ctx ? `${t('app.title')} · ${ctx}` : t('app.title');
   });
 
-  /** Screen readers: after a step or screen change, focus moves to the new page's main region. */
+  /** Screen readers: after a step or screen change, focus moves to the new page's main region.
+      Settings pages handle this themselves (a search result focuses its setting instead). */
   let shown = '';
   $effect(() => {
-    const key = `${s}/${store.step}/${store.section}`;
+    const key = `${s}/${store.step}`;
     if (shown && key !== shown && s !== 'splash') void tick().then(() => document.getElementById('main')?.focus({ preventScroll: true }));
     shown = key;
   });
@@ -168,12 +168,8 @@
       <Home />
     {:else if s === 'playing'}
       <Playing />
-    {:else if store.section === 'controls'}
-      <SettingsControls />
-    {:else if store.section === 'about'}
-      <SettingsAbout />
     {:else}
-      <SettingsGeneral />
+      <Settings />
     {/if}
   </div>
 </div>
