@@ -74,7 +74,7 @@
   }
   .item:hover { background: var(--surface-2); }
   .item[aria-current='page'] { background: var(--primary-soft); color: var(--primary-ink); }
-  .smain { flex: 999 1 480px; min-width: 0; padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 16px; outline: none; overflow-y: auto; }
+  .smain { position: relative; flex: 999 1 480px; min-width: 0; padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 16px; outline: none; overflow-y: auto; }
   .smain > :global(*) { max-width: 764px; }
   @media (max-width: 860px) {
     .snav { flex: 1 1 100%; max-width: none; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 2px solid var(--line); padding: 8px 12px; }

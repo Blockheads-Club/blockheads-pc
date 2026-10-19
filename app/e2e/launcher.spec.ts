@@ -96,6 +96,8 @@ test('works from 800 x 600 up on every screen', async ({ page }) => {
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name }).click();
     expect(await noOverflow(page)).toBe(true);
+    // Only the section content scrolls; the section nav stays put.
+    expect(await page.evaluate(() => { const c = document.querySelector('.content')!; return c.scrollHeight <= c.clientHeight + 1; })).toBe(true);
     await page.getByRole('button', { name: 'Back to home' }).click();
   }
   await page.goto('/?first=1');

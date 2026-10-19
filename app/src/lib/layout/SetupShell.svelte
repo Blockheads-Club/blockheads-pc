@@ -142,7 +142,7 @@
   .cur .n { background: #ff7a45; border-color: #ff7a45; color: #1c0d06; box-shadow: 0 2px 0 #9c3a12; }
   .done .n { background: #163a29; border-color: #56c990; color: #56c990; }
   .rfoot { margin-top: auto; font-size: 12.5px; color: var(--stage-text-3); padding: 0 6px; }
-  .rmain { flex: 999 1 520px; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+  .rmain { position: relative; flex: 999 1 520px; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
   .wbody { flex: 1; padding: 32px 40px; display: flex; flex-direction: column; gap: 18px; max-width: 820px; width: 100%; outline: none; }
   .wfoot {
     display: flex;
