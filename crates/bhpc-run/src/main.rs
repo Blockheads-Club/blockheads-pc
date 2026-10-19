@@ -127,6 +127,7 @@ fn run_apk(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn st
     cfg.trace_jni_calls = args.iter().any(|a| a == "--trace-jni-calls");
     cfg.keep_going = args.iter().any(|a| a == "--keep-going");
     cfg.verbose = args.iter().any(|a| a == "-v" || a == "--verbose");
+    cfg.parallel_guest = bhpc_run::apkrun::parallel_guest(args, std::env::var("BHPC_PARALLEL_GUEST").ok().as_deref());
     cfg.pc_trace = opt(args, "--trace-pc").map(Into::into);
     cfg.data_dir = opt(args, "--data-dir").map(Into::into);
     if let Some(p) = opt(args, "--package") {

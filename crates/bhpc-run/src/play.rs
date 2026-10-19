@@ -178,6 +178,9 @@ fn watch_blocking(cpu: &Cpu, st: &bhpc_bionic::Shared, log: &BlockLog) {
             inner(c);
         });
         let _ = cpu.register_shared_thunk(name, wrapper);
+        if bhpc_bionic::gate_free(name) {
+            cpu.table().set_gate_free(name);
+        }
     }
 }
 
@@ -768,6 +771,7 @@ fn boot(
     let (shot, shot_at, check_gl) = (cfg.shot.clone(), cfg.shot_at, cfg.check_gl);
     let (fps_limit, fps_hud) = (cfg.fps_limit, cfg.show_fps.then_some(cfg.fps_position));
     let mut sess = Session::open_setup(&icfg, Box::new(std::io::stdout()), None, &mut |cpu, st| {
+        cpu.table().set_stats(std::env::var_os("BHPC_THUNK_STATS").is_some());
         let primary = window
             .create_context(None)
             .ok_or_else(|| no_window(&embed_cfg, "cannot create a GLES2 context".to_string()))?;
@@ -1345,6 +1349,12 @@ fn finish(
     blocks: &BlockLog,
 ) -> PlayReport {
     let sym = &cfg.symbolize;
+    if std::env::var_os("BHPC_THUNK_STATS").is_some() {
+        for t in sess.cpu.table().stats().iter().take(60) {
+            let free = if t.free { " (gate-free)" } else { "" };
+            eprintln!("[thunks] {:>10} calls {:>10.1} ms  {}{free}", t.calls, t.nanos as f64 / 1e6, t.name);
+        }
+    }
     if let Some(p) = &cfg.jni_report {
         let _ = std::fs::write(p, sess.jni.vm.report().render());
     }

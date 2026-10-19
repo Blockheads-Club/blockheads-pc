@@ -418,3 +418,39 @@ fn java_exports_are_bound_lazily_and_the_vm_heap_is_zeroed_and_freed() {
     let q = heap.alloc(64);
     assert_eq!(lock(&sess.st).mem.read_bytes(q, 64).unwrap(), vec![0u8; 64], "recycled blocks come back zeroed");
 }
+
+#[test]
+fn a_session_can_run_its_guest_threads_in_parallel() {
+    let dir = Tmp::new("par");
+    let (code, cfgr) = calls_import(2);
+    let app = lib(&code, |b, at| {
+        b.needed = vec!["libv.so"];
+        b.init = Some(at);
+        b.syms = vec![def("anchor", at), undef("getpid")];
+        cfgr(b, at);
+    });
+    let apk = apk_file(&dir, &[("libApplication.so", app), ("libv.so", libv())]);
+    let mut cfg = config(apk);
+    cfg.data_dir = Some(dir.0.join("data"));
+    cfg.parallel_guest = true;
+    let rep = init_only(&cfg, Box::new(std::io::sink())).unwrap();
+    assert!(rep.ok(), "{rep:?}");
+    assert_eq!(rep.constructors_ran, 1);
+}
+
+#[test]
+fn the_parallel_guest_choice_comes_from_flags_then_the_environment() {
+    use bhpc_run::apkrun::{parallel_guest, DEFAULT_PARALLEL_GUEST};
+    let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(parallel_guest(&a(&[]), None), DEFAULT_PARALLEL_GUEST);
+    assert!(parallel_guest(&a(&["--parallel-guest"]), Some("0")));
+    assert!(!parallel_guest(&a(&["--serial-guest"]), Some("1")));
+    assert!(!parallel_guest(&a(&["--parallel-guest", "--serial-guest"]), None), "the later flag wins");
+    for on in ["1", "on", "TRUE", " yes "] {
+        assert!(parallel_guest(&a(&["--apk", "x"]), Some(on)), "{on}");
+    }
+    for off in ["0", "off", "false", "No"] {
+        assert!(!parallel_guest(&a(&[]), Some(off)), "{off}");
+    }
+    assert_eq!(parallel_guest(&a(&[]), Some("maybe")), DEFAULT_PARALLEL_GUEST);
+}

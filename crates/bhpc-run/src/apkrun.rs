@@ -48,6 +48,27 @@ pub struct InitConfig {
     pub pc_trace: Option<PathBuf>,
     /// Screen size reported to the game (`None` keeps the platform default).
     pub screen: Option<(i32, i32)>,
+    /// Run guest threads in parallel (`bhpc_bionic::sched::enable_parallel`) instead of one at a time.
+    pub parallel_guest: bool,
+}
+
+/// Whether guest threads run in parallel when nothing says otherwise.
+pub const DEFAULT_PARALLEL_GUEST: bool = false;
+
+/// The parallel-guest choice of a command line (`--parallel-guest` / `--serial-guest`, the later one wins) and the
+/// `BHPC_PARALLEL_GUEST` environment variable (`1`/`on`/`true` or `0`/`off`/`false`), in that order of precedence.
+pub fn parallel_guest(args: &[String], env: Option<&str>) -> bool {
+    let flag = args.iter().rev().find_map(|a| match a.as_str() {
+        "--parallel-guest" => Some(true),
+        "--serial-guest" => Some(false),
+        _ => None,
+    });
+    let env = env.and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "on" | "true" | "yes" => Some(true),
+        "0" | "off" | "false" | "no" => Some(false),
+        _ => None,
+    });
+    flag.or(env).unwrap_or(DEFAULT_PARALLEL_GUEST)
 }
 
 impl InitConfig {
@@ -66,6 +87,7 @@ impl InitConfig {
             verbose: false,
             pc_trace: None,
             screen: None,
+            parallel_guest: DEFAULT_PARALLEL_GUEST,
         }
     }
 }
@@ -331,6 +353,9 @@ impl Session {
         cpu.set_trace_thunks(cfg.trace_thunks);
         // Spinning guest threads must not starve the ones they wait for (threads inherit the policy).
         bhpc_bionic::sched::enable_time_slice(&mut cpu, &st, bhpc_bionic::sched::DEFAULT_SLICE_CYCLES);
+        if cfg.parallel_guest {
+            bhpc_bionic::sched::enable_parallel(&cpu, &st);
+        }
         lock(&st).vfs.trace = cfg.trace_fs;
         let hooks = setup(&mut cpu, &st)?;
         let mut linker = Linker::new(cpu.mem().clone());

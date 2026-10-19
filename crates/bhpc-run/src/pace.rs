@@ -6,7 +6,7 @@
 
 use bhpc_app::hud::{fps_hud, Corner, Hud};
 use bhpc_app::{Clock, FpsCounter, FramePacer, SystemClock};
-use bhpc_bionic::sched::{Sched, WaitEnd};
+use bhpc_bionic::sched::{Key, Sched, WaitEnd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -30,13 +30,21 @@ impl Clock for GuestClock {
     fn sleep(&mut self, d: Duration) {
         let until = Instant::now() + d;
         while Instant::now() < until {
-            // Woken early by some other thread's state change: keep waiting. A stopped scheduler cannot hand the
-            // baton over any more; then this is an ordinary sleep.
-            if self.sched.wait(Some(until)) == WaitEnd::Deadlock {
+            // A sleep only ends at its deadline. A stopped scheduler cannot hand the baton over any more; then this is
+            // an ordinary sleep.
+            if self.sched.wait_on(Key::Sleep, Some(until)) == WaitEnd::Deadlock {
                 std::thread::sleep(until.saturating_duration_since(Instant::now()));
                 return;
             }
         }
+    }
+
+    fn spin(&mut self) {
+        // In parallel mode the swap runs holding the host lock: let threads waiting for it go first.
+        if self.sched.parallel() {
+            self.sched.yield_now();
+        }
+        std::thread::yield_now();
     }
 }
 
@@ -87,6 +95,23 @@ mod tests {
         c.sleep(Duration::from_millis(10));
         assert!(c.now() - t1 >= Duration::from_millis(10));
         c.sleep(Duration::ZERO);
+        c.spin();
+        // In parallel mode a spin step hands the host lock to a waiting thread.
+        let sched = Arc::new(Sched::new());
+        sched.set_parallel();
+        let mut c = GuestClock::new(sched.clone());
+        c.spin();
+        let s2 = sched.clone();
+        let other = std::thread::spawn(move || {
+            use bhpc_cpu::HostGate;
+            assert!(s2.enter());
+            assert!(s2.leave());
+        });
+        let t0 = Instant::now();
+        while !other.is_finished() && t0.elapsed() < Duration::from_secs(10) {
+            c.spin();
+        }
+        other.join().unwrap();
     }
 
     #[test]
