@@ -95,6 +95,87 @@ pub const DATA_SYMBOLS: &[&str] = &[
     "tzname",
 ];
 
+/// Built-ins that run without the host lock in parallel mode (`sched::enable_parallel`): pure functions of their
+/// arguments and the guest memory they point to, and the synchronisation functions written for it (each does its
+/// state update in one critical section and waits with `sched::Sched::key_seq`).
+const GATE_FREE: &[&str] = &[
+    // string.h, minus the ones that cache (strerror, strsignal) or keep global state (rand48)
+    "memcpy",
+    "memmove",
+    "memset",
+    "memcmp",
+    "memchr",
+    "memrchr",
+    "memmem",
+    "bcopy",
+    "bzero",
+    "__aeabi_memcpy",
+    "__aeabi_memcpy4",
+    "__aeabi_memcpy8",
+    "__aeabi_memmove",
+    "__aeabi_memmove4",
+    "__aeabi_memmove8",
+    "__aeabi_memset",
+    "__aeabi_memset4",
+    "__aeabi_memset8",
+    "__aeabi_memclr",
+    "__aeabi_memclr4",
+    "__aeabi_memclr8",
+    "strlen",
+    "strnlen",
+    "strcmp",
+    "strncmp",
+    "strcoll",
+    "strcasecmp",
+    "strncasecmp",
+    "strcpy",
+    "strncpy",
+    "strcat",
+    "strncat",
+    "strlcpy",
+    "strlcat",
+    "strchr",
+    "strrchr",
+    "strstr",
+    "strcasestr",
+    "strpbrk",
+    "strspn",
+    "strcspn",
+    "strxfrm",
+    "strtok_r",
+    "strtol",
+    "strtoul",
+    "strtoll",
+    "strtoull",
+    "atoi",
+    "atol",
+    "iswalnum",
+    "iswdigit",
+    "iswspace",
+    "iswxdigit",
+    "towlower",
+    "towupper",
+    // pthread
+    "pthread_mutex_lock",
+    "pthread_mutex_trylock",
+    "pthread_mutex_unlock",
+    "pthread_cond_wait",
+    "pthread_cond_timedwait",
+    "pthread_cond_timedwait_monotonic",
+    "pthread_cond_timedwait_relative_np",
+    "pthread_cond_signal",
+    "pthread_cond_broadcast",
+    "__futex_wait",
+    "__futex_wake",
+    "pthread_getspecific",
+    "pthread_setspecific",
+];
+
+/// True if the built-in `name` may run without the host lock (see `GATE_FREE`; all of `libm` and `ctype`).
+pub fn gate_free(name: &str) -> bool {
+    GATE_FREE.contains(&name) || libm::TABLE.iter().chain(ctype::TABLE).any(|(n, _)| *n == name)
+}
+
 /// The built-in host function for `name`, wrapped so calls are counted in the thunk histogram.
 pub fn builtin(name: &str, st: &Shared) -> Option<SharedThunkFn> {
     let f = *registry().get(name)?;
@@ -130,7 +211,11 @@ pub fn resolve(cpu: &mut Cpu, st: &Shared, name: &str) -> Option<u32> {
         lock(st).unimplemented_bound.push(name.to_string());
         trap(name, st)
     });
-    cpu.register_shared_thunk(name, f).ok()
+    let addr = cpu.register_shared_thunk(name, f).ok()?;
+    if gate_free(name) {
+        cpu.table().set_gate_free(name);
+    }
+    Some(addr)
 }
 
 /// Pre-bind every built-in function (useful to fill the thunk table up front). Returns the count.
@@ -173,6 +258,27 @@ impl bhpc_loader::HostSymbols for Hle<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_free_built_ins_exist_and_are_marked_when_bound() {
+        for n in GATE_FREE {
+            assert!(registry().contains_key(n), "{n} is not a built-in");
+        }
+        assert!(gate_free("sqrt") && gate_free("isalpha") && gate_free("memcpy"));
+        assert!(!gate_free("pthread_create") && !gate_free("strerror"));
+        let mut e = crate::tests_env::Env::new();
+        e.addr("memcpy");
+        e.addr("malloc");
+        let stats: Vec<_> = {
+            e.cpu.table().set_stats(true);
+            let (a, b) = (e.addr("memcpy"), e.addr("malloc"));
+            e.cpu.call(a, &[crate::tests_env::SCRATCH, crate::tests_env::SCRATCH, 0]).unwrap();
+            e.cpu.call(b, &[8]).unwrap();
+            e.cpu.table().stats()
+        };
+        let free = |n: &str| stats.iter().find(|t| t.name == n).unwrap().free;
+        assert!(free("memcpy") && !free("malloc"));
+    }
     use crate::tests_env::{Env, HEAP_BASE, SCRATCH};
     use bhpc_loader::HostSymbols;
 

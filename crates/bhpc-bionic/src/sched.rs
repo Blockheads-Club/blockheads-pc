@@ -3,18 +3,52 @@
 //! Every guest thread is a host thread with its own [`Cpu`], but only the holder of the *baton* runs guest
 //! code, so host functions never race and execution is easy to reason about. The baton is a FIFO ticket
 //! lock. A thread gives it up only when it blocks (mutex, condition variable, join, sleep, futex), yields
-//! or exits. Blocking is "poll with epochs": the blocked thread notes the current epoch, releases the baton
-//! and sleeps until the epoch changes (any state change that could unblock someone calls [`Sched::notify`])
-//! or its deadline passes, then queues for the baton and re-checks its condition.
+//! or exits. A blocked thread registers as a waiter for a [`Key`] (the guest object it waits on, anything, or only
+//! its deadline), releases the baton and sleeps until a state change that concerns its key ([`Sched::notify_key`],
+//! or [`Sched::notify`] for anything) or its deadline, then queues for the baton and re-checks its condition. Keys
+//! keep a mutex unlock from waking every idle worker thread.
 //!
 //! If every live thread is blocked without a deadline, the process is deadlocked: the waiters are woken with
 //! [`WaitEnd::Deadlock`] and the guest is stopped with a message instead of hanging the host.
+//!
+//! # Parallel mode
+//!
+//! With [`enable_parallel`] the baton becomes the *host lock*: a thread holds it only while it runs host code
+//! (thunks, the runner's own code) and gives it up while its CPU executes guest instructions (`bhpc_cpu::HostGate`).
+//! Guest code of all threads then runs in parallel on host cores, while host functions still run one at a time and
+//! keep their check-then-block logic race free (a waiter registers itself before it lets go of the lock, and every
+//! waker needs the lock). The lock is not FIFO in this mode (a convoy of hand-overs at every thunk
+//! call would be slow); [`Sched::yield_now`] waits until another thread took it. Time slices no longer hand anything
+//! over: a spinning thread spins on its own core.
 
 use crate::{lock, Shared};
-use bhpc_cpu::{Cpu, Stop};
+use bhpc_cpu::{Cpu, HostGate, Stop};
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
+
+/// What a waiting thread waits for, so that a state change only wakes the threads it concerns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    /// Anything: woken by every [`Sched::notify`] and [`Sched::notify_key`].
+    Any,
+    /// Nothing but the deadline (a sleep); only a deadlock or a shutdown ends it early.
+    Sleep,
+    /// The guest object at this address (mutex, condition variable, futex word, ...): woken by
+    /// [`Sched::notify_key`] with the same address and by every [`Sched::notify`].
+    Addr(u32),
+}
+
+/// One thread in [`Sched::wait_on`].
+struct Waiter {
+    id: u64,
+    key: Key,
+    /// Waits without a deadline (counts towards the deadlock check while not woken).
+    counted: bool,
+    woken: bool,
+    cv: Arc<Condvar>,
+}
 
 /// How a wait ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,21 +64,45 @@ pub enum WaitEnd {
 struct Inner {
     next_ticket: u64,
     serving: u64,
-    epoch: u64,
-    /// Threads blocked without a deadline since the last epoch change.
+    /// Threads in [`Sched::wait_on`].
+    waiters: Vec<Waiter>,
+    next_waiter: u64,
+    /// Waiting threads without a deadline that nothing woke yet.
     blocked: u32,
+    /// Notification counters: one per hash bucket of [`Key::Addr`] addresses, and one for [`Sched::notify`]
+    /// (see [`Sched::key_seq`]).
+    seqs: [u64; SEQ_BUCKETS],
+    global_seq: u64,
     /// Live guest threads (the main thread counts).
     live: u32,
     deadlock: bool,
     shutdown: bool,
     /// First failure of a non-main thread.
     failure: Option<String>,
+    /// Parallel mode (see the module docs).
+    parallel: bool,
+}
+
+/// The host lock of parallel mode: an atomic owner word, a short spin, then parking on `Sched::take_cv`.
+#[derive(Default)]
+struct HostLock {
+    /// [`me`] of the holder, 0 when free.
+    owner: AtomicU64,
+    /// Threads spinning or parked in [`Sched::take_lock`].
+    contenders: AtomicU32,
+    /// Threads parked on `take_cv` (changed under the `inner` lock).
+    parked: AtomicU32,
+    /// Number of times the lock was taken.
+    takes: AtomicU64,
 }
 
 /// The baton and the wait machinery. One per guest process.
 pub struct Sched {
     inner: Mutex<Inner>,
     cv: Condvar,
+    /// Parallel mode: where [`Sched::take_lock`] parks (legacy ticket waiters use `cv`).
+    take_cv: Condvar,
+    host: HostLock,
 }
 
 /// Identity of the guest thread running on this host thread.
@@ -63,6 +121,30 @@ thread_local! {
     /// Test hook: make the next [`spawn`] on this thread fail to create its host thread.
     static FAIL_SPAWN: Cell<bool> = const { Cell::new(false) };
 }
+
+/// A non-zero number for the calling host thread (the owner word of the host lock).
+fn me() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    thread_local! {
+        static ME: u64 = NEXT.fetch_add(1, Ordering::Relaxed);
+    }
+    ME.with(|t| *t)
+}
+
+/// Every waiter but a sleeper (what a plain notification wakes).
+fn not_sleep(k: Key) -> bool {
+    k != Key::Sleep
+}
+
+/// Buckets of the per-address notification counters.
+const SEQ_BUCKETS: usize = 256;
+
+fn bucket(key: u32) -> usize {
+    (key.wrapping_mul(0x9E37_79B1) >> 24) as usize % SEQ_BUCKETS
+}
+
+/// Spin iterations of a contended host-lock acquisition before it parks.
+const SPINS: u32 = 256;
 
 /// Make the next [`spawn`] on this host thread fail at the OS level (for tests).
 pub fn fail_next_spawn() {
@@ -86,15 +168,88 @@ impl Sched {
             inner: Mutex::new(Inner {
                 next_ticket: 1,
                 serving: 0,
-                epoch: 0,
+                waiters: Vec::new(),
+                next_waiter: 0,
                 blocked: 0,
+                seqs: [0; SEQ_BUCKETS],
+                global_seq: 0,
                 live: 1,
                 deadlock: false,
                 shutdown: false,
                 failure: None,
+                parallel: false,
             }),
             cv: Condvar::new(),
+            take_cv: Condvar::new(),
+            host: HostLock::default(),
         }
+    }
+
+    /// Switch to parallel mode (see the module docs). Call before the guest has a second thread, from the thread
+    /// that holds the baton (it then holds the host lock).
+    pub fn set_parallel(&self) {
+        let mut g = self.g();
+        g.parallel = true;
+        self.host.owner.store(me(), Ordering::SeqCst);
+    }
+
+    /// True in parallel mode.
+    pub fn parallel(&self) -> bool {
+        self.g().parallel
+    }
+
+    /// Parallel mode: take the host lock (not FIFO). The `inner` lock must not be held.
+    fn take_lock(&self) {
+        let h = &self.host;
+        let me = me();
+        let grab = || h.owner.compare_exchange(0, me, Ordering::SeqCst, Ordering::Relaxed).is_ok();
+        if !grab() {
+            h.contenders.fetch_add(1, Ordering::SeqCst);
+            // Host critical sections are short: spin a little (yielding now and then, in case the holder was
+            // preempted) before parking, since a wake-up costs far more than most thunks.
+            let mut got = false;
+            for i in 0..SPINS {
+                if h.owner.load(Ordering::Relaxed) == 0 && grab() {
+                    got = true;
+                    break;
+                }
+                if i % 64 == 63 {
+                    std::thread::yield_now();
+                } else {
+                    std::hint::spin_loop();
+                }
+            }
+            if !got {
+                let mut g = self.g();
+                h.parked.fetch_add(1, Ordering::SeqCst);
+                // `release` stores 0 before it reads `parked`, so a failed grab here is followed by a notify.
+                while !grab() {
+                    g = self.take_cv.wait(g).unwrap_or_else(PoisonError::into_inner);
+                }
+                h.parked.fetch_sub(1, Ordering::SeqCst);
+            }
+            h.contenders.fetch_sub(1, Ordering::SeqCst);
+        }
+        h.takes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Parallel mode: give the host lock up if the calling thread holds it; true if it did. `locked`: the caller
+    /// holds the `inner` lock (then the parked threads can be notified without taking it).
+    fn release(&self, locked: bool) -> bool {
+        let h = &self.host;
+        if h.owner.load(Ordering::Relaxed) != me() {
+            return false;
+        }
+        h.owner.store(0, Ordering::SeqCst);
+        if h.parked.load(Ordering::SeqCst) > 0 {
+            if locked {
+                self.take_cv.notify_one();
+            } else {
+                let _g = self.g();
+                self.take_cv.notify_one();
+            }
+        }
+        true
     }
 
     fn g(&self) -> MutexGuard<'_, Inner> {
@@ -111,20 +266,88 @@ impl Sched {
 
     /// Wait for the baton (a new thread's first action).
     pub(crate) fn acquire(&self) {
-        self.take_baton(self.g());
+        let g = self.g();
+        if g.parallel {
+            drop(g);
+            self.take_lock();
+            return;
+        }
+        self.take_baton(g);
     }
 
-    /// Something changed that may unblock a waiter.
+    /// Wake the waiters whose key matches.
+    fn wake(g: &mut Inner, matches: impl Fn(Key) -> bool) {
+        let mut woke = 0;
+        for w in g.waiters.iter_mut().filter(|w| !w.woken && matches(w.key)) {
+            w.woken = true;
+            woke += u32::from(w.counted);
+            w.cv.notify_one();
+        }
+        g.blocked -= woke;
+    }
+
+    /// Wake every waiter for good (deadlock or shutdown; the flag is set already).
+    fn wake_everyone(&self, g: &Inner) {
+        for w in &g.waiters {
+            w.cv.notify_one();
+        }
+        self.cv.notify_all();
+    }
+
+    /// Something changed that may unblock any waiter (sleeps excepted).
     pub fn notify(&self) {
         let mut g = self.g();
-        g.epoch += 1;
-        g.blocked = 0;
+        g.global_seq += 1;
+        Self::wake(&mut g, not_sleep);
         self.cv.notify_all();
+    }
+
+    /// The guest object at `key` changed: wake its waiters (and those waiting for anything).
+    pub fn notify_key(&self, key: u32) {
+        let mut g = self.g();
+        g.seqs[bucket(key)] += 1;
+        Self::wake(&mut g, |k| k == Key::Any || k == Key::Addr(key));
+    }
+
+    /// A counter that changes whenever `key` (or anything) is notified. Read it *before* checking the condition and
+    /// pass it to [`Sched::wait_seq`]: a notification in between then ends the wait at once, so code that does not
+    /// hold the baton or host lock while it checks (gate-free thunks) cannot miss a wake-up. (It may also change for
+    /// another address in the same bucket: an early, harmless re-check.)
+    pub fn key_seq(&self, key: u32) -> u64 {
+        let g = self.g();
+        g.global_seq.wrapping_add(g.seqs[bucket(key)])
+    }
+
+    /// [`Sched::wait_on`] for the guest object at `key`, unless it was notified since [`Sched::key_seq`] returned
+    /// `seen` (then [`WaitEnd::Woken`] at once).
+    pub fn wait_seq(&self, key: u32, seen: u64, deadline: Option<Instant>) -> WaitEnd {
+        let g = self.g();
+        if g.global_seq.wrapping_add(g.seqs[bucket(key)]) != seen && !g.deadlock && !g.shutdown {
+            return WaitEnd::Woken;
+        }
+        self.wait_locked(g, Key::Addr(key), deadline)
     }
 
     /// Let the other runnable threads go first.
     pub fn yield_now(&self) {
         let mut g = self.g();
+        if g.parallel {
+            drop(g);
+            let h = &self.host;
+            let took = h.takes.load(Ordering::SeqCst);
+            if h.contenders.load(Ordering::SeqCst) == 0 || !self.release(false) {
+                return;
+            }
+            // Wait (briefly) until a contender got the lock, then queue behind it.
+            for _ in 0..SPINS {
+                if h.takes.load(Ordering::SeqCst) != took || h.contenders.load(Ordering::SeqCst) == 0 {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            self.take_lock();
+            return;
+        }
         let t = g.next_ticket;
         g.next_ticket += 1;
         g.serving += 1;
@@ -134,40 +357,66 @@ impl Sched {
         }
     }
 
-    /// Release the baton and sleep until [`Sched::notify`], the deadline, or a deadlock; then take the baton again.
+    /// [`Sched::wait_on`] for anything.
     pub fn wait(&self, deadline: Option<Instant>) -> WaitEnd {
-        let mut g = self.g();
-        let epoch = g.epoch;
-        g.serving += 1;
-        if deadline.is_none() {
+        self.wait_on(Key::Any, deadline)
+    }
+
+    /// Release the baton and sleep until a notification that concerns `key`, the deadline, or a deadlock; then take
+    /// the baton again.
+    pub fn wait_on(&self, key: Key, deadline: Option<Instant>) -> WaitEnd {
+        self.wait_locked(self.g(), key, deadline)
+    }
+
+    fn wait_locked(&self, mut g: MutexGuard<'_, Inner>, key: Key, deadline: Option<Instant>) -> WaitEnd {
+        let held = if g.parallel {
+            self.release(true)
+        } else {
+            g.serving += 1;
+            self.cv.notify_all();
+            true
+        };
+        let id = g.next_waiter;
+        g.next_waiter += 1;
+        let cv = Arc::new(Condvar::new());
+        let counted = deadline.is_none();
+        g.waiters.push(Waiter { id, key, counted, woken: false, cv: cv.clone() });
+        if counted {
             g.blocked += 1;
             if g.blocked >= g.live {
                 g.deadlock = true;
+                self.wake_everyone(&g);
             }
         }
-        self.cv.notify_all();
         let end = loop {
             if g.deadlock || g.shutdown {
                 break WaitEnd::Deadlock;
             }
-            if g.epoch != epoch {
+            if g.waiters.iter().any(|w| w.id == id && w.woken) {
                 break WaitEnd::Woken;
             }
             match deadline {
-                None => g = self.cv.wait(g).unwrap_or_else(PoisonError::into_inner),
+                None => g = cv.wait(g).unwrap_or_else(PoisonError::into_inner),
                 Some(d) => {
                     let now = Instant::now();
                     if now >= d {
                         break WaitEnd::TimedOut;
                     }
-                    g = self.cv.wait_timeout(g, d - now).unwrap_or_else(PoisonError::into_inner).0;
+                    g = cv.wait_timeout(g, d - now).unwrap_or_else(PoisonError::into_inner).0;
                 }
             }
         };
-        if deadline.is_none() && g.epoch == epoch && g.blocked > 0 {
+        let at = g.waiters.iter().position(|w| w.id == id).expect("a waiter stays listed until it leaves");
+        let w = g.waiters.swap_remove(at);
+        if w.counted && !w.woken {
             g.blocked -= 1;
         }
-        self.take_baton(g);
+        if !g.parallel {
+            self.take_baton(g);
+        } else if held {
+            drop(g);
+            self.take_lock();
+        }
         end
     }
 
@@ -180,8 +429,8 @@ impl Sched {
     pub(crate) fn thread_cancelled(&self) {
         let mut g = self.g();
         g.live -= 1;
-        g.epoch += 1;
-        g.blocked = 0;
+        g.global_seq += 1;
+        Self::wake(&mut g, not_sleep);
         self.cv.notify_all();
     }
 
@@ -192,9 +441,13 @@ impl Sched {
         if g.failure.is_none() {
             g.failure = failure;
         }
-        g.epoch += 1;
-        g.blocked = 0;
-        g.serving += 1;
+        g.global_seq += 1;
+        Self::wake(&mut g, not_sleep);
+        if g.parallel {
+            self.release(true);
+        } else {
+            g.serving += 1;
+        }
         self.cv.notify_all();
     }
 
@@ -202,7 +455,7 @@ impl Sched {
     pub fn shutdown(&self) {
         let mut g = self.g();
         g.shutdown = true;
-        self.cv.notify_all();
+        self.wake_everyone(&g);
     }
 
     /// Number of live guest threads.
@@ -216,10 +469,64 @@ impl Sched {
     }
 }
 
+impl HostGate for Sched {
+    fn enter(&self) -> bool {
+        if self.host.owner.load(Ordering::Relaxed) == me() {
+            return false;
+        }
+        self.take_lock();
+        true
+    }
+
+    fn leave(&self) -> bool {
+        self.release(false)
+    }
+}
+
+/// Run the guest threads of `cpu`'s guest in parallel (see the module docs): the scheduler becomes the host lock and
+/// every CPU gives it up while it executes guest code. Call on the main thread before any other guest thread exists.
+/// Returns false if the guest already had a gate (nothing changes then).
+pub fn enable_parallel(cpu: &Cpu, st: &Shared) -> bool {
+    if cpu.has_gate() {
+        return false;
+    }
+    let sched = lock(st).sched.clone();
+    sched.set_parallel();
+    cpu.set_gate(sched)
+}
+
 /// Block the calling guest thread (see [`Sched::wait`]). On deadlock the guest is stopped and `None` returned.
 pub fn block(c: &mut Cpu, st: &Shared, deadline: Option<Instant>, what: &str) -> Option<WaitEnd> {
+    wait_for(c, st, Key::Any, deadline, what)
+}
+
+/// [`block`] until the guest object at `key` is notified with [`notify_key`] (or anything with [`notify`]).
+pub fn block_on(c: &mut Cpu, st: &Shared, key: u32, deadline: Option<Instant>, what: &str) -> Option<WaitEnd> {
+    wait_for(c, st, Key::Addr(key), deadline, what)
+}
+
+/// [`block_on`] unless `key` was notified since [`Sched::key_seq`] returned `seen` (see [`Sched::wait_seq`]).
+pub fn block_seq(
+    c: &mut Cpu,
+    st: &Shared,
+    key: u32,
+    seen: u64,
+    deadline: Option<Instant>,
+    what: &str,
+) -> Option<WaitEnd> {
     let sched = lock(st).sched.clone();
-    match sched.wait(deadline) {
+    let end = sched.wait_seq(key, seen, deadline);
+    stopped_on_deadlock(c, &sched, end, what)
+}
+
+fn wait_for(c: &mut Cpu, st: &Shared, key: Key, deadline: Option<Instant>, what: &str) -> Option<WaitEnd> {
+    let sched = lock(st).sched.clone();
+    let end = sched.wait_on(key, deadline);
+    stopped_on_deadlock(c, &sched, end, what)
+}
+
+fn stopped_on_deadlock(c: &mut Cpu, sched: &Sched, end: WaitEnd, what: &str) -> Option<WaitEnd> {
+    match end {
         WaitEnd::Deadlock => {
             let msg = sched.failure().map_or_else(
                 || format!("deadlock: every guest thread is blocked (in {what})"),
@@ -242,7 +549,7 @@ pub fn sleep(c: &mut Cpu, st: &Shared, ns: u64) {
     }
     let deadline = Instant::now() + std::time::Duration::from_nanos(ns);
     while Instant::now() < deadline {
-        if block(c, st, Some(deadline), "sleep").is_none() {
+        if wait_for(c, st, Key::Sleep, Some(deadline), "sleep").is_none() {
             return;
         }
     }
@@ -281,10 +588,16 @@ fn slice_expired(st: &Shared) -> Option<Stop> {
     None
 }
 
-/// Wake threads waiting in [`block`].
+/// Wake threads waiting in [`block`] and [`block_on`].
 pub fn notify(st: &Shared) {
     let sched = lock(st).sched.clone();
     sched.notify();
+}
+
+/// Wake the threads waiting in [`block_on`] for `key` (and those in [`block`]).
+pub fn notify_key(st: &Shared, key: u32) {
+    let sched = lock(st).sched.clone();
+    sched.notify_key(key);
 }
 
 /// The `pthread_t` of the calling guest thread.
@@ -465,16 +778,39 @@ mod tests {
         c.ret_u32(0);
     }
 
+    /// Let the other threads run for a while: yield, then sleep for a millisecond (without the host lock in parallel
+    /// mode, where the sleeping test thread would otherwise keep every thunk waiting).
+    fn nap(e: &mut Env) {
+        e.call("sched_yield", &[]);
+        let sched = lock(&e.st).sched.clone();
+        let released = sched.parallel() && sched.leave();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        if released {
+            sched.enter();
+        }
+    }
+
     /// Give other threads the baton until `*addr` becomes non-zero (they need real time to start).
     fn pump(e: &mut Env, addr: u32) {
+        pump_any(e, &[addr]);
+    }
+
+    /// Give other threads the baton until one of the words becomes non-zero. In parallel mode the other threads keep
+    /// running after that, so also wait until each of them is blocked or gone (the legacy baton hands back only then).
+    fn pump_any(e: &mut Env, addrs: &[u32]) {
+        let set = |e: &Env| addrs.iter().any(|a| e.mem().read_u32(*a).unwrap() != 0);
+        let sched = lock(&e.st).sched.clone();
+        let quiet = || {
+            let g = sched.g();
+            !g.parallel || g.live - 1 == g.blocked
+        };
         for _ in 0..5000 {
-            if e.mem().read_u32(addr).unwrap() != 0 {
+            if set(e) && quiet() {
                 break;
             }
-            e.call("sched_yield", &[]);
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            nap(e);
         }
-        assert!(e.mem().read_u32(addr).unwrap() != 0, "no thread made progress");
+        assert!(set(e), "no thread made progress");
     }
 
     fn create(e: &mut Env, attr_ptr: u32, start: u32, arg: u32) -> u32 {
@@ -530,8 +866,7 @@ mod tests {
             if e.st.lock().unwrap().sched.live() == 1 {
                 break;
             }
-            e.call("sched_yield", &[]);
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            nap(&mut e);
         }
         // A stack that cannot be mapped.
         e.call("pthread_attr_init", &[ATTR]);
@@ -582,8 +917,7 @@ mod tests {
             if e.mem().read_u32(FLAG + 4).unwrap() as usize >= made.len() {
                 break;
             }
-            e.call("sched_yield", &[]);
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            nap(&mut e);
         }
         e.mem().write_u32(FLAG, 1).unwrap();
         e.call("pthread_cond_broadcast", &[CV]);
@@ -699,8 +1033,7 @@ mod tests {
             if e.mem().read_u32(FLAG + 4).unwrap() == 3 {
                 break;
             }
-            e.call("sched_yield", &[]);
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            nap(&mut e);
         }
         assert_eq!(e.mem().read_u32(FLAG + 4).unwrap(), 3);
         // signal wakes one (after the predicate flips it passes the lock on).
@@ -867,12 +1200,28 @@ mod tests {
         });
         assert_eq!(create(&mut e, 0, bump, 0), 0);
         let t = handle(&e);
-        // nanosleep with a live second thread hands the baton over and really waits.
+        // nanosleep with a live second thread hands the baton over and really waits. (Once that thread queues for
+        // the baton: starting a host thread can take longer than the sleep on a busy machine.)
+        let sched = lock(&e.st).sched.clone();
+        let queued = || {
+            let g = sched.g();
+            g.parallel || g.next_ticket - g.serving >= 2
+        };
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            if queued() {
+                break;
+            }
+        }
         e.mem().write_u32(TS, 0).unwrap();
         e.mem().write_u32(TS + 4, 2_000_000).unwrap();
         let t0 = Instant::now();
         assert_eq!(e.call("nanosleep", &[TS, 0]).r0, 0);
         assert!(t0.elapsed() >= std::time::Duration::from_millis(2));
+        if lock(&e.st).sched.parallel() {
+            // The lock is not FIFO: the new thread may still be starting; it runs in parallel anyway.
+            pump(&mut e, FLAG);
+        }
         assert_eq!(e.mem().read_u32(FLAG).unwrap(), 1);
         e.call("pthread_join", &[t, 0]);
         // A thread sleeping while main joins it.
@@ -1071,11 +1420,11 @@ mod tests {
             if lock(&st).futex_q.get(&w).map_or(0, |q| q.len()) == 2 {
                 break;
             }
-            e.call("sched_yield", &[]);
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            nap(&mut e);
         }
         assert_eq!(e.call("__futex_wake", &[w, 1]).r0, 1);
-        pump(&mut e, out);
+        // The first waiter to queue is woken (which one that is depends on start-up order in parallel mode).
+        pump_any(&mut e, &[out, out + 4]);
         assert_eq!(e.call("__futex_wake", &[w, 100]).r0, 1);
         for t in ts_ {
             assert_eq!(e.call("pthread_join", &[t, 0]).r0, 0);
@@ -1130,5 +1479,220 @@ mod tests {
         set_wall_deadline(&e.st, None);
         e.mem().write_u32(SCRATCH + 0xB10, 1).unwrap();
         assert_eq!(e.try_call_addr(spin, &[SCRATCH + 0xB10]).map(|r| r.r0), Ok(SCRATCH + 0xB10));
+    }
+
+    #[test]
+    fn every_scheduler_test_also_passes_in_parallel_mode() {
+        crate::tests_env::in_parallel(|| {
+            for (name, test) in [
+                (
+                    "create_join_returns_the_value_and_gives_each_thread_its_own_identity",
+                    create_join_returns_the_value_and_gives_each_thread_its_own_identity as fn(),
+                ),
+                (
+                    "create_validates_its_arguments_and_reports_resource_failures",
+                    create_validates_its_arguments_and_reports_resource_failures as fn(),
+                ),
+                ("detach_and_join_error_codes", detach_and_join_error_codes as fn()),
+                (
+                    "a_contended_mutex_hands_over_when_the_holder_unlocks",
+                    a_contended_mutex_hands_over_when_the_holder_unlocks as fn(),
+                ),
+                (
+                    "condition_variables_wake_signalled_and_broadcast_waiters",
+                    condition_variables_wake_signalled_and_broadcast_waiters as fn(),
+                ),
+                ("timed_waits_time_out_or_are_signalled", timed_waits_time_out_or_are_signalled as fn()),
+                ("deadlocks_stop_the_guest_instead_of_hanging", deadlocks_stop_the_guest_instead_of_hanging as fn()),
+                ("a_failing_thread_is_reported_to_the_joiner", a_failing_thread_is_reported_to_the_joiner as fn()),
+                ("pthread_exit_ends_the_thread_with_a_value", pthread_exit_ends_the_thread_with_a_value as fn()),
+                (
+                    "thread_specific_data_is_per_thread_and_destructors_run_at_exit",
+                    thread_specific_data_is_per_thread_and_destructors_run_at_exit as fn(),
+                ),
+                ("sleeping_and_yielding_let_other_threads_run", sleeping_and_yielding_let_other_threads_run as fn()),
+                ("readers_wait_for_a_writer", readers_wait_for_a_writer as fn()),
+                (
+                    "threads_on_a_cycle_counting_cpu_get_their_own_budget",
+                    threads_on_a_cycle_counting_cpu_get_their_own_budget as fn(),
+                ),
+                ("sleeping_after_a_shutdown_stops_the_guest", sleeping_after_a_shutdown_stops_the_guest as fn()),
+                (
+                    "pthread_once_waiters_block_until_the_initialiser_returns",
+                    pthread_once_waiters_block_until_the_initialiser_returns as fn(),
+                ),
+                (
+                    "pthread_once_detects_reentry_and_a_stuck_initialiser",
+                    pthread_once_detects_reentry_and_a_stuck_initialiser as fn(),
+                ),
+                ("futex_wait_and_wake", futex_wait_and_wake as fn()),
+                (
+                    "time_slices_let_the_flag_setter_run_while_another_thread_spins",
+                    time_slices_let_the_flag_setter_run_while_another_thread_spins as fn(),
+                ),
+                (
+                    "the_wall_clock_watchdog_stops_a_spinning_guest",
+                    the_wall_clock_watchdog_stops_a_spinning_guest as fn(),
+                ),
+            ] {
+                let t0 = Instant::now();
+                test();
+                eprintln!("parallel mode: {name} ({:?})", t0.elapsed());
+            }
+        });
+    }
+
+    fn put_code(e: &Env, at: u32, code: &[u32]) {
+        for (i, w) in code.iter().enumerate() {
+            e.mem().write_u32(at + 4 * i as u32, *w).unwrap();
+        }
+    }
+
+    #[test]
+    fn in_parallel_mode_guest_code_of_several_threads_runs_at_the_same_time() {
+        crate::tests_env::in_parallel(|| {
+            for code in [SPIN, SPIN_EX] {
+                // No time slices: only true parallelism lets the setter run while this thread spins.
+                let mut e = Env::new();
+                assert!(!enable_parallel(&e.cpu, &e.st), "a guest is switched once");
+                let (spin, set) = (SCRATCH + 0x1000, SCRATCH + 0x1100);
+                put_code(&e, spin, &code);
+                // mov r1,#1; str r1,[r0]; bx lr
+                put_code(&e, set, &[0xE3A0_1001, 0xE580_1000, 0xE12F_FF1E]);
+                let flag = SCRATCH + 0xB00;
+                assert_eq!(create(&mut e, 0, set, flag), 0);
+                let t = handle(&e);
+                assert_eq!(e.try_call_addr(spin, &[flag]).map(|r| r.r0), Ok(flag));
+                assert_eq!(e.call("pthread_join", &[t, 0]).r0, 0);
+            }
+        });
+    }
+
+    #[test]
+    fn exclusive_increments_from_parallel_threads_are_never_lost() {
+        crate::tests_env::in_parallel(|| {
+            let mut e = Env::new();
+            let code = SCRATCH + 0x1000;
+            // mov r1,#0x10000; loop: ldrex r2,[r0]; add r2,r2,#1; strex r3,r2,[r0]; cmp r3,#0; bne loop;
+            // subs r1,r1,#1; bne loop; bx lr
+            put_code(
+                &e,
+                code,
+                &[
+                    0xE3A0_1801,
+                    0xE190_2F9F,
+                    0xE282_2001,
+                    0xE180_3F92,
+                    0xE353_0000,
+                    0x1AFF_FFFA,
+                    0xE251_1001,
+                    0x1AFF_FFF8,
+                    0xE12F_FF1E,
+                ],
+            );
+            let ctr = SCRATCH + 0xC00;
+            let mut threads = Vec::new();
+            for _ in 0..3 {
+                assert_eq!(create(&mut e, 0, code, ctr), 0);
+                threads.push(handle(&e));
+            }
+            e.try_call_addr(code, &[ctr]).unwrap();
+            for t in threads {
+                assert_eq!(e.call("pthread_join", &[t, 0]).r0, 0);
+            }
+            assert_eq!(e.mem().read_u32(ctr).unwrap(), 4 << 16);
+        });
+    }
+
+    #[test]
+    fn the_parallel_host_lock() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
+        let s = Arc::new(Sched::new());
+        assert!(!s.parallel());
+        s.set_parallel();
+        assert!(s.parallel());
+        // The creating thread holds the lock.
+        assert!(!s.enter());
+        assert!(s.leave());
+        assert!(!s.leave(), "only the holder gives it up");
+        // A wait without the lock does not take it afterwards.
+        assert_eq!(s.wait(Some(Instant::now() + Duration::from_millis(1))), WaitEnd::TimedOut);
+        assert!(s.enter());
+        // Yielding with nobody waiting keeps the lock.
+        s.yield_now();
+        assert!(!s.enter());
+        // Yielding to a waiting thread: it gets the lock before the yielder takes it back.
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (s2, o2) = (s.clone(), order.clone());
+        let other = std::thread::spawn(move || {
+            assert!(s2.enter());
+            o2.lock().unwrap().push("other");
+            assert!(s2.leave());
+        });
+        // Hold the lock until it gave up spinning and parked.
+        while s.host.parked.load(Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        s.yield_now();
+        order.lock().unwrap().push("me");
+        other.join().unwrap();
+        assert_eq!(*order.lock().unwrap(), ["other", "me"]);
+        // A short wait is spun out instead of parked.
+        let s2 = s.clone();
+        let other = std::thread::spawn(move || {
+            assert!(s2.enter());
+            assert!(s2.leave());
+        });
+        while s.host.contenders.load(Ordering::SeqCst) == 0 {
+            std::hint::spin_loop();
+        }
+        assert!(s.leave());
+        other.join().unwrap();
+        assert!(s.enter());
+        // A thread exit without the lock leaves it alone.
+        s.thread_started();
+        assert!(s.leave());
+        s.thread_exit(None);
+        assert!(s.enter());
+
+        // Keys: a waiter is woken by its own key (or a plain notify), a sleeper by neither.
+        let waiting = |key: Key| {
+            let (s2, done) = (s.clone(), Arc::new(AtomicBool::new(false)));
+            let d2 = done.clone();
+            let h = std::thread::spawn(move || {
+                let end = s2.wait_on(key, Some(Instant::now() + Duration::from_millis(400)));
+                d2.store(true, Ordering::SeqCst);
+                end
+            });
+            while s.g().waiters.is_empty() {
+                std::thread::yield_now();
+            }
+            (h, done)
+        };
+        let (h, done) = waiting(Key::Addr(1));
+        s.notify_key(2);
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(!done.load(Ordering::SeqCst), "another key does not wake it");
+        s.notify_key(1);
+        assert_eq!(h.join().unwrap(), WaitEnd::Woken);
+        let (h, _) = waiting(Key::Any);
+        s.notify_key(7);
+        assert_eq!(h.join().unwrap(), WaitEnd::Woken);
+        let (h, _) = waiting(Key::Addr(3));
+        s.notify();
+        assert_eq!(h.join().unwrap(), WaitEnd::Woken);
+        // A notification between reading the counter and waiting ends the wait at once.
+        let seen = s.key_seq(5);
+        s.notify_key(5);
+        assert_eq!(s.wait_seq(5, seen, None), WaitEnd::Woken);
+        let (h, _) = waiting(Key::Sleep);
+        s.notify();
+        s.notify_key(0);
+        assert_eq!(h.join().unwrap(), WaitEnd::TimedOut);
+        // A shutdown ends every wait.
+        let (h, _) = waiting(Key::Sleep);
+        s.shutdown();
+        assert_eq!(h.join().unwrap(), WaitEnd::Deadlock);
     }
 }

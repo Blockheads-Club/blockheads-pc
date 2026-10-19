@@ -89,6 +89,18 @@ impl HostClock for ClockHandle {
     }
 }
 
+thread_local! {
+    /// Environments built on this thread run their guest threads in parallel (see [`in_parallel`]).
+    static PARALLEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with every [`Env`] it builds in parallel mode (`sched::enable_parallel`).
+pub fn in_parallel(f: impl FnOnce()) {
+    PARALLEL.with(|p| p.set(true));
+    f();
+    PARALLEL.with(|p| p.set(false));
+}
+
 pub struct Env {
     pub cpu: Box<Cpu>,
     pub st: Shared,
@@ -141,6 +153,9 @@ impl Env {
         let st = State::new(mem.clone(), heap, cfg).unwrap();
         let mut cpu = Cpu::with_options(mem, opts).unwrap();
         cpu.set_sp(STACK_TOP);
+        if PARALLEL.with(std::cell::Cell::get) {
+            assert!(crate::sched::enable_parallel(&cpu, &st));
+        }
         Env { cpu, st, out, err, clock }
     }
 

@@ -41,6 +41,8 @@ pub(crate) struct MutexState {
     pub count: u32,
     /// Thread id of the holder while `count > 0`.
     pub owner: u32,
+    /// Threads blocked until it is unlocked (an unlock only notifies when there are some).
+    pub waiters: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

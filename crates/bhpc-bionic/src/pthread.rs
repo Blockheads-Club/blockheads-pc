@@ -8,10 +8,11 @@
 
 use crate::guest::{rd32, wr, wr32};
 use crate::layout::{attr, errno, sync, SIGSET_SIZE};
-use crate::sched::{self, block, ctx, notify, WaitEnd};
-use crate::state::{MutexState, RwState};
+use crate::sched::{self, block_on, block_seq, ctx, notify_key, Sched, WaitEnd};
+use crate::state::{MutexState, RwState, State};
 use crate::{builtin, lock, Impl, Shared};
 use bhpc_cpu::{Cpu, Stop};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 macro_rules! args {
@@ -50,7 +51,7 @@ fn pthread_once(c: &mut Cpu, st: &Shared) {
                     // The initialiser re-entered its own once control: it would wait for itself forever.
                     return c.ret_u32(errno::EDEADLK);
                 }
-                if block(c, st, None, "pthread_once").is_none() {
+                if block_on(c, st, once, None, "pthread_once").is_none() {
                     return;
                 }
             }
@@ -77,7 +78,7 @@ fn once_return_thunk(c: &mut Cpu, st: &Shared) {
     // The control word was writable when the initialiser started.
     let _ = c.mem().write_u32(once, sync::ONCE_DONE);
     lock(st).once_owner.remove(&once);
-    notify(st);
+    notify_key(st, once);
     c.ret_u32(0);
     c.tail_call(orig);
 }
@@ -128,14 +129,24 @@ fn setspecific(c: &mut Cpu, st: &Shared) {
 
 // ---------- mutex ----------
 
-fn mutex_entry(c: &mut Cpu, st: &Shared, m: u32) -> Option<MutexState> {
-    if let Some(e) = lock(st).mutexes.get(&m) {
-        return Some(*e);
+// The mutex, condition variable, futex and thread-specific-data functions are gate-free (`GATE_FREE`): in parallel
+// mode they run without the host lock, so each one reads and updates the state in a single critical section, and
+// waiters read the key's notification counter (`Sched::key_seq`) in the step that checks their condition.
+
+/// Run `f` on the state and a copy of the mutex's entry (created from the guest word on first use) in one critical
+/// section; the entry is stored back afterwards (`f` must not change it through the state).
+fn with_mutex<R>(c: &mut Cpu, st: &Shared, m: u32, f: impl FnOnce(&mut State, &mut MutexState) -> R) -> Option<R> {
+    let mut s = lock(st);
+    if !s.mutexes.contains_key(&m) {
+        drop(s);
+        let kind = (rd32(c, m)? >> sync::MUTEX_TYPE_SHIFT) & 3;
+        s = lock(st);
+        s.mutexes.entry(m).or_insert(MutexState { kind, count: 0, owner: 0, waiters: 0 });
     }
-    let word = rd32(c, m)?;
-    let e = MutexState { kind: (word >> sync::MUTEX_TYPE_SHIFT) & 3, count: 0, owner: 0 };
-    lock(st).mutexes.insert(m, e);
-    Some(e)
+    let mut e = s.mutexes[&m];
+    let r = f(&mut s, &mut e);
+    s.mutexes.insert(m, e);
+    Some(r)
 }
 
 fn mutex_init(c: &mut Cpu, st: &Shared) {
@@ -149,7 +160,7 @@ fn mutex_init(c: &mut Cpu, st: &Shared) {
         }
     };
     if wr32(c, m, kind << sync::MUTEX_TYPE_SHIFT) {
-        lock(st).mutexes.insert(m, MutexState { kind, count: 0, owner: 0 });
+        lock(st).mutexes.insert(m, MutexState { kind, count: 0, owner: 0, waiters: 0 });
         c.ret_u32(0);
     }
 }
@@ -164,17 +175,31 @@ fn mutex_destroy(c: &mut Cpu, st: &Shared) {
 /// caller itself) holds it. `None` when the guest was stopped (deadlock).
 fn acquire_mutex(c: &mut Cpu, st: &Shared, m: u32, count: u32) -> Option<u32> {
     let me = ctx().tid;
+    let mut waiting = false;
     loop {
-        let e = mutex_entry(c, st, m)?;
-        let mine = e.count > 0 && e.owner == me;
-        if e.count == 0 || (mine && e.kind == sync::MUTEX_RECURSIVE) {
-            lock(st).mutexes.insert(m, MutexState { count: e.count + count, owner: me, ..e });
-            return Some(0);
+        let got = with_mutex(c, st, m, |s, e| {
+            if waiting {
+                e.waiters -= 1;
+            }
+            let mine = e.count > 0 && e.owner == me;
+            if e.count == 0 || (mine && e.kind == sync::MUTEX_RECURSIVE) {
+                (e.count, e.owner) = (e.count + count, me);
+                return Ok(0);
+            }
+            if mine && e.kind == sync::MUTEX_ERRORCHECK {
+                return Ok(errno::EDEADLK);
+            }
+            // Counted and read in the same step the unlocker checks, so its notification cannot be missed.
+            e.waiters += 1;
+            Err(s.sched.key_seq(m))
+        })?;
+        match got {
+            Ok(r) => return Some(r),
+            Err(seen) => {
+                waiting = true;
+                block_seq(c, st, m, seen, None, "pthread_mutex_lock")?;
+            }
         }
-        if mine && e.kind == sync::MUTEX_ERRORCHECK {
-            return Some(errno::EDEADLK);
-        }
-        block(c, st, None, "pthread_mutex_lock")?;
     }
 }
 
@@ -187,31 +212,43 @@ fn mutex_lock(c: &mut Cpu, st: &Shared) {
 
 fn mutex_trylock(c: &mut Cpu, st: &Shared) {
     let m = c.args().u32(c);
-    let Some(e) = mutex_entry(c, st, m) else { return };
     let me = ctx().tid;
-    if e.count > 0 && !(e.kind == sync::MUTEX_RECURSIVE && e.owner == me) {
-        return c.ret_u32(errno::EBUSY);
+    let r = with_mutex(c, st, m, |_, e| {
+        if e.count > 0 && !(e.kind == sync::MUTEX_RECURSIVE && e.owner == me) {
+            return errno::EBUSY;
+        }
+        (e.count, e.owner) = (e.count + 1, me);
+        0
+    });
+    if let Some(r) = r {
+        c.ret_u32(r);
     }
-    lock(st).mutexes.insert(m, MutexState { count: e.count + 1, owner: me, ..e });
-    c.ret_u32(0);
+}
+
+/// The scheduler, when the mutex's waiters must be told it is free.
+fn waking(s: &State, e: &MutexState) -> Option<Arc<Sched>> {
+    (e.count == 0 && e.waiters > 0).then(|| s.sched.clone())
 }
 
 fn mutex_unlock(c: &mut Cpu, st: &Shared) {
     let m = c.args().u32(c);
-    let Some(e) = mutex_entry(c, st, m) else { return };
-    if e.count == 0 {
-        // Unlocking an unlocked normal mutex is tolerated; the checking kinds report it.
-        return c.ret_u32(if e.kind == sync::MUTEX_NORMAL { 0 } else { errno::EPERM });
+    let me = ctx().tid;
+    let r = with_mutex(c, st, m, |s, e| {
+        if e.count == 0 {
+            // Unlocking an unlocked normal mutex is tolerated; the checking kinds report it.
+            return (if e.kind == sync::MUTEX_NORMAL { 0 } else { errno::EPERM }, None);
+        }
+        if e.kind != sync::MUTEX_NORMAL && e.owner != me {
+            return (errno::EPERM, None);
+        }
+        e.count = if e.kind == sync::MUTEX_RECURSIVE { e.count - 1 } else { 0 };
+        (0, waking(s, e))
+    });
+    let Some((r, wake)) = r else { return };
+    if let Some(sched) = wake {
+        sched.notify_key(m);
     }
-    if e.kind != sync::MUTEX_NORMAL && e.owner != ctx().tid {
-        return c.ret_u32(errno::EPERM);
-    }
-    let count = if e.kind == sync::MUTEX_RECURSIVE { e.count - 1 } else { 0 };
-    lock(st).mutexes.insert(m, MutexState { count, ..e });
-    if count == 0 {
-        notify(st);
-    }
-    c.ret_u32(0);
+    c.ret_u32(r);
 }
 
 fn mutexattr_init(c: &mut Cpu, _: &Shared) {
@@ -254,28 +291,33 @@ fn cond_init(c: &mut Cpu, _: &Shared) {
 
 /// Wait on `cv`, releasing `m` meanwhile. Returns the result code, or `None` if the guest was stopped.
 fn cond_wait_common(c: &mut Cpu, st: &Shared, cv: u32, m: u32, deadline: Option<Instant>) -> Option<u32> {
-    let e = mutex_entry(c, st, m)?;
-    let ticket = {
-        let mut s = lock(st);
-        let t = s.next_wait;
+    // Queue on the condition and release the mutex in one step: a signal after it reaches this waiter.
+    let (count, ticket, wake) = with_mutex(c, st, m, |s, e| {
+        let (count, t) = (e.count, s.next_wait);
         s.next_wait += 1;
         s.cond_q.entry(cv).or_default().push_back(t);
-        s.mutexes.insert(m, MutexState { count: 0, ..e });
-        t
-    };
-    notify(st);
+        e.count = 0;
+        (count, t, waking(s, e))
+    })?;
+    if let Some(sched) = wake {
+        sched.notify_key(m);
+    }
     let result = loop {
-        if lock(st).woken.remove(&ticket) {
-            break 0;
-        }
-        if block(c, st, deadline, "pthread_cond_wait")? == WaitEnd::TimedOut {
+        let seen = {
+            let mut s = lock(st);
+            if s.woken.remove(&ticket) {
+                break 0;
+            }
+            s.sched.key_seq(cv)
+        };
+        if block_seq(c, st, cv, seen, deadline, "pthread_cond_wait")? == WaitEnd::TimedOut {
             let mut s = lock(st);
             s.cond_q.entry(cv).or_default().retain(|t| *t != ticket);
             // A signal that raced with the timeout still counts as a wake-up.
             break if s.woken.remove(&ticket) { 0 } else { errno::ETIMEDOUT };
         }
     };
-    acquire_mutex(c, st, m, e.count.max(1))?;
+    acquire_mutex(c, st, m, count.max(1))?;
     Some(result)
 }
 
@@ -332,12 +374,17 @@ fn cond_timedwait_relative(c: &mut Cpu, st: &Shared) {
 /// Wake `n` waiters of `cv` (`usize::MAX` = all).
 fn wake(st: &Shared, cv: u32, n: usize) {
     let mut s = lock(st);
+    let mut woke = false;
     for _ in 0..n {
         let Some(t) = s.cond_q.get_mut(&cv).and_then(std::collections::VecDeque::pop_front) else { break };
         s.woken.insert(t);
+        woke = true;
     }
+    let sched = s.sched.clone();
     drop(s);
-    notify(st);
+    if woke {
+        sched.notify_key(cv);
+    }
 }
 
 fn cond_signal(c: &mut Cpu, st: &Shared) {
@@ -358,10 +405,6 @@ fn cond_broadcast(c: &mut Cpu, st: &Shared) {
 /// already differs and `-ETIMEDOUT` when the (relative) timeout passes, like the raw bionic wrapper.
 fn futex_wait(c: &mut Cpu, st: &Shared) {
     args!(c; ftx, val, ts);
-    let Some(word) = rd32(c, ftx) else { return };
-    if word != val {
-        return c.ret_u32(-(errno::EAGAIN as i32) as u32);
-    }
     let deadline = if ts == 0 {
         None
     } else {
@@ -371,18 +414,28 @@ fn futex_wait(c: &mut Cpu, st: &Shared) {
         }
         Some(Instant::now() + Duration::from_nanos(u64::from(sec) * 1_000_000_000 + u64::from(nsec)))
     };
+    // Compare and queue in one step, like the kernel: a waker that changes the word first takes the same lock after.
     let ticket = {
         let mut s = lock(st);
+        let Some(word) = rd32(c, ftx) else { return };
+        if word != val {
+            drop(s);
+            return c.ret_u32(-(errno::EAGAIN as i32) as u32);
+        }
         let t = s.next_wait;
         s.next_wait += 1;
         s.futex_q.entry(ftx).or_default().push_back(t);
         t
     };
     let result = loop {
-        if lock(st).woken.remove(&ticket) {
-            break 0;
-        }
-        let Some(end) = block(c, st, deadline, "__futex_wait") else { return };
+        let seen = {
+            let mut s = lock(st);
+            if s.woken.remove(&ticket) {
+                break 0;
+            }
+            s.sched.key_seq(ftx)
+        };
+        let Some(end) = block_seq(c, st, ftx, seen, deadline, "__futex_wait") else { return };
         if end == WaitEnd::TimedOut {
             let mut s = lock(st);
             s.futex_q.entry(ftx).or_default().retain(|t| *t != ticket);
@@ -397,15 +450,18 @@ fn futex_wait(c: &mut Cpu, st: &Shared) {
 fn futex_wake(c: &mut Cpu, st: &Shared) {
     args!(c; ftx, count);
     let mut woken = 0;
-    {
+    let sched = {
         let mut s = lock(st);
         while woken < count.min(i32::MAX as u32) {
             let Some(t) = s.futex_q.get_mut(&ftx).and_then(std::collections::VecDeque::pop_front) else { break };
             s.woken.insert(t);
             woken += 1;
         }
+        s.sched.clone()
+    };
+    if woken > 0 {
+        sched.notify_key(ftx);
     }
-    notify(st);
     c.ret_u32(woken);
 }
 
@@ -441,7 +497,7 @@ fn rwlock_rdlock(c: &mut Cpu, st: &Shared) {
             rw_set(st, l, RwState { readers: s.readers + 1, ..s });
             return c.ret_u32(0);
         }
-        if block(c, st, None, "pthread_rwlock_rdlock").is_none() {
+        if block_on(c, st, l, None, "pthread_rwlock_rdlock").is_none() {
             return;
         }
     }
@@ -465,7 +521,7 @@ fn rwlock_wrlock(c: &mut Cpu, st: &Shared) {
             rw_set(st, l, RwState { readers: 0, writer: true });
             return c.ret_u32(0);
         }
-        if block(c, st, None, "pthread_rwlock_wrlock").is_none() {
+        if block_on(c, st, l, None, "pthread_rwlock_wrlock").is_none() {
             return;
         }
     }
@@ -491,7 +547,7 @@ fn rwlock_unlock(c: &mut Cpu, st: &Shared) {
     } else {
         return c.ret_u32(errno::EPERM);
     }
-    notify(st);
+    notify_key(st, l);
     c.ret_u32(0);
 }
 
@@ -553,7 +609,7 @@ fn pthread_join(c: &mut Cpu, st: &Shared) {
             drop(s);
             return c.ret_u32(0);
         }
-        if block(c, st, None, "pthread_join").is_none() {
+        if block_on(c, st, t, None, "pthread_join").is_none() {
             return;
         }
     }
@@ -944,6 +1000,10 @@ mod tests {
         assert!(matches!(r, Err(Stop::Host(ref m)) if m.contains("pthread_cond_wait")), "{r:?}");
         assert_eq!(e.call("pthread_cond_destroy", &[M]).r0, 0);
         assert!(matches!(e.try_call("pthread_cond_init", &[BAD, 0]), Err(Stop::Fault(_))));
+        // A mutex that cannot be read faults in every kind of wait.
+        for f in ["pthread_cond_wait", "pthread_cond_timedwait"] {
+            assert!(matches!(e.try_call(f, &[M, BAD, AT]), Err(Stop::Fault(_))), "{f}");
+        }
     }
 
     #[test]
