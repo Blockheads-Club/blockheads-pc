@@ -116,8 +116,8 @@ impl LaunchConfig {
         crate::apk::validate(&self.apk, self.force).map_err(LauncherError::Apk)
     }
 
-    /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--fps-limit N` (0 = none), `--force`,
-    /// `--fullscreen`, `--no-vsync`, `--show-fps`, `--unlock-fps`, `--fps-position P` (when the counter is shown and not top-left) and a `--bind ACTION=BINDING` for every key binding that is not the
+    /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--fps-limit N` (0 = none), `--unlock-fps`
+    /// (always: the FPS limit is the only cap), `--force`, `--fullscreen`, `--no-vsync`, `--show-fps`, `--fps-position P` (when the counter is shown and not top-left) and a `--bind ACTION=BINDING` for every key binding that is not the
     /// default.
     pub fn run_args(&self) -> Vec<String> {
         let mut a = vec![
@@ -129,13 +129,13 @@ impl LaunchConfig {
             format!("{}x{}", self.window.width, self.window.height),
             "--fps-limit".to_string(),
             self.window.fps_limit.to_string(),
+            "--unlock-fps".to_string(),
         ];
         for (on, flag) in [
             (self.force, "--force"),
             (self.window.fullscreen, "--fullscreen"),
             (!self.window.vsync, "--no-vsync"),
             (self.window.show_fps, "--show-fps"),
-            (self.window.unlock_fps, "--unlock-fps"),
         ] {
             if on {
                 a.push(flag.to_string());

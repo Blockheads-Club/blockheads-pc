@@ -146,7 +146,7 @@ fn run_args_and_config_expansion() {
     let mut c = LaunchConfig::new("/x/game.apk", "/data");
     assert_eq!(
         c.run_args(),
-        ["--apk", "/x/game.apk", "--data-dir", "/data", "--window", "1024x768", "--fps-limit", "60"]
+        ["--apk", "/x/game.apk", "--data-dir", "/data", "--window", "1024x768", "--fps-limit", "60", "--unlock-fps"]
     );
     c.force = true;
     c.window.fullscreen = true;
@@ -155,7 +155,6 @@ fn run_args_and_config_expansion() {
     c.window.height = 900;
     c.window.show_fps = true;
     c.window.fps_limit = 0;
-    c.window.unlock_fps = true;
     assert_eq!(
         c.run_args()[4..],
         [
@@ -163,11 +162,11 @@ fn run_args_and_config_expansion() {
             "1600x900",
             "--fps-limit",
             "0",
+            "--unlock-fps",
             "--force",
             "--fullscreen",
             "--no-vsync",
-            "--show-fps",
-            "--unlock-fps"
+            "--show-fps"
         ]
     );
     use crate::window::FpsPosition;

@@ -131,7 +131,7 @@ fn window_options() {
     assert!(WindowOptions { width: 10, ..w.clone() }.validate().is_err());
     assert!(WindowOptions { height: 99999, ..w.clone() }.validate().is_err());
     assert!(WindowOptions { ui_scale: 9.0, ..w.clone() }.validate().unwrap_err().contains("ui_scale"));
-    assert_eq!((w.show_fps, w.fps_limit, w.unlock_fps), (false, 60, false));
+    assert_eq!((w.show_fps, w.fps_limit), (false, 60));
     for limit in crate::window::FPS_LIMITS {
         assert!(WindowOptions { fps_limit: limit, ..w.clone() }.validate().is_ok(), "{limit}");
     }
@@ -146,18 +146,15 @@ fn old_window_tables_get_the_new_defaults() {
     let old = "apk = \"a\"\ndata_dir = \"d\"\n[window]\nwidth = 1600\nheight = 900\nfullscreen = true\nvsync = false\nui_scale = 1.25\n";
     let c = LaunchConfig::from_toml(old).unwrap();
     assert_eq!((c.window.width, c.window.vsync, c.window.show_fps, c.window.fps_limit), (1600, false, false, 60));
-    assert!(!c.window.unlock_fps);
     assert_eq!(c.window.fps_position, crate::window::FpsPosition::TopLeft);
     assert_eq!(crate::window::FpsPosition::TopLeft.flag(), "tl");
     let mut c = LaunchConfig::new("a", "d");
     c.window.show_fps = true;
     c.window.fps_limit = 144;
-    c.window.unlock_fps = true;
     c.window.fps_position = crate::window::FpsPosition::BottomRight;
     let text = c.to_toml();
     assert!(text.contains("fps_position = \"bottom-right\""), "{text}");
     assert!(text.contains("show_fps = true") && text.contains("fps_limit = 144"), "{text}");
-    assert!(text.contains("unlock_fps = true"), "{text}");
     assert_eq!(LaunchConfig::from_toml(&text).unwrap(), c);
 }
 

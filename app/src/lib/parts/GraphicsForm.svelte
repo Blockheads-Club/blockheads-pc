@@ -67,9 +67,6 @@
       onchange={(v) => store.patchConfig((c) => (c.window.fps_limit = Number(v)))}
     />
   </Row>
-  <Row title={t('gfx.unlockFps')} hint={t('gfx.unlockFpsHint')} titleId="{uid}-u">
-    <Toggle label={t('gfx.unlockFps')} hideLabel checked={w.unlock_fps} onchange={(v) => store.patchConfig((c) => (c.window.unlock_fps = v))} />
-  </Row>
   <Row title={t('gfx.showFps')} hint={t('gfx.showFpsHint')} titleId="{uid}-f">
     <Toggle label={t('gfx.showFps')} hideLabel checked={w.show_fps} onchange={(v) => store.patchConfig((c) => (c.window.show_fps = v))} />
   </Row>

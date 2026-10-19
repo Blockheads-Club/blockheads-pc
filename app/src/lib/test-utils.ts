@@ -11,7 +11,7 @@ export function resetStore(overrides: Partial<Record<keyof AppStore, unknown>> =
   Object.assign(s, {
     info: { version: '9.9.9', os: 'linux', arch: 'x86_64', config_dir: '/cfg', updates_enabled: false, native_controls: false },
     config: makeConfig(),
-    defaults: makeConfig({ apk: '', data_dir: '/default', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, unlock_fps: false } }),
+    defaults: makeConfig({ apk: '', data_dir: '/default', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60 } }),
     prefs: { ...DEFAULT_PREFS, ...PREFS },
     screen: 'home',
     fullscreen: false,
