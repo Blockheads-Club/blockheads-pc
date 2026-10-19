@@ -114,7 +114,23 @@ Full syntax in `crates/bhpc-run/src/script.rs`; a worked example (joining a serv
 | Esc | Android Back |
 | letters, digits, arrows, Enter, Backspace, Delete, Tab, Space, Home, End | Android key events; while a text field has focus they type into it instead |
 | F11 | toggle fullscreen (the picture is scaled to the screen, bars keep its aspect ratio) |
+| H | hide / show the game's own on-screen buttons (not while typing) |
 | close window | quit |
+
+**Game controller** (SDL GameController, hot-plug, the first one connected plays; off with `--no-controller`):
+
+| Controller | Effect |
+|---|---|
+| left stick | walk: a finger held on the game's on-screen arrow pad, moved the stick's way |
+| right stick | move the cursor (drawn over the game); it snaps to the block under it when released |
+| D-pad | move the cursor one block (repeats while held); reaches every menu button |
+| A | tap at the cursor; hold to dig or drag |
+| B | Android Back |
+| X | hide / show the game's buttons |
+| Y | next zoom level (normal, far, farther, close) |
+| LB / RB | zoom out / in one step |
+| Start | open / close the pause menu |
+| right stick press | cursor to the middle |
 
 **Join a local server.** Start a server first (for example `blockheads_server --new myworld --port 15160`), then in the
 game: Join World > Advanced... > Online IP/Port..., tap the port field and enter the server port (the field is

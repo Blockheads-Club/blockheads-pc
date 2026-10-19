@@ -162,10 +162,11 @@ fade when GTK animations are off), takes the mouse and the keyboard focus.
 - **Fullscreen, vsync, key bindings, window size, sound.** Applied by `bhpc-run` (`--fullscreen`, `--no-vsync`,
   `--bind ACTION=BINDING` for every non-default binding, `--window`, `--title`; sound off sets
   `SDL_AUDIODRIVER=dummy`). The bindings reach the `bhpc-input` mapper (`Bindings`): touch, pan, zoom, pinch, back,
-  fullscreen. In the in-window view the launcher itself handles the fullscreen binding (it owns the window).
+  fullscreen, hide game buttons. "Use a game controller" off adds `--no-controller`; the controller layout is fixed and
+  shown read-only (`bhpc-input`'s `pad`). In the in-window view the launcher itself handles the fullscreen binding (it owns the window).
 - **Mute in background** is shown disabled ("not available yet"); **Game sound** off starts the game with
   `SDL_AUDIODRIVER=dummy`.
-- **Controls**: six actions (the backend has one "touch" action for tap and drag, not two).
+- **Controls**: seven actions (the backend has one "touch" action for tap and drag, not two).
 - **Import**: "Keep both" is not offered (skip or replace per file); progress is a busy bar, not a percentage; results
   list what was written grouped by folder, not by world name.
 - **Window chrome**: frameless (custom bar, drag region, native resize) on Windows and Linux; on macOS the native
