@@ -80,6 +80,8 @@ pub struct PlayConfig {
     pub fps_limit: Option<u32>,
     /// Draw the FPS counter over the game picture.
     pub show_fps: bool,
+    /// Let the game draw at every display refresh instead of every second one (`fpsunlock`).
+    pub unlock_fps: bool,
     /// Window title.
     pub title: String,
     /// What the buttons, wheel and keys do.
@@ -112,6 +114,7 @@ impl PlayConfig {
             vsync: true,
             fps_limit: None,
             show_fps: false,
+            unlock_fps: false,
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
             embed: None,
@@ -807,6 +810,12 @@ fn boot(
             eprintln!("[play] objc trace unavailable: {e}");
         }
     }
+    if cfg.unlock_fps {
+        match unlock_fps(&mut sess) {
+            Ok(n) => eprintln!("[play] 30 FPS cap unlocked ({n} refresh-rate constants patched)"),
+            Err(e) => eprintln!("[play] cannot unlock the 30 FPS cap: {e}"),
+        }
+    }
     for f in &cfg.trace_fn {
         if let Err(e) = hook_trace(&mut sess, f) {
             eprintln!("[play] cannot trace {f}: {e}");
@@ -1263,7 +1272,24 @@ fn hook_function(
     symbol: &str,
     hook: impl Fn(&mut Cpu) + Send + Sync + 'static,
 ) -> Result<(), String> {
-    let entry = sess.linker.modules().iter().find_map(|m| m.export(symbol)).ok_or(format!("no {symbol} export"))?;
+    // `libX.so+0x1234` names a function by its ELF address inside a module (no export needed).
+    let at_offset = symbol.split_once("+0x").and_then(|(module, off)| {
+        let m = sess.linker.module(module)?;
+        Some(m.bias.wrapping_add(u32::from_str_radix(off, 16).ok()?))
+    });
+    let entry = at_offset
+        .or_else(|| sess.linker.modules().iter().find_map(|m| m.export(symbol)))
+        .ok_or(format!("no {symbol} export"))?;
+    hook_at(sess, entry, symbol, hook)
+}
+
+/// Run `hook` before the ARM function at `entry` (its first two instructions move to a trampoline).
+fn hook_at(
+    sess: &mut Session,
+    entry: u32,
+    symbol: &str,
+    hook: impl Fn(&mut Cpu) + Send + Sync + 'static,
+) -> Result<(), String> {
     if entry & 1 != 0 {
         return Err(format!("{symbol} is Thumb code"));
     }
@@ -1289,6 +1315,31 @@ fn hook_function(
     mem.write_bytes(entry, &patch).map_err(|e| e.to_string())?;
     sess.cpu.clear_cache();
     Ok(())
+}
+
+/// The "Unlock 30 FPS cap" option (see `fpsunlock`): the display link's refresh rate constants and its
+/// `setFrameInterval:` argument. Returns the number of constants patched.
+fn unlock_fps(sess: &mut Session) -> Result<usize, String> {
+    use crate::fpsunlock::{methods, patch_refresh_rate, unlocked_interval, UNLOCKED_HZ};
+    let class = sess
+        .linker
+        .modules()
+        .iter()
+        .find_map(|m| m.export("OBJC_CLASS_$_CADisplayLink"))
+        .ok_or("no CADisplayLink class")?;
+    let list = methods(sess.cpu.mem(), class, false);
+    let set = list.iter().find(|(n, _)| n == "setFrameInterval:").map(|m| m.1).ok_or("no setFrameInterval:")?;
+    let imps: Vec<u32> = list.iter().map(|m| m.1).collect();
+    let patched = patch_refresh_rate(sess.cpu.mem(), &imps, UNLOCKED_HZ);
+    if patched == 0 {
+        return Err("no refresh-rate constant in CADisplayLink".into());
+    }
+    hook_at(sess, set, "-[CADisplayLink setFrameInterval:]", |c| {
+        let n = unlocked_interval(c.reg(2) as i32);
+        c.set_reg(2, n as u32);
+    })?;
+    sess.cpu.clear_cache();
+    Ok(patched)
 }
 
 /// Log the selector of every Objective-C method-cache miss (`lookUpMethod`), once per (class, selector).

@@ -24,6 +24,8 @@ pub struct PlayFlags {
     pub fps_limit: Option<u32>,
     /// Draw the FPS counter over the game picture (`--show-fps`).
     pub show_fps: bool,
+    /// Lift the game's 30 FPS cap (`--unlock-fps`, see `fpsunlock`).
+    pub unlock_fps: bool,
 }
 
 /// Reads the flags above from a command line.
@@ -47,6 +49,7 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             .transpose()?
             .filter(|n| *n > 0),
         show_fps: args.iter().any(|a| a == "--show-fps"),
+        unlock_fps: args.iter().any(|a| a == "--unlock-fps"),
     })
 }
 

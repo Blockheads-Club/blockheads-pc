@@ -168,6 +168,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             cfg.embed = f.embed;
             cfg.fps_limit = f.fps_limit;
             cfg.show_fps = f.show_fps;
+            cfg.unlock_fps = f.unlock_fps;
         }
         Err(e) => {
             let _ = writeln!(stderr, "bhpc-run: {e}");

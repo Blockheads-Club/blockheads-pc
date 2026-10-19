@@ -19,7 +19,8 @@ fn flags_default_to_the_plain_desktop_window() {
             bindings: bhpc_input::Bindings::default(),
             embed: None,
             fps_limit: None,
-            show_fps: false
+            show_fps: false,
+            unlock_fps: false
         }
     );
 }
@@ -32,6 +33,7 @@ fn flags_carry_the_launcher_settings() {
         "--fps-limit",
         "30",
         "--show-fps",
+        "--unlock-fps",
         "--title",
         "Blockheads PC · Playing",
         "--embed",
@@ -45,7 +47,7 @@ fn flags_carry_the_launcher_settings() {
         "touch=Right",
     ]))
     .unwrap();
-    assert!(f.fullscreen && !f.vsync && f.show_fps);
+    assert!(f.fullscreen && !f.vsync && f.show_fps && f.unlock_fps);
     assert_eq!(f.fps_limit, Some(30));
     // The first --fps-limit wins (explicit flags come before the config's); 0 means no cap.
     assert_eq!(parse_play_flags(&s(&["--fps-limit", "0", "--fps-limit", "60"])).unwrap().fps_limit, None);
