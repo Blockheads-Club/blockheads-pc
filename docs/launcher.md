@@ -81,27 +81,48 @@ How it works on Linux (X11 and Wayland, same code through GTK):
    with a sequence number; `bhpc_launcher::embed`) and starts `bhpc-run --embed FILE` with stdin piped.
 2. The runner forces SDL's *offscreen* video driver (no window; audio is unaffected), waits for the launcher's first
    `size`, renders as usual and, once per presented frame (at most 60 per second), composes the letterboxed game plus
-   the Java-view overlay into a texture of exactly the view size, reads it back and publishes it into the frame file.
+   the Java-view overlay into a texture of exactly the view size and reads it back into the frame file.
    (The offscreen driver does not resize its surface with the window, so the window's own framebuffer is not used.)
+   The read-back is **asynchronous** (`bhpc_app::readback`): `glReadPixels` into one of three persistently mapped
+   pixel buffer objects, an `EGL_ANDROID_native_fence_sync` fence, and a `gl-readback` thread that waits for the fence
+   and writes the mapped pixels into the frame file. The game's render thread never waits for the GPU; when all three
+   buffers are in flight the frame is skipped. Without GLES 3 / `GL_EXT_buffer_storage` / native fences it falls back
+   to the old synchronous `glReadPixels`; `BHPC_EMBED_ASYNC=0` forces that.
 3. The launcher adds a GTK `DrawingArea` as an **overlay over the webview** (`app/src-tauri/src/embed.rs`), below the
    title bar and strip (the page reports where the stage starts, `embed_layout`; `-1` hides the view while a dialog is
-   open; `0` is fullscreen). Once per display frame it copies the newest frame into a cairo surface and paints it.
+   open; `0` is fullscreen). It takes the input. The picture is a `GtkGLArea` right under it (`embed_gl.rs`): once it
+   has a GL context it sends `layout 1` (`Cmd::Layout`), the runner then publishes frames as read back (RGBA, bottom
+   row first, no CPU conversion), and the area uploads each new frame with `glTexSubImage2D` straight from a shared
+   mapping of the frame file (`FrameReader::read_with`) and draws it as a textured quad. Every frame names its
+   layout, so frames in the old BGRA layout still show correctly (the shader swizzles and flips). If GL is not
+   available (or `BHPC_EMBED_GL=0`) the `DrawingArea` paints the BGRA frames with cairo as before.
 4. Mouse, wheel, keys (GDK keycode to HID usage), text (GTK input method), focus and size go to the runner as text
    lines on its stdin (`embed::Cmd`). The runner exits when stdin closes, so it never outlives the launcher.
    Frame files of dead launchers are deleted at the next start.
 5. If the runner cannot get a GL context without a window it exits with code 3 and the launcher restarts it with a
    window of its own; so does a platform without the view. `BHPC_EMBED=0` forces the separate window.
 
-The runner logs `[embed] frame path: shared frame file, WxH, N fps, X ms per frame` every ten seconds.
-Headless measurement (Xvfb, llvmpipe software GL, so the read-back also waits for the software rendering of the
-compose pass; the game itself runs about 30 fps there): 1100x700 5 ms per frame, runner about 67 % of one core;
-1920x1080 11 ms per frame, about 81 % of one core.
+The runner logs `[embed] frame path: <path>, layout L, WxH, N fps, X ms per frame on the render thread, Y ms converting
+and writing` every ten seconds; with `BHPC_EMBED_STATS=1` the launcher logs `[embed] view: GL texture|cairo, N frames/s
+shown, X ms per frame`.
 
-Not done yet (next step): a zero-copy GPU path. Export the composed texture as a dmabuf (`EGL_MESA_image_dma_buf_export`),
-pass the fds over a unix socket (SCM_RIGHTS) and import them in the launcher (`EGL_EXT_image_dma_buf_import`) into a
-GtkGLArea, with the shared-memory path as the automatic fallback. GTK3 uses GLX on X11, so this only helps on Wayland
-(EGL), and it needs a GPU render node to test; that is why it is not part of this change. Windows (shared D3D/GL
-handle into a child HWND) and macOS (IOSurface into an NSView) are also still to do; both fall back to a separate
+Measured on a hybrid laptop (game on the NVIDIA RTX 3050 Ti through EGL, desktop on KDE Wayland on the AMD iGPU,
+1280x720, medians of three runs). Runner, headless with a reader that takes frames like the launcher (menu, then a
+new world, uncapped): render-thread time per frame sent 5.1 ms to 0.16 ms, frames reaching the launcher 46 to 58 per
+second (the cap is about 66), game frame rate in the world 279 to 387 fps (p99 frame time 12.3 to 9.6 ms). Launcher
+(real window, `BHPC_EMBED_STATS=1`): time per shown frame 5.0 ms (pread, copy into a cairo surface, cairo paint) to
+1.3 ms (texture upload and draw); at a 24 fps cap the launcher main thread went from 33 % to 30 % of a core. Most of
+what remains is GTK's own window painting: once a `GtkGLArea` is realized GTK 3 paints the whole window with GL, and
+the webview under the game area is still drawn and uploaded for every frame (the launcher page alone costs about 15 %).
+
+**Why not dmabuf zero-copy.** Tried on that laptop with a small C prototype: the NVIDIA driver exports the
+composed texture as a dmabuf (`EGL_MESA_image_dma_buf_export`, block-linear modifier `0x300000000e08014`), but the
+AMD driver the compositor and GDK use refuses that modifier, and NVIDIA GL cannot render into a linear dmabuf (an
+AMD-allocated or NVIDIA-GBM-allocated `LINEAR` buffer imports as an `EGLImage`, but the framebuffer is incomplete,
+`GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT`, as a texture and as a renderbuffer). So with the game on one GPU and the
+desktop on another, a GPU-to-GPU copy into system memory is needed anyway, which is what the pixel buffer read-back
+is. A dmabuf hand-over would only pay off when both run on the same GPU; it is not implemented. Windows (shared
+D3D/GL handle into a child HWND) and macOS (IOSurface into an NSView) are still to do; both fall back to a separate
 window now.
 
 ## Start-up progress and the loading screen
