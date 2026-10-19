@@ -8,6 +8,7 @@
   import Toggle from '../ui/Toggle.svelte';
   import type { FpsPosition } from '../types';
   import { FPS_POSITIONS, fpsPositionLabel } from '../fps-position';
+  import { GAME_SPEEDS, gameSpeedLabel } from '../game-speed';
 
   const w = $derived(store.cfg?.window);
   const rec = $derived(recommendedSize(store.display).join('x'));
@@ -28,6 +29,13 @@
     const cur = store.cfg!.window.fps_limit;
     if (!values.includes(cur)) values.push(cur);
     return values.map((n) => ({ value: String(n), label: n === 0 ? t('gfx.fpsUnlimited') : t('gfx.fpsN', { n }) }));
+  });
+  /** The offered speeds, and a hand-edited value from launcher.toml when it is none of those. */
+  const speeds = $derived.by(() => {
+    const values = [...GAME_SPEEDS];
+    const cur = store.cfg!.window.game_speed;
+    if (!values.includes(cur)) values.push(cur);
+    return values.sort((a, b) => a - b).map((n) => ({ value: String(n), label: gameSpeedLabel(n) }));
   });
   const uid = $props.id();
 
@@ -81,6 +89,15 @@
       />
     </Row>
   {/if}
+  <Row title={t('gfx.gameSpeed')} hint={t('gfx.gameSpeedHint')}>
+    <SelectField
+      label={t('gfx.gameSpeed')}
+      hideLabel
+      value={String(w.game_speed)}
+      options={speeds}
+      onchange={(v) => store.patchConfig((c) => (c.window.game_speed = Number(v)))}
+    />
+  </Row>
   <Row title={t('gfx.scale')} hint={t('gfx.scaleHint')}>
     <input
       type="range"

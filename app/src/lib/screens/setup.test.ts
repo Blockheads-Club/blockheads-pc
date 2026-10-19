@@ -10,6 +10,7 @@ vi.mock('../api', () => ({
 import { makeApi, makeConfig, makeReport, makeWin } from '../mock-api';
 import { store } from '../store.svelte';
 import { resetStore } from '../test-utils';
+import { setLang } from '../i18n.svelte';
 import { toasts } from '../ui/toast.svelte';
 import SetupApk from './SetupApk.svelte';
 import SetupControls from './SetupControls.svelte';
@@ -243,6 +244,26 @@ describe('Window and graphics step', () => {
     expect(screen.getByText('A small frame-rate counter in the top-left corner of the game.')).toBeVisible();
   });
 
+  it('sets the game speed', async () => {
+    render(SetupGraphics);
+    const speed = screen.getByLabelText('Game speed') as HTMLSelectElement;
+    expect([...speed.options].map((o) => o.textContent)).toEqual(['0.5×', '0.75×', '1× (normal)', '1.25×', '1.5×', '2×', '3×']);
+    expect(speed.value).toBe('1');
+    await fireEvent.change(speed, { target: { value: '2' } });
+    expect(store.draft?.window.game_speed).toBe(2);
+    expect(screen.getByText(/Single-player only/)).toBeVisible();
+  });
+
+  it('keeps a hand-edited game speed selectable, in the UI language', () => {
+    store.draft = makeConfig({ window: { ...makeConfig().window, game_speed: 2.5 } });
+    setLang('tr');
+    render(SetupGraphics);
+    const speed = screen.getByLabelText('Oyun hızı') as HTMLSelectElement;
+    expect(speed.value).toBe('2.5');
+    expect([...speed.options].map((o) => o.textContent)).toEqual(['0,5×', '0,75×', '1× (normal)', '1,25×', '1,5×', '2×', '2,5×', '3×']);
+    setLang('en');
+  });
+
   it('keeps a hand-edited FPS limit selectable', () => {
     store.draft = makeConfig({ window: { ...makeConfig().window, fps_limit: 75 } });
     render(SetupGraphics);
@@ -262,7 +283,7 @@ describe('Window and graphics step', () => {
 
   it('works without a detected display and lists an unusual current size', () => {
     store.display = null;
-    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60 } });
+    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1 } });
     render(SetupGraphics);
     expect(screen.queryByText(/Detected/)).toBeNull();
     expect([...(screen.getByLabelText('Window size') as HTMLSelectElement).options].map((o) => o.textContent)).toContain('1111 × 700');
@@ -408,7 +429,7 @@ describe('Ready step', () => {
 
   it('summarises the choices and starts the launcher', async () => {
     store.apk = makeReport();
-    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60 } });
+    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1 } });
     store.importSummary = { written: 3, skipped_existing: 0, ignored: 0, items: [] };
     render(SetupReady);
     expect(screen.getByRole('heading', { name: 'You’re ready to play!' })).toBeVisible();
@@ -432,10 +453,10 @@ describe('Ready step', () => {
     store.apk = makeReport({ status: 'unknown', version: null });
     store.draft = makeConfig({
       keys: { ...makeConfig().keys, back: 'F11' },
-      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', fps_limit: 0 }
+      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', fps_limit: 0, game_speed: 1.5 }
     });
     render(SetupReady);
-    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · FPS counter (bottom right) · UI 100 %')).toBeVisible();
+    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · FPS counter (bottom right) · UI 100 % · Game speed 1.5×')).toBeVisible();
     expect(screen.getByText('Two actions share a key. Fix it in Settings.')).toBeVisible();
     expect(screen.getByText('Nothing imported')).toBeVisible();
     expect(screen.getByText('Unknown build · experimental')).toBeVisible();

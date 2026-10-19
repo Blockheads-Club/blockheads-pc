@@ -18,7 +18,8 @@ export interface WindowOptions {
   fps_position: FpsPosition;
   /** Frames per second at most; 0 = no limit (vsync, when on, still applies). */
   fps_limit: number;
-  /** Lift the game's own 30 FPS cap; then fps_limit and vsync decide the frame rate. */
+  /** World speed multiplier, 0.25 to 4 (1 = normal; single-player only). */
+  game_speed: number;
 }
 
 export interface KeyBindings {
