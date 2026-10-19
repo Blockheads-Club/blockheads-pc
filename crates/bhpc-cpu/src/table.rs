@@ -4,7 +4,7 @@ use crate::{Cpu, CpuError, MAX_THUNKS, THUNK_BASE, THUNK_REGION, THUNK_STRIDE};
 use bhpc_mem::{GuestMemory, MemError};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 /// A stateful host function bound to an `svc` number. It is serialised: only one guest thread
@@ -52,7 +52,6 @@ impl Handler {
 
 struct Entry {
     name: String,
-    handler: Option<Handler>,
     /// Runs without the host gate (see [`ThunkTable::set_gate_free`]).
     free: bool,
     /// Calls and nanoseconds spent, while statistics are on.
@@ -61,8 +60,8 @@ struct Entry {
 }
 
 impl Entry {
-    fn new(name: &str, handler: Option<Handler>) -> Entry {
-        Entry { name: name.to_string(), handler, free: false, calls: AtomicU64::new(0), nanos: AtomicU64::new(0) }
+    fn new(name: &str) -> Entry {
+        Entry { name: name.to_string(), free: false, calls: AtomicU64::new(0), nanos: AtomicU64::new(0) }
     }
 }
 
@@ -79,6 +78,11 @@ pub struct ThunkStat {
 struct Inner {
     entries: Vec<Entry>,
     by_name: HashMap<String, u32>,
+    /// Every handler ever bound, so the raw pointers in `slots` stay valid until the table is dropped (a rebound
+    /// slot's old handler may still be running on another thread).
+    /// Boxed so each handler keeps its address when the vector grows (`slots` point at them).
+    #[allow(clippy::vec_box)]
+    owned: Vec<Box<Handler>>,
 }
 
 /// Table of host thunks living in the reserved guest page at [`THUNK_BASE`]. Wrap it in an `Arc`
@@ -87,6 +91,11 @@ pub struct ThunkTable {
     mem: Arc<GuestMemory>,
     inner: RwLock<Inner>,
     stats: AtomicBool,
+    /// Handler of each `svc` slot (null: none), read without any lock on every thunk call: the dispatch is the
+    /// hottest host path, and a shared lock word or reference count would bounce between guest threads.
+    slots: Box<[AtomicPtr<Handler>]>,
+    /// Whether each slot runs without the host gate, read lock-free alongside `slots`.
+    free: Box<[AtomicBool]>,
 }
 
 impl ThunkTable {
@@ -96,8 +105,14 @@ impl ThunkTable {
         mem.map(THUNK_BASE, THUNK_REGION)?;
         let t = ThunkTable {
             mem,
-            inner: RwLock::new(Inner { entries: vec![Entry::new("<return>", None)], by_name: HashMap::new() }),
+            inner: RwLock::new(Inner {
+                entries: vec![Entry::new("<return>")],
+                by_name: HashMap::new(),
+                owned: Vec::new(),
+            }),
             stats: AtomicBool::new(false),
+            slots: (0..=MAX_THUNKS).map(|_| AtomicPtr::new(std::ptr::null_mut())).collect(),
+            free: (0..=MAX_THUNKS).map(|_| AtomicBool::new(false)).collect(),
         };
         t.write_stub(0)?;
         Ok(Arc::new(t))
@@ -113,18 +128,27 @@ impl ThunkTable {
 
     fn register(&self, name: &str, h: Handler) -> Result<u32, CpuError> {
         let mut g = self.inner.write().unwrap_or_else(PoisonError::into_inner);
-        if let Some(&slot) = g.by_name.get(name) {
-            // A new function makes no promise about the gate.
-            g.entries[slot as usize] = Entry::new(name, Some(h));
-            return Ok(THUNK_BASE + slot * THUNK_STRIDE);
-        }
-        let slot = g.entries.len() as u32;
-        if slot > MAX_THUNKS {
-            return Err(CpuError::TooManyThunks);
-        }
-        self.write_stub(slot)?;
-        g.entries.push(Entry::new(name, Some(h)));
-        g.by_name.insert(name.to_string(), slot);
+        let slot = match g.by_name.get(name) {
+            Some(&slot) => {
+                // A new function makes no promise about the gate.
+                g.entries[slot as usize] = Entry::new(name);
+                slot
+            }
+            None => {
+                let slot = g.entries.len() as u32;
+                if slot > MAX_THUNKS {
+                    return Err(CpuError::TooManyThunks);
+                }
+                self.write_stub(slot)?;
+                g.entries.push(Entry::new(name));
+                g.by_name.insert(name.to_string(), slot);
+                slot
+            }
+        };
+        self.free[slot as usize].store(false, Ordering::Release);
+        let mut b = Box::new(h);
+        self.slots[slot as usize].store(&mut *b, Ordering::Release);
+        g.owned.push(b);
         Ok(THUNK_BASE + slot * THUNK_STRIDE)
     }
 
@@ -171,6 +195,7 @@ impl ThunkTable {
         let mut g = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         let Some(&slot) = g.by_name.get(name) else { return false };
         g.entries[slot as usize].free = true;
+        self.free[slot as usize].store(true, Ordering::Release);
         true
     }
 
@@ -210,8 +235,10 @@ impl ThunkTable {
     }
 
     /// The handler of `slot` and whether it runs without the gate.
-    pub(crate) fn handler(&self, slot: usize) -> Option<(Handler, bool)> {
-        let g = self.inner.read().unwrap_or_else(PoisonError::into_inner);
-        g.entries.get(slot).and_then(|e| Some((e.handler.clone()?, e.free)))
+    pub(crate) fn handler(&self, slot: usize) -> Option<(&Handler, bool)> {
+        let p = self.slots.get(slot)?.load(Ordering::Acquire);
+        // SAFETY: non-null slot pointers point into `inner.owned`, whose boxes live as long as the table.
+        let h = unsafe { p.as_ref() }?;
+        Some((h, self.free[slot].load(Ordering::Acquire)))
     }
 }

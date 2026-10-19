@@ -1014,7 +1014,9 @@ mod tramp {
                 c.reg(12)
             );
         }
-        let Some((h, free)) = c.shared.table.handler(slot) else {
+        // The handler is owned by the table, which outlives this call through `c.shared`; a raw pointer lets the
+        // handler borrow the CPU mutably without cloning (no reference-count traffic on the hot path).
+        let Some((h, free)) = c.shared.table.handler(slot).map(|(h, f)| (h as *const table::Handler, f)) else {
             c.request_stop(Stop::BadSvc(swi));
             return;
         };
@@ -1022,7 +1024,8 @@ mod tramp {
         // SAFETY: the gate lives in `c.shared`, which outlives this callback.
         let took = gate.is_some_and(|g| unsafe { (*g).enter() });
         let t0 = c.shared.table.stats_on().then(std::time::Instant::now);
-        if h.invoke(c).is_err() {
+        // SAFETY: see above; handlers are never freed while the table is alive.
+        if unsafe { (*h).invoke(c) }.is_err() {
             c.request_stop(Stop::Nested);
         }
         if let Some(t0) = t0 {
