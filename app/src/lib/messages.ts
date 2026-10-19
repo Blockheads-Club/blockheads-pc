@@ -345,10 +345,12 @@ export const en = {
   'logs.copied': 'Log copied',
   'logs.saved': 'Log saved as {name}',
 
-  'close.title': 'Stop the game and close Blockheads PC?',
+  'close.title': 'Stop the game and quit Blockheads PC?',
   'close.body': 'Progress you haven’t saved in the game may be lost. Save from the game’s menu first if you can.',
   'close.keep': 'Keep playing',
-  'close.stop': 'Stop and close',
+  'close.stop': 'Stop and quit',
+  'tray.show': 'Show Blockheads PC',
+  'tray.quit': 'Quit',
 
   'join.title': 'How to join a server',
   'join.lead': 'Start the game first. Joining happens inside the game, in its multiplayer menu.',
@@ -826,10 +828,12 @@ export const tr: Record<Key, string> = {
   'logs.copied': 'Günlük kopyalandı',
   'logs.saved': 'Günlük {name} olarak kaydedildi',
 
-  'close.title': 'Oyun durdurulup Blockheads PC kapatılsın mı?',
+  'close.title': 'Oyun durdurulup Blockheads PC’den çıkılsın mı?',
   'close.body': 'Oyunda kaydetmediğin ilerleme kaybolabilir. Mümkünse önce oyunun menüsünden kaydet.',
   'close.keep': 'Oynamaya devam et',
-  'close.stop': 'Durdur ve kapat',
+  'close.stop': 'Durdur ve çık',
+  'tray.show': 'Blockheads PC’yi göster',
+  'tray.quit': 'Çık',
 
   'join.title': 'Sunucuya nasıl katılırım',
   'join.lead': 'Önce oyunu başlat. Katılma işlemi oyunun içinde, çok oyunculu menüsünde yapılır.',

@@ -169,7 +169,7 @@ describe('page', () => {
     await screen.findByRole('heading', { name: /The Blockheads/ });
     for (const [d, name] of [
       ['join', 'How to join a server'], ['logs', 'Game log'], ['import', 'Bring your worlds from your phone'],
-      ['close', 'Stop the game and close Blockheads PC?']
+      ['close', 'Stop the game and quit Blockheads PC?']
     ] as const) {
       store.dialog = d;
       expect(await screen.findByRole(d === 'close' ? 'alertdialog' : 'dialog', { name })).toBeVisible();
@@ -180,17 +180,18 @@ describe('page', () => {
     expect(await screen.findByRole('dialog', { name: /is here/ })).toBeVisible();
   });
 
-  it('asks before closing the window while the game runs', async () => {
+  it('asks before quitting from the tray while the game runs, and labels the tray menu', async () => {
+    let quit: (() => void) | undefined;
+    mock.api.onQuitRequested = vi.fn(async (cb: () => void) => { quit = cb; return () => {}; });
     mock.api.boot = vi.fn(async () => makeBoot());
     mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'running', running_secs: 1 }));
     render(Page);
     await screen.findByRole('heading', { name: /The Blockheads/ });
-    await waitFor(() => expect(hooks.close).toBeDefined());
+    await waitFor(() => expect(quit).toBeDefined());
     await waitFor(() => expect(store.state).toBe('running'));
-    const prevent = vi.fn();
-    hooks.close?.(prevent);
-    expect(prevent).toHaveBeenCalled();
+    quit?.();
     expect(await screen.findByRole('alertdialog')).toBeVisible();
+    expect(mock.api.trayLabels).toHaveBeenCalledWith('Show Blockheads PC', 'Quit');
   });
 
   it('rounds the window except maximized, fullscreen or native (macOS)', async () => {
@@ -234,7 +235,8 @@ describe('page', () => {
   });
 
   it('survives a window without close events and picks the OS from the user agent', async () => {
-    mock.win.onCloseRequested = vi.fn(async () => { throw new Error('no window'); });
+    mock.api.onQuitRequested = vi.fn(async () => { throw new Error('no window'); });
+    mock.api.trayLabels = vi.fn(async () => { throw new Error('no tray'); });
     mock.win.onResized = vi.fn(async () => { throw new Error('no window'); });
     mock.api.boot = vi.fn(async () => makeBoot());
     mock.api.appInfo = vi.fn(async () => { throw 'denied'; });

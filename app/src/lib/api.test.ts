@@ -8,8 +8,7 @@ const win = vi.hoisted(() => ({
   isMaximized: vi.fn(),
   isFullscreen: vi.fn(),
   onResized: vi.fn(),
-  onFocusChanged: vi.fn(),
-  onCloseRequested: vi.fn()
+  onFocusChanged: vi.fn()
 }));
 const webview = vi.hoisted(() => ({ onDragDropEvent: vi.fn() }));
 const dialog = vi.hoisted(() => ({ open: vi.fn(), save: vi.fn() }));
@@ -38,6 +37,7 @@ describe('api', () => {
     await api.splashGet();
     await api.splashRetry();
     await api.appQuit();
+    await api.trayLabels('Show', 'Quit');
     await api.mainReady();
     await api.boot();
     await api.saveConfig(c);
@@ -61,7 +61,7 @@ describe('api', () => {
     await api.updateInstall();
     await api.updateProgress();
     expect(invoke.mock.calls.map((x: unknown[]) => x[0])).toEqual([
-      'app_info', 'splash_set', 'splash_get', 'splash_retry', 'app_quit', 'main_ready', 'boot', 'save_config', 'save_prefs', 'finish_setup', 'check_apk', 'use_apk', 'normalize_binding',
+      'app_info', 'splash_set', 'splash_get', 'splash_retry', 'app_quit', 'tray_labels', 'main_ready', 'boot', 'save_config', 'save_prefs', 'finish_setup', 'check_apk', 'use_apk', 'normalize_binding',
       'display_info', 'import_saves', 'data_size', 'move_data_dir', 'open_path', 'game_start', 'game_stop', 'game_poll',
       'embed_layout', 'embed_fullscreen', 'save_log', 'update_check', 'update_install', 'update_progress'
     ]);
@@ -76,8 +76,9 @@ describe('api', () => {
     const seen: unknown[] = [];
     await api.onSplashState((s) => seen.push(s));
     await api.onSplashRetry(() => seen.push('retry'));
-    expect(seen).toEqual(['p', 'retry']);
-    expect(event.listen.mock.calls.map((c) => c[0])).toEqual(['splash-state', 'splash-retry']);
+    await api.onQuitRequested(() => seen.push('quit'));
+    expect(seen).toEqual(['p', 'retry', 'quit']);
+    expect(event.listen.mock.calls.map((c) => c[0])).toEqual(['splash-state', 'splash-retry', 'quit-requested']);
   });
 
   it('opens links and the native pickers', async () => {
@@ -109,13 +110,6 @@ describe('api', () => {
     win.onFocusChanged.mockImplementation(async (h: (e: { payload: boolean }) => void) => h({ payload: true }));
     await winApi.onFocus(focus);
     expect(focus).toHaveBeenCalledWith(true);
-
-    const prevent = vi.fn();
-    const closed = vi.fn();
-    win.onCloseRequested.mockImplementation(async (h: (e: { preventDefault: () => void }) => void) => h({ preventDefault: prevent }));
-    await winApi.onCloseRequested(closed);
-    closed.mock.calls[0][0]();
-    expect(prevent).toHaveBeenCalled();
 
     const dropped = vi.fn();
     webview.onDragDropEvent.mockImplementation(async (h: (e: { payload: unknown }) => void) => {

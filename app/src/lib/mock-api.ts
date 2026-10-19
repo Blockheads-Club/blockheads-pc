@@ -46,6 +46,8 @@ export function makeApi(over: Record<string, unknown> = {}) {
     mainReady: vi.fn(async () => {}),
     onSplashState: vi.fn(async () => () => {}),
     onSplashRetry: vi.fn(async () => () => {}),
+    onQuitRequested: vi.fn(async () => () => {}),
+    trayLabels: vi.fn(async () => {}),
     boot: vi.fn(async () => makeBoot()),
     saveConfig: vi.fn(async (c: LaunchConfig) => c),
     savePrefs: vi.fn(async (p: Prefs) => p),
@@ -75,9 +77,9 @@ export function makeApi(over: Record<string, unknown> = {}) {
   };
 }
 
-/** A fake of `win`; `closeRequested` and `dropped` hold the handlers the app registered. */
+/** A fake of `win`; `hooks` holds the handlers the app registered. */
 export function makeWin(over: Record<string, unknown> = {}) {
-  const hooks: { close?: (prevent: () => void) => void; drop?: (paths: string[]) => void; resize?: () => void } = {};
+  const hooks: { drop?: (paths: string[]) => void; resize?: () => void } = {};
   const win = {
     minimize: vi.fn(async () => {}),
     toggleMaximize: vi.fn(async () => {}),
@@ -89,10 +91,6 @@ export function makeWin(over: Record<string, unknown> = {}) {
       return () => {};
     }),
     onFocus: vi.fn(async () => () => {}),
-    onCloseRequested: vi.fn(async (cb: (prevent: () => void) => void) => {
-      hooks.close = cb;
-      return () => {};
-    }),
     onFileDrop: vi.fn(async (cb: (paths: string[]) => void) => {
       hooks.drop = cb;
       return () => {};

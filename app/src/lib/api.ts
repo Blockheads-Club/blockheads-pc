@@ -19,6 +19,9 @@ export const api = {
   mainReady: () => invoke<void>('main_ready'),
   onSplashState: (cb: (s: SplashState) => void) => listen<SplashState>('splash-state', (e) => cb(e.payload)),
   onSplashRetry: (cb: () => void) => listen('splash-retry', () => cb()),
+  /** Quit from the tray (or the close button when there is no tray): the window decides, see `store.requestQuit`. */
+  onQuitRequested: (cb: () => void) => listen('quit-requested', () => cb()),
+  trayLabels: (show: string, quit: string) => invoke<void>('tray_labels', { show, quit }),
   boot: () => invoke<BootState>('boot'),
   saveConfig: (config: LaunchConfig) => invoke<LaunchConfig>('save_config', { config }),
   savePrefs: (prefs: Prefs) => invoke<Prefs>('save_prefs', { prefs }),
@@ -59,7 +62,7 @@ export const api = {
   }
 };
 
-/** Window chrome, close handling and file drops. */
+/** Window chrome and file drops. Closing hides the window to the tray (backend, `tray.rs`). */
 export const win = {
   minimize: () => getCurrentWindow().minimize(),
   toggleMaximize: () => getCurrentWindow().toggleMaximize(),
@@ -68,8 +71,6 @@ export const win = {
   isFullscreen: () => getCurrentWindow().isFullscreen(),
   onResized: (cb: () => void) => getCurrentWindow().onResized(cb),
   onFocus: (cb: (focused: boolean) => void) => getCurrentWindow().onFocusChanged((e) => cb(e.payload)),
-  onCloseRequested: (cb: (prevent: () => void) => void) =>
-    getCurrentWindow().onCloseRequested((e) => cb(() => e.preventDefault())),
   onFileDrop: (cb: (paths: string[]) => void) =>
     getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === 'drop') cb(e.payload.paths);

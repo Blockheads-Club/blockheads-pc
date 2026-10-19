@@ -66,6 +66,10 @@
     };
     void api.splashSet(state).catch(() => {});
   });
+  /** The tray menu follows the UI language. */
+  $effect(() => {
+    void api.trayLabels(t('tray.show'), t('tray.quit')).catch(() => {});
+  });
   let revealed = false;
   $effect(() => {
     if (s === 'splash' || revealed) return;
@@ -86,7 +90,7 @@
     void win.onResized(sync).then((u) => (offResize = u)).catch(() => {});
     const unwatch = watchViewport();
     let off: (() => void) | undefined;
-    void win.onCloseRequested((prevent) => store.requestClose(prevent)).then((u) => (off = u)).catch(() => {});
+    void api.onQuitRequested(() => store.requestQuit()).then((u) => (off = u)).catch(() => {});
     void store.init();
     return () => {
       unwatch();

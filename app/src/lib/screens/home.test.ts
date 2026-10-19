@@ -286,12 +286,12 @@ describe('dialogs', () => {
   it('confirms closing while playing', async () => {
     store.dialog = 'close';
     render(CloseDialog);
-    expect(screen.getByRole('alertdialog')).toHaveTextContent('Stop the game and close Blockheads PC?');
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Stop the game and quit Blockheads PC?');
     await click('Keep playing');
     expect(store.dialog).toBeNull();
     store.dialog = 'close';
-    await click('Stop and close');
-    await waitFor(() => expect(mock.win.close).toHaveBeenCalled());
+    await click('Stop and quit');
+    await waitFor(() => expect(mock.api.appQuit).toHaveBeenCalled());
   });
 
   it('imports saves from Home', async () => {

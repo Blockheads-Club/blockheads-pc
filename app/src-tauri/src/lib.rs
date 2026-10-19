@@ -2,6 +2,7 @@
 //! this file only converts types and talks to the window system.
 
 mod embed;
+mod tray;
 
 use bhpc_launcher::apk::{self, ApkReport};
 use bhpc_launcher::config::LaunchConfig;
@@ -427,6 +428,7 @@ pub fn run() {
             // The main window is created hidden (tauri.conf.json) and runs the boot work; `main_ready` shows it
             // (GTK warns when the frameless window gets its title bar after it was realized and shown early).
             // Only the splash is on screen until then. Should the splash fail to open, show the main window.
+            tray::create(app.handle());
             if let Err(e) = open_splash(app) {
                 eprintln!("splash window failed: {e}");
                 if let Some(w) = app.get_webview_window("main") {
@@ -436,6 +438,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            tray::on_close(window, event);
             // Closing the splash (Alt+F4) before the launcher is up means the user wants out.
             let closing = window.label() == "splash" && matches!(event, WindowEvent::CloseRequested { .. });
             if closing && !window.state::<App>().revealed.load(Ordering::SeqCst) {
@@ -457,6 +460,7 @@ pub fn run() {
             splash_get,
             splash_retry,
             app_quit,
+            tray::tray_labels,
             main_ready,
             boot,
             save_config,

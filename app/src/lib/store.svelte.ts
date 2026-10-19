@@ -1,4 +1,4 @@
-import { api, win } from './api';
+import { api } from './api';
 import { errText, setLang, t } from './i18n.svelte';
 import { setTheme } from './theme.svelte';
 import { toast } from './ui/toast.svelte';
@@ -481,17 +481,16 @@ export class AppStore {
     }
   }
 
-  /** The window's close button: ask first while a game runs. */
-  requestClose(prevent: () => void) {
-    if (!this.active) return;
-    prevent();
-    this.dialog = 'close';
+  /** Quit from the tray: ask first while a game runs. */
+  requestQuit() {
+    if (this.active) this.dialog = 'close';
+    else void api.appQuit().catch((e) => this.fail(e));
   }
 
   async stopAndClose() {
     await this.stop();
     this.dialog = null;
-    await win.close();
+    await api.appQuit();
   }
 
   async systemInfo(): Promise<boolean> {

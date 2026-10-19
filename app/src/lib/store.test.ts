@@ -485,18 +485,24 @@ describe('playing', () => {
     expect(mock.api.gamePoll).toHaveBeenCalledTimes(2);
   });
 
-  it('asks before closing a running game and stops it first', async () => {
-    const prevent = vi.fn();
-    store.requestClose(prevent);
-    expect(prevent).not.toHaveBeenCalled();
+  it('quits from the tray, asking first while a game runs and stopping it', async () => {
+    store.requestQuit();
+    expect(mock.api.appQuit).toHaveBeenCalledTimes(1);
+    expect(store.dialog).toBeNull();
     store.game = makeSnap({ state: 'running' });
-    store.requestClose(prevent);
-    expect(prevent).toHaveBeenCalled();
+    store.requestQuit();
+    expect(mock.api.appQuit).toHaveBeenCalledTimes(1);
     expect(store.dialog).toBe('close');
     await store.stopAndClose();
     expect(mock.api.gameStop).toHaveBeenCalled();
-    expect(mock.win.close).toHaveBeenCalled();
+    expect(mock.api.appQuit).toHaveBeenCalledTimes(2);
     expect(store.dialog).toBeNull();
+  });
+
+  it('reports a quit that fails', async () => {
+    mock.api.appQuit = vi.fn(async () => { throw new Error('nope'); });
+    store.requestQuit();
+    await vi.waitFor(() => expect(msgs()).toContain('nope'));
   });
 });
 
