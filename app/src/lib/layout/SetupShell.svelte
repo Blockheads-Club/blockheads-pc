@@ -82,7 +82,8 @@
 
 <style>
   /* Fixed-height app layout: the rail stays put, only the step content scrolls (not the whole page). */
-  .win { height: 100%; display: flex; overflow: hidden; background: var(--bg); }
+  /* Pinned to the content area (see SettingsShell): WebKitGTK does not resolve height: 100% there. */
+  .win { position: absolute; inset: 0; display: flex; overflow: hidden; background: var(--bg); }
   .rail {
     --ray: rgba(255, 122, 69, 0.12);
     flex: 1 1 230px;

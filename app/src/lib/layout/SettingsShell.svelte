@@ -53,7 +53,9 @@
 
 <style>
   /* Fixed-height app layout: the header and the section nav stay put, only the section content scrolls. */
-  .app { height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+  /* Pinned to the content area (position: relative there), not height: 100%: WebKitGTK does not resolve a
+     percentage height against that flex item, and the shell then grew with its content and scrolled as a whole. */
+  .app { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
   .top { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 2px solid var(--line); background: var(--surface); }
   h1 { font: 800 18px var(--f-display); flex: 1; }
   .shell { flex: 1; min-height: 0; display: flex; }
