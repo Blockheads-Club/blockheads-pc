@@ -13,6 +13,21 @@ pub struct Overlay {
     pub rgba: Arc<Vec<u8>>,
 }
 
+impl Overlay {
+    /// The rows `first..end` outside of which this picture equals `prev` (same size), so a window that holds `prev`
+    /// only uploads those; `None` when the pictures are equal, all rows when the sizes differ.
+    pub fn changed_rows(&self, prev: &Overlay) -> Option<(u32, u32)> {
+        if (self.width, self.height) != (prev.width, prev.height) || self.rgba.len() != prev.rgba.len() {
+            return Some((0, self.height));
+        }
+        let stride = (self.width as usize * 4).max(1);
+        let rows = || self.rgba.chunks(stride).zip(prev.rgba.chunks(stride));
+        let first = rows().position(|(a, b)| a != b)?;
+        let last = rows().rposition(|(a, b)| a != b).unwrap_or(first);
+        Some((first as u32, last as u32 + 1))
+    }
+}
+
 /// Opaque handle of a host GL context created by a [`GlWindow`].
 pub type HostContext = u64;
 

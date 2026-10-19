@@ -69,7 +69,11 @@ const CAPS: [u32; 6] = [0x0C11, 0x0B90, 0x0B71, 0x0BE2, 0x0B44, 0x0BD0];
 const VS: &str =
     "attribute vec2 pos; attribute vec2 uv; varying vec2 v; void main() { v = uv; gl_Position = vec4(pos, 0.0, 1.0); }";
 const FS: &str = "precision mediump float; varying vec2 v; uniform sampler2D t; void main() { gl_FragColor = vec4(texture2D(t, v).rgb, 1.0); }";
-/// The overlay is premultiplied RGBA and is blended with `ONE, ONE_MINUS_SRC_ALPHA`.
+/// The overlay is premultiplied RGBA and is blended with `ONE, ONE_MINUS_SRC_ALPHA`. Its texture holds the rows top
+/// first, as the picture has them (no flipped copy to upload), so it is sampled upside down; the flip is done per
+/// vertex, where it is exact (at mediump precision in the fragment shader it can miss the texel centres).
+const VS_OVERLAY: &str = "attribute vec2 pos; attribute vec2 uv; varying vec2 v; \
+                          void main() { v = vec2(uv.x, 1.0 - uv.y); gl_Position = vec4(pos, 0.0, 1.0); }";
 const FS_OVERLAY: &str =
     "precision mediump float; varying vec2 v; uniform sampler2D t; void main() { gl_FragColor = texture2D(t, v); }";
 /// Full-screen strip: position then texture coordinate.
@@ -145,12 +149,14 @@ gl_table! {
     glGetVertexAttribPointerv: fn(u32, u32, *mut *mut c_void);
 }
 
-/// A texture holding an [`Overlay`]: its name, size and the serial of the pixels it holds.
+/// A texture holding an [`Overlay`]: its name, size and the serial of the pixels it holds, and those pixels (to
+/// upload only the rows that change).
 #[derive(Default)]
 struct Layer {
     tex: u32,
     size: (u32, u32),
     serial: Option<u64>,
+    held: Option<Overlay>,
 }
 
 /// Storage shared by all contexts.
@@ -491,8 +497,8 @@ unsafe fn realloc(g: &Gl, sh: &mut Shared, size: (u32, u32)) {
     sh.generation += 1;
 }
 
-/// Compile and link the shared vertex shader with `fs`; returns the program and its sampler uniform.
-unsafe fn link(g: &Gl, fs: &str) -> Option<(u32, i32)> {
+/// Compile and link vertex shader `vs` with `fs`; returns the program and its sampler uniform.
+unsafe fn link(g: &Gl, vs: &str, fs: &str) -> Option<(u32, i32)> {
     let compile = |kind: u32, src: &str| -> Option<u32> {
         let s = (g.glCreateShader)(kind);
         let c = cstr(src);
@@ -503,7 +509,7 @@ unsafe fn link(g: &Gl, fs: &str) -> Option<(u32, i32)> {
         (g.glGetShaderiv)(s, COMPILE_STATUS, &mut ok);
         (ok != 0).then_some(s)
     };
-    let (vs, fs) = (compile(VERTEX_SHADER, VS)?, compile(FRAGMENT_SHADER, fs)?);
+    let (vs, fs) = (compile(VERTEX_SHADER, vs)?, compile(FRAGMENT_SHADER, fs)?);
     let p = (g.glCreateProgram)();
     (g.glAttachShader)(p, vs);
     (g.glAttachShader)(p, fs);
@@ -519,8 +525,8 @@ unsafe fn link(g: &Gl, fs: &str) -> Option<(u32, i32)> {
 
 /// The compositing programs (surface and overlay) and the quad they draw.
 unsafe fn build_program(g: &Gl, sh: &mut Shared) -> Option<()> {
-    let (p, sampler) = link(g, FS)?;
-    let (op, osampler) = link(g, FS_OVERLAY)?;
+    let (p, sampler) = link(g, VS, FS)?;
+    let (op, osampler) = link(g, VS_OVERLAY, FS_OVERLAY)?;
     let mut vbo = 0u32;
     let mut prev = 0;
     (g.glGetIntegerv)(ARRAY_BUFFER_BINDING, &mut prev);
@@ -657,11 +663,6 @@ unsafe fn draw_overlay(g: &Gl, program: (u32, i32), layer: &mut Layer, ov: &Over
     }
     (g.glBindTexture)(TEXTURE_2D, layer.tex);
     if layer.serial != Some(ov.serial) || layer.size != (ov.width, ov.height) {
-        // Rows go bottom first in GL.
-        let mut flipped = Vec::with_capacity(ov.rgba.len());
-        for row in ov.rgba.chunks_exact(w * 4).rev() {
-            flipped.extend_from_slice(row);
-        }
         if layer.size != (ov.width, ov.height) || layer.serial.is_none() {
             (g.glTexImage2D)(
                 TEXTURE_2D,
@@ -672,7 +673,7 @@ unsafe fn draw_overlay(g: &Gl, program: (u32, i32), layer: &mut Layer, ov: &Over
                 0,
                 RGBA,
                 UNSIGNED_BYTE,
-                flipped.as_ptr().cast(),
+                ov.rgba.as_ptr().cast(),
             );
             for (p, v) in [
                 (TEXTURE_MIN_FILTER, LINEAR),
@@ -682,11 +683,24 @@ unsafe fn draw_overlay(g: &Gl, program: (u32, i32), layer: &mut Layer, ov: &Over
             ] {
                 (g.glTexParameteri)(TEXTURE_2D, p, v);
             }
-        } else {
-            (g.glTexSubImage2D)(TEXTURE_2D, 0, 0, 0, w as i32, h as i32, RGBA, UNSIGNED_BYTE, flipped.as_ptr().cast());
+        } else if let Some((first, end)) = layer.held.as_ref().map_or(Some((0, ov.height)), |p| ov.changed_rows(p)) {
+            // Only the band of rows that differs from what the texture holds.
+            let rows = ov.rgba[first as usize * w * 4..].as_ptr();
+            (g.glTexSubImage2D)(
+                TEXTURE_2D,
+                0,
+                0,
+                first as i32,
+                w as i32,
+                (end - first) as i32,
+                RGBA,
+                UNSIGNED_BYTE,
+                rows.cast(),
+            );
         }
         layer.serial = Some(ov.serial);
         layer.size = (ov.width, ov.height);
+        layer.held = Some(ov.clone());
     }
     let mut blend = [0i32; 4];
     for (i, p) in [BLEND_SRC_RGB, BLEND_DST_RGB, BLEND_SRC_ALPHA, BLEND_DST_ALPHA].into_iter().enumerate() {

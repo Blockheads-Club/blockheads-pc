@@ -74,3 +74,21 @@ fn guest_value_conversions() {
     assert_eq!(9u8.to_arg(), Arg::I(9));
     assert_eq!(<PM as ToArg>::to_arg(&(4usize as PM)), Arg::P(4));
 }
+
+#[test]
+fn overlays_tell_which_rows_changed() {
+    let pic = |w: u32, rows: &[u8]| crate::Overlay {
+        width: w,
+        height: rows.len() as u32,
+        serial: 0,
+        rgba: std::sync::Arc::new(rows.iter().flat_map(|r| vec![*r; w as usize * 4]).collect()),
+    };
+    let a = pic(2, &[1, 2, 3, 4]);
+    assert_eq!(a.changed_rows(&a.clone()), None);
+    assert_eq!(pic(2, &[1, 9, 3, 4]).changed_rows(&a), Some((1, 2)));
+    assert_eq!(pic(2, &[1, 9, 9, 4]).changed_rows(&a), Some((1, 3)));
+    assert_eq!(pic(2, &[0, 2, 3, 0]).changed_rows(&a), Some((0, 4)));
+    assert_eq!(pic(3, &[1, 2, 3, 4]).changed_rows(&a), Some((0, 4)), "another size");
+    let broken = crate::Overlay { rgba: std::sync::Arc::new(vec![0; 3]), ..a.clone() };
+    assert_eq!(broken.changed_rows(&a), Some((0, 4)));
+}
