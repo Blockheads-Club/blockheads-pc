@@ -9,7 +9,7 @@
 
 use crate::apkrun::{backtrace_lines, HostHooks, InitConfig, Session};
 use crate::dl::{self, DlTable};
-use crate::embed::{cmd_event, rgba_bottom_up_to_bgra, InputTracker};
+use crate::embed::{cmd_event, frame_pixels, InputTracker};
 use crate::input::{host_key, JniSink};
 use crate::script::{click_events, Action, Step, WAIT_TIMEOUT_MS};
 use crate::tracks::Tracks;
@@ -22,7 +22,7 @@ use bhpc_cpu::Cpu;
 use bhpc_gles::{GlWindow, Gles, GlesConfig};
 use bhpc_input::{Bindings, Config as InputConfig, Geometry, HostAction, Input, InputMapper};
 use bhpc_jni::{GfxHooks, Stage, Throw, Vm};
-use bhpc_launcher::embed::{Cmd, FrameWriter};
+use bhpc_launcher::embed::{Cmd, FrameWriter, Layout};
 use bhpc_launcher::progress::{emit, report as progress, Line, Phase};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
@@ -187,6 +187,8 @@ fn watch_blocking(cpu: &Cpu, st: &bhpc_bionic::Shared, log: &BlockLog) {
 #[derive(Default)]
 struct Flags {
     done: AtomicBool,
+    /// In-window mode: the launcher's view draws with GL and takes frames as read back ([`Layout::GlRgba`]).
+    gl_layout: AtomicBool,
     swaps: AtomicU64,
     shot_taken: AtomicBool,
     /// Screenshots a script asked for (written at the next presented frame).
@@ -255,16 +257,56 @@ struct Hooks {
     sprites: Mutex<crate::overlay::SpriteCache>,
 }
 
-/// Frame file and scratch buffer of the in-window mode.
+/// Frame file and scratch buffers of the in-window mode.
 struct EmbedOut {
-    writer: FrameWriter,
+    /// Shared with the read-back thread.
+    out: Arc<Mutex<FrameOut>>,
     last: Option<Instant>,
-    bgra: Vec<u8>,
-    /// Read-back buffer, reused.
+    /// Read-back buffer of the synchronous path, reused.
     rgba: Vec<u8>,
-    /// Frames published and time spent reading back, converting and writing them since the last report.
+    /// The asynchronous read-back (`None`: off, or the driver cannot), and where its frames go.
+    #[cfg(unix)]
+    readback: Option<(bhpc_app::readback::Readback, bhpc_app::readback::Sink)>,
+}
+
+/// The writing end of the frame path.
+struct FrameOut {
+    writer: FrameWriter,
+    /// Conversion buffer for the BGRA layout, reused.
+    bgra: Vec<u8>,
+    /// Frames published, time spent converting and writing them, and when this report period began.
     stats: (u64, Duration, Instant),
 }
+
+impl FrameOut {
+    /// Publish a read-back frame (bottom-up RGBA) in the launcher's layout.
+    fn publish(&mut self, w: u32, h: u32, rgba: &[u8], layout: Layout, path: &str, render_time: &Mutex<Duration>) {
+        let began = Instant::now();
+        let FrameOut { writer, bgra, stats } = self;
+        match writer.publish_as(w, h, layout, frame_pixels(layout, w, h, rgba, bgra)) {
+            Ok(true) => {
+                stats.0 += 1;
+                stats.1 += began.elapsed();
+                if stats.2.elapsed() >= Duration::from_secs(10) {
+                    let n = stats.0.max(1) as f64;
+                    let render = std::mem::take(&mut *render_time.lock().unwrap_or_else(PoisonError::into_inner));
+                    eprintln!(
+                        "[embed] frame path: {path}, layout {layout:?}, {w}x{h}, {:.1} fps, {:.2} ms per frame on the render thread, {:.2} ms converting and writing",
+                        stats.0 as f64 / stats.2.elapsed().as_secs_f64(),
+                        render.as_secs_f64() * 1000.0 / n,
+                        stats.1.as_secs_f64() * 1000.0 / n,
+                    );
+                    *stats = (0, Duration::ZERO, Instant::now());
+                }
+            }
+            Ok(false) => eprintln!("[play] a {w}x{h} frame does not fit the frame file"),
+            Err(e) => eprintln!("[play] cannot write the frame file: {e}"),
+        }
+    }
+}
+
+/// Render-thread time per report period, shared by the paths (the report is printed where frames are written).
+static RENDER_TIME: Mutex<Duration> = Mutex::new(Duration::ZERO);
 
 /// The smallest edge the first reported size may have.
 const MIN_FIRST_EDGE: u32 = 64;
@@ -326,26 +368,26 @@ impl Hooks {
             return;
         }
         let began = Instant::now();
-        let EmbedOut { writer, last, bgra, rgba, stats } = &mut *e;
-        let Some((w, h)) = self.sdl.compose_read(rgba) else { return };
-        rgba_bottom_up_to_bgra(w, h, rgba, bgra);
-        match writer.publish(w, h, bgra) {
-            Ok(true) => {
-                *last = Some(Instant::now());
-                stats.0 += 1;
-                stats.1 += began.elapsed();
-                if stats.2.elapsed() >= Duration::from_secs(10) {
-                    let ms = stats.1.as_secs_f64() * 1000.0 / stats.0.max(1) as f64;
-                    eprintln!(
-                        "[embed] frame path: shared frame file, {w}x{h}, {:.1} fps, {ms:.2} ms per frame spent in read-back, convert and write",
-                        stats.0 as f64 / stats.2.elapsed().as_secs_f64()
-                    );
-                    *stats = (0, Duration::ZERO, Instant::now());
+        let layout = if self.flags.gl_layout.load(Ordering::SeqCst) { Layout::GlRgba } else { Layout::Bgra };
+        let e = &mut *e;
+        #[cfg(unix)]
+        if let Some((rb, sink)) = e.readback.as_mut() {
+            use bhpc_app::readback::Started;
+            match self.sdl.compose_read_async(rb, sink) {
+                Some(Started::Queued) => {
+                    e.last = Some(Instant::now());
+                    *RENDER_TIME.lock().unwrap_or_else(PoisonError::into_inner) += began.elapsed();
+                    return;
                 }
+                Some(Started::Busy) | None => return,
+                Some(Started::Unsupported) => e.readback = None,
             }
-            Ok(false) => eprintln!("[play] a {w}x{h} frame does not fit the frame file"),
-            Err(e) => eprintln!("[play] cannot write the frame file: {e}"),
         }
+        let Some((w, h)) = self.sdl.compose_read(&mut e.rgba) else { return };
+        e.last = Some(Instant::now());
+        *RENDER_TIME.lock().unwrap_or_else(PoisonError::into_inner) += began.elapsed();
+        let mut out = e.out.lock().unwrap_or_else(PoisonError::into_inner);
+        out.publish(w, h, &e.rgba, layout, "synchronous read-back", &RENDER_TIME);
     }
 
     /// Count a presented frame (and take the screenshot when it is due); call right before the swap.
@@ -617,6 +659,7 @@ fn spawn_commands(
                     *flags.resize.lock().unwrap_or_else(PoisonError::into_inner) = Some((width.max(1), height.max(1)));
                 }
                 Some(Cmd::Quit) => break,
+                Some(Cmd::Layout(l)) => flags.gl_layout.store(l == Layout::GlRgba, Ordering::SeqCst),
                 Some(cmd) => {
                     if cmd_event(&cmd).is_some_and(|ev| tx.send(ev).is_err()) {
                         break;
@@ -758,12 +801,22 @@ fn boot(
     let embed_out: Mutex<Option<EmbedOut>> = Mutex::new(match &cfg.embed {
         Some(path) => {
             let writer = FrameWriter::open(path).map_err(|e| other(format!("frame file {}: {e}", path.display())))?;
+            let out =
+                Arc::new(Mutex::new(FrameOut { writer, bgra: Vec::new(), stats: (0, Duration::ZERO, Instant::now()) }));
             Some(EmbedOut {
-                writer,
+                #[cfg(unix)]
+                readback: crate::embed::async_readback(std::env::var("BHPC_EMBED_ASYNC").ok().as_deref()).then(|| {
+                    let (out, flags) = (out.clone(), flags.clone());
+                    let sink: bhpc_app::readback::Sink = Arc::new(move |w, h, px: &[u8]| {
+                        let layout = if flags.gl_layout.load(Ordering::SeqCst) { Layout::GlRgba } else { Layout::Bgra };
+                        let mut out = out.lock().unwrap_or_else(PoisonError::into_inner);
+                        out.publish(w, h, px, layout, "asynchronous read-back (pixel buffer + fence)", &RENDER_TIME);
+                    });
+                    (bhpc_app::readback::Readback::new(), sink)
+                }),
+                out,
                 last: None,
-                bgra: Vec::new(),
                 rgba: Vec::new(),
-                stats: (0, Duration::ZERO, Instant::now()),
             })
         }
         None => None,

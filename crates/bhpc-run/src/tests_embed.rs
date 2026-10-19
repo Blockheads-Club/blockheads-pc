@@ -86,6 +86,7 @@ fn commands_become_window_events() {
     let ev = |c: Cmd| cmd_event(&c);
     assert_eq!(ev(Cmd::Size { width: 1, height: 1 }), None);
     assert_eq!(ev(Cmd::Quit), None);
+    assert_eq!(ev(Cmd::Layout(bhpc_launcher::embed::Layout::GlRgba)), None);
     assert_eq!(ev(Cmd::Move { x: 1.0, y: 2.0 }), Some(Event::MouseMove { x: 1.0, y: 2.0 }));
     for (n, b) in
         [(0, MouseButton::Left), (1, MouseButton::Middle), (2, MouseButton::Right), (4, MouseButton::Other(4))]
@@ -156,4 +157,21 @@ fn frames_are_flipped_and_swizzled() {
     let mut out = vec![9; 3];
     rgba_bottom_up_to_bgra(2, 2, &rgba, &mut out);
     assert_eq!(out, [255, 0, 0, 255, 255, 255, 255, 255, 0, 0, 255, 255, 0, 255, 0, 255]);
+}
+
+#[test]
+fn frames_go_out_in_the_layout_the_view_wants() {
+    use bhpc_launcher::embed::Layout;
+    let rgba = [255, 0, 0, 0, 0, 255, 0, 0];
+    let mut scratch = Vec::new();
+    assert_eq!(frame_pixels(Layout::GlRgba, 1, 2, &rgba, &mut scratch), rgba, "a GL view takes the read-back as is");
+    assert!(scratch.is_empty());
+    assert_eq!(frame_pixels(Layout::Bgra, 1, 2, &rgba, &mut scratch), [0, 255, 0, 255, 0, 0, 255, 255]);
+}
+
+#[test]
+fn the_asynchronous_read_back_has_an_off_switch() {
+    assert!(async_readback(None));
+    assert!(async_readback(Some("1")));
+    assert!(!async_readback(Some("0")));
 }

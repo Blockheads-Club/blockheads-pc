@@ -317,21 +317,9 @@ impl VirtualSurface {
         loader: &dyn Fn(&str) -> *const c_void,
         px: &mut Vec<u8>,
     ) -> Option<()> {
-        let size = self.size()?;
-        if drawable.0 == 0 || drawable.1 == 0 {
-            return None;
-        }
-        let (overlay, hud, sprites) = self.layers();
-        self.with_gl(loader, |g, st| {
-            if !st.fbos.contains_key(&ctx) {
-                return None;
-            }
-            // SAFETY: as in `framebuffer`; the original GL state is restored before returning.
+        self.compose_then(ctx, drawable, loader, |g, target| {
+            // SAFETY: as in `framebuffer`; the framebuffer binding is restored before returning.
             unsafe {
-                ensure(g, st, ctx, size);
-                let target = ensure_out(g, st, ctx, drawable)?;
-                let layers = Layers { overlay: overlay.as_ref(), hud: hud.as_ref(), sprites: &sprites, drawable };
-                draw(g, &mut st.shared, fit(size, drawable), &layers, target);
                 let mut prev = 0;
                 (g.glGetIntegerv)(FRAMEBUFFER_BINDING, &mut prev);
                 (g.glBindFramebuffer)(FRAMEBUFFER, target);
@@ -346,8 +334,56 @@ impl VirtualSurface {
                     px.as_mut_ptr().cast(),
                 );
                 (g.glBindFramebuffer)(FRAMEBUFFER, prev as u32);
-                Some(())
             }
+        })
+    }
+
+    #[cfg(unix)]
+    /// Like [`VirtualSurface::compose_read`], but the pixels go through the asynchronous read-back of
+    /// [`crate::readback`]: they reach `sink` on a thread of its own once the GPU has copied them, and the caller
+    /// does not wait for that. `None` when there is nothing to compose yet; otherwise what `readback` said.
+    pub fn compose_read_async(
+        &self,
+        ctx: usize,
+        drawable: (u32, u32),
+        loader: &dyn Fn(&str) -> *const c_void,
+        readback: &mut crate::readback::Readback,
+        sink: &crate::readback::Sink,
+    ) -> Option<crate::readback::Started> {
+        // A frame with no free buffer would be thrown away: do not compose it at all.
+        if !readback.has_room() {
+            return Some(crate::readback::Started::Busy);
+        }
+        self.compose_then(ctx, drawable, loader, |_, target| readback.start(loader, target, drawable, sink))
+    }
+
+    /// Compose the frame (as [`VirtualSurface::compose`] does) into a texture of exactly `drawable` pixels instead of
+    /// the window, then call `after` with the framebuffer that holds it.
+    fn compose_then<T>(
+        &self,
+        ctx: usize,
+        drawable: (u32, u32),
+        loader: &dyn Fn(&str) -> *const c_void,
+        after: impl FnOnce(&Gl, u32) -> T,
+    ) -> Option<T> {
+        let size = self.size()?;
+        if drawable.0 == 0 || drawable.1 == 0 {
+            return None;
+        }
+        let (overlay, hud, sprites) = self.layers();
+        self.with_gl(loader, |g, st| {
+            if !st.fbos.contains_key(&ctx) {
+                return None;
+            }
+            // SAFETY: as in `framebuffer`; the original GL state is restored before returning.
+            let target = unsafe {
+                ensure(g, st, ctx, size);
+                let target = ensure_out(g, st, ctx, drawable)?;
+                let layers = Layers { overlay: overlay.as_ref(), hud: hud.as_ref(), sprites: &sprites, drawable };
+                draw(g, &mut st.shared, fit(size, drawable), &layers, target);
+                target
+            };
+            Some(after(g, target))
         })
         .flatten()
     }

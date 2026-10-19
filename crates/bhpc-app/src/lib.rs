@@ -15,6 +15,8 @@ pub mod event;
 pub mod hud;
 pub mod metrics;
 pub mod pacer;
+#[cfg(all(feature = "sdl", unix))]
+pub mod readback;
 #[cfg(feature = "sdl")]
 pub mod sdl;
 pub mod surface;

@@ -3,7 +3,7 @@
 
 use bhpc_app::{Event, Key, Metrics, Mods, MouseButton};
 use bhpc_input::{Bindings, HostEvent};
-use bhpc_launcher::embed::{Cmd, MOD_ALT, MOD_CTRL, MOD_SHIFT};
+use bhpc_launcher::embed::{Cmd, Layout, MOD_ALT, MOD_CTRL, MOD_SHIFT};
 use bhpc_launcher::keys::KeyBindings;
 use std::path::PathBuf;
 
@@ -81,7 +81,7 @@ fn mods(bits: u8) -> Mods {
 /// (the caller resizes the window and ends the run).
 pub fn cmd_event(cmd: &Cmd) -> Option<Event> {
     Some(match cmd {
-        Cmd::Size { .. } | Cmd::Quit => return None,
+        Cmd::Size { .. } | Cmd::Layout(_) | Cmd::Quit => return None,
         Cmd::Move { x, y } => Event::MouseMove { x: *x, y: *y },
         Cmd::Button { button, pressed, x, y, .. } => {
             let button = match button {
@@ -153,4 +153,21 @@ pub fn rgba_bottom_up_to_bgra(width: u32, height: u32, rgba: &[u8], out: &mut Ve
             d.copy_from_slice(&[s[2], s[1], s[0], 255]);
         }
     }
+}
+
+/// The pixels of a read-back frame (bottom-up RGBA) in the layout the launcher asked for: as they are for a GL view,
+/// converted into `scratch` for the others.
+pub fn frame_pixels<'a>(layout: Layout, width: u32, height: u32, rgba: &'a [u8], scratch: &'a mut Vec<u8>) -> &'a [u8] {
+    match layout {
+        Layout::GlRgba => rgba,
+        Layout::Bgra => {
+            rgba_bottom_up_to_bgra(width, height, rgba, scratch);
+            scratch
+        }
+    }
+}
+
+/// Whether frames go through the asynchronous read-back (`BHPC_EMBED_ASYNC`, on unless `0`).
+pub fn async_readback(env: Option<&str>) -> bool {
+    env != Some("0")
 }

@@ -294,6 +294,22 @@ impl SdlGl {
         self.surface.compose_read(ctx, size, &|n| self.proc_address(n), px).map(|()| size)
     }
 
+    /// Like [`SdlGl::compose_read`], but asynchronous (see [`crate::readback`]): the frame reaches `sink` later, on
+    /// the read-back thread. `None` when there is nothing to compose (or no context current).
+    #[cfg(unix)]
+    pub fn compose_read_async(
+        &self,
+        readback: &mut crate::readback::Readback,
+        sink: &crate::readback::Sink,
+    ) -> Option<crate::readback::Started> {
+        if !self.live() {
+            return None;
+        }
+        // SAFETY: plain SDL query.
+        let ctx = ctx_nonzero(unsafe { sys::SDL_GL_GetCurrentContext() } as usize)?;
+        self.surface.compose_read_async(ctx, self.drawable_size(), &|n| self.proc_address(n), readback, sink)
+    }
+
     fn live(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
     }

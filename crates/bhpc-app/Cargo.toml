@@ -17,6 +17,9 @@ sdl-bundled = ["sdl", "sdl2/bundled", "sdl2/static-link"]
 bhpc-gles = { path = "../bhpc-gles" }
 sdl2 = { version = "0.38", optional = true, default-features = false }
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 bhpc-mem.workspace = true
 bhpc-cpu.workspace = true
