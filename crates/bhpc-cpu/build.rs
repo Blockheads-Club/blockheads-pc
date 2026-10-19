@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Builds the vendored dynarmic (A32 frontend only) and the C ABI shim, then links the static libs.
+//! A build whose inputs match an earlier one (any checkout, worktree or profile) reuses its archives from the shared
+//! cache in `buildcache.rs` instead of running CMake again.
 use std::path::{Path, PathBuf};
 
+#[path = "src/buildcache.rs"]
+mod buildcache;
 #[path = "src/buildcfg.rs"]
 mod buildcfg;
 
@@ -35,20 +39,49 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BHPC_BOOST_ROOT");
     let boost = std::env::var("BHPC_BOOST_ROOT").ok();
 
-    let mut cfg = cmake::Config::new(manifest.join("cmake"));
-    cfg.define("BHPC_DYNARMIC_DIR", &dynarmic)
-        .define("BHPC_SHIM_DIR", &shim)
-        .define("CMAKE_BUILD_TYPE", "Release")
-        .build_target("bhpc_shim");
-    for (k, v) in buildcfg::cmake_defines(&target, boost.as_deref()) {
-        cfg.define(k, v);
-    }
-    let dst = cfg.build();
+    let defines = buildcfg::cmake_defines(&target, boost.as_deref());
 
-    let build = dst.join("build");
-    let mut libs = Vec::new();
-    collect_archives(&build, &mut libs);
-    assert!(!libs.is_empty(), "no static libraries produced under {}", build.display());
+    let triple = std::env::var("TARGET").unwrap_or_default();
+    println!("cargo:rerun-if-env-changed=BHPC_DYNARMIC_CACHE");
+    println!("cargo:rerun-if-env-changed=XDG_CACHE_HOME");
+    let entry = buildcache::cache_root(|k| std::env::var(k).ok()).map(|root| {
+        let mut h = buildcache::Fnv::new();
+        h.field(buildcache::SCHEMA.as_bytes());
+        h.field(triple.as_bytes());
+        for (k, v) in &defines {
+            h.field(k.as_bytes());
+            h.field(v.as_bytes());
+        }
+        for k in buildcache::env_inputs(&triple) {
+            println!("cargo:rerun-if-env-changed={k}");
+            h.field(k.as_bytes());
+            h.field(std::env::var(&k).unwrap_or_default().as_bytes());
+        }
+        let cxx = std::env::var("CXX").unwrap_or_else(|_| "c++".into());
+        h.field(&buildcache::tool_version(&cxx));
+        h.field(&buildcache::tool_version("cmake"));
+        for dir in [&dynarmic, &shim, &manifest.join("cmake")] {
+            buildcache::hash_tree(&mut h, dir).expect("cannot hash the dynarmic sources");
+        }
+        root.join(format!("dynarmic-{}", h.hex()))
+    });
+
+    let mut libs = match entry.as_deref().and_then(buildcache::lookup) {
+        Some(cached) => {
+            // Linked straight from the cache: rebuild if the entry is removed.
+            println!("cargo:rerun-if-changed={}", entry.as_deref().unwrap().join(buildcache::COMPLETE).display());
+            cached
+        }
+        None => {
+            let libs = cmake_build(&dynarmic, &shim, &manifest, &defines);
+            if let Some(e) = &entry {
+                if let Err(err) = buildcache::store(e, &libs) {
+                    println!("cargo:warning=dynarmic cache not written ({}): {err}", e.display());
+                }
+            }
+            libs
+        }
+    };
     // Link order matters for static archives: shim first, then dynarmic, then its dependencies.
     libs.sort_by_key(|p| (buildcfg::rank(&p.file_name().unwrap().to_string_lossy()), p.clone()));
     for lib in &libs {
@@ -60,4 +93,21 @@ fn main() {
     if let Some(rt) = buildcfg::cxx_runtime(&target) {
         println!("cargo:rustc-link-lib=dylib={rt}");
     }
+}
+
+/// Runs CMake (dynarmic + shim, Release) and returns the static archives it produced.
+fn cmake_build(dynarmic: &Path, shim: &Path, manifest: &Path, defines: &[(String, String)]) -> Vec<PathBuf> {
+    let mut cfg = cmake::Config::new(manifest.join("cmake"));
+    cfg.define("BHPC_DYNARMIC_DIR", dynarmic)
+        .define("BHPC_SHIM_DIR", shim)
+        .define("CMAKE_BUILD_TYPE", "Release")
+        .build_target("bhpc_shim");
+    for (k, v) in defines {
+        cfg.define(k, v);
+    }
+    let build = cfg.build().join("build");
+    let mut libs = Vec::new();
+    collect_archives(&build, &mut libs);
+    assert!(!libs.is_empty(), "no static libraries produced under {}", build.display());
+    libs
 }

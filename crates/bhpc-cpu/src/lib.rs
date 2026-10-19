@@ -19,6 +19,8 @@
 //! result (no extra JIT, no depth limit).
 
 #[cfg(test)]
+mod buildcache;
+#[cfg(test)]
 mod buildcfg;
 mod ffi;
 mod table;
