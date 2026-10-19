@@ -3,6 +3,8 @@ export type ThemeChoice = 'system' | 'light' | 'dark';
 export type Os = 'windows' | 'macos' | 'linux';
 export type GameState = 'ready' | 'starting' | 'running' | 'stopped' | 'crashed' | 'missing';
 
+export type FpsPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
 export interface WindowOptions {
   width: number;
   height: number;
@@ -12,6 +14,8 @@ export interface WindowOptions {
   ui_scale: number;
   /** Draw a frames-per-second counter in the top-left corner of the game. */
   show_fps: boolean;
+  /** Corner of the game picture the counter sits in. */
+  fps_position: FpsPosition;
   /** Frames per second at most; 0 = no limit (vsync, when on, still applies). */
   fps_limit: number;
   /** Lift the game's own 30 FPS cap; then fps_limit and vsync decide the frame rate. */

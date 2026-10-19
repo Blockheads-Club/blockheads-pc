@@ -231,8 +231,15 @@ describe('Window and graphics step', () => {
     expect(store.draft?.window.fps_limit).toBe(0);
     const counter = screen.getByRole('switch', { name: 'Show FPS' });
     expect(counter).not.toBeChecked();
+    // The position only shows with the counter on.
+    expect(screen.queryByLabelText('Counter position')).toBeNull();
     await fireEvent.click(counter);
     expect(store.draft?.window.show_fps).toBe(true);
+    const pos = (await screen.findByLabelText('Counter position')) as HTMLSelectElement;
+    expect([...pos.options].map((o) => o.textContent)).toEqual(['Top left', 'Top right', 'Bottom left', 'Bottom right']);
+    expect(pos.value).toBe('top-left');
+    await fireEvent.change(pos, { target: { value: 'bottom-right' } });
+    expect(store.draft?.window.fps_position).toBe('bottom-right');
     expect(screen.getByText('A small frame-rate counter in the top-left corner of the game.')).toBeVisible();
     const unlock = screen.getByRole('switch', { name: 'Unlock 30 FPS cap' });
     expect(unlock).not.toBeChecked();
@@ -259,7 +266,7 @@ describe('Window and graphics step', () => {
 
   it('works without a detected display and lists an unusual current size', () => {
     store.display = null;
-    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_limit: 60, unlock_fps: false } });
+    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, unlock_fps: false } });
     render(SetupGraphics);
     expect(screen.queryByText(/Detected/)).toBeNull();
     expect([...(screen.getByLabelText('Window size') as HTMLSelectElement).options].map((o) => o.textContent)).toContain('1111 × 700');
@@ -405,7 +412,7 @@ describe('Ready step', () => {
 
   it('summarises the choices and starts the launcher', async () => {
     store.apk = makeReport();
-    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_limit: 60, unlock_fps: false } });
+    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, unlock_fps: false } });
     store.importSummary = { written: 3, skipped_existing: 0, ignored: 0, items: [] };
     render(SetupReady);
     expect(screen.getByRole('heading', { name: 'You’re ready to play!' })).toBeVisible();
@@ -429,10 +436,10 @@ describe('Ready step', () => {
     store.apk = makeReport({ status: 'unknown', version: null });
     store.draft = makeConfig({
       keys: { ...makeConfig().keys, back: 'F11' },
-      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_limit: 0, unlock_fps: true }
+      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', fps_limit: 0, unlock_fps: true }
     });
     render(SetupReady);
-    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · 30 FPS cap unlocked · FPS counter · UI 100 %')).toBeVisible();
+    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · 30 FPS cap unlocked · FPS counter (bottom right) · UI 100 %')).toBeVisible();
     expect(screen.getByText('Two actions share a key. Fix it in Settings.')).toBeVisible();
     expect(screen.getByText('Nothing imported')).toBeVisible();
     expect(screen.getByText('Unknown build · experimental')).toBeVisible();

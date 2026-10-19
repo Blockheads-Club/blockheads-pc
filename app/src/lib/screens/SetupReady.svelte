@@ -3,6 +3,7 @@
   import { store } from '../store.svelte';
   import type { IconName } from '../icons';
   import { conflicts } from '../util';
+  import { fpsPositionLabel } from '../fps-position';
   import SetupShell from '../layout/SetupShell.svelte';
   import Badge from '../ui/Badge.svelte';
   import Button from '../ui/Button.svelte';
@@ -25,7 +26,7 @@
           d.window.vsync ? t('ready.vsyncOn') : t('ready.vsyncOff'),
           d.window.fps_limit ? t('ready.fpsLimit', { n: d.window.fps_limit }) : t('ready.fpsUnlimited'),
           ...(d.window.unlock_fps ? [t('ready.unlockFps')] : []),
-          ...(d.window.show_fps ? [t('ready.showFps')] : []),
+          ...(d.window.show_fps ? [t('ready.showFps', { pos: fpsPositionLabel(d.window.fps_position).toLowerCase() })] : []),
           t('ready.ui', { n: Math.round(d.window.ui_scale * 100) })
         ].join(' · ')
       : ''

@@ -6,6 +6,8 @@
   import Segmented from '../ui/Segmented.svelte';
   import SelectField from '../ui/SelectField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import type { FpsPosition } from '../types';
+  import { FPS_POSITIONS, fpsPositionLabel } from '../fps-position';
 
   const w = $derived(store.cfg?.window);
   const rec = $derived(recommendedSize(store.display).join('x'));
@@ -71,6 +73,17 @@
   <Row title={t('gfx.showFps')} hint={t('gfx.showFpsHint')} titleId="{uid}-f">
     <Toggle label={t('gfx.showFps')} hideLabel checked={w.show_fps} onchange={(v) => store.patchConfig((c) => (c.window.show_fps = v))} />
   </Row>
+  {#if w.show_fps}
+    <Row title={t('gfx.fpsPosition')} hint={t('gfx.fpsPositionHint')}>
+      <SelectField
+        label={t('gfx.fpsPosition')}
+        hideLabel
+        value={w.fps_position}
+        options={FPS_POSITIONS.map((p) => ({ value: p, label: fpsPositionLabel(p) }))}
+        onchange={(v) => store.patchConfig((c) => (c.window.fps_position = v as FpsPosition))}
+      />
+    </Row>
+  {/if}
   <Row title={t('gfx.scale')} hint={t('gfx.scaleHint')}>
     <input
       type="range"
