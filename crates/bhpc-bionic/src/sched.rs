@@ -338,11 +338,11 @@ impl Sched {
             if h.contenders.load(Ordering::SeqCst) == 0 || !self.release(false) {
                 return;
             }
-            // Wait (briefly) until a contender got the lock, then queue behind it.
-            for _ in 0..SPINS {
-                if h.takes.load(Ordering::SeqCst) != took || h.contenders.load(Ordering::SeqCst) == 0 {
-                    break;
-                }
+            // Wait until a contender got the lock, then queue behind it. Every contender keeps trying until it has
+            // the lock (a parked one was notified by `release`), so this ends. It must not give up after a while:
+            // on a busy host the woken thread can take long to run, and a yielder that took the lock back first
+            // and then keeps it (one that joins the contender, say) would never let it in.
+            while h.takes.load(Ordering::SeqCst) == took && h.contenders.load(Ordering::SeqCst) != 0 {
                 std::thread::yield_now();
             }
             self.take_lock();
