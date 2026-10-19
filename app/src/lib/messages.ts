@@ -1,5 +1,6 @@
 export const en = {
   'app.title': 'Blockheads PC',
+  'app.tag': 'PC Port',
 
   'common.back': 'Back',
   'common.next': 'Next',
@@ -480,6 +481,7 @@ export type Key = keyof typeof en;
 
 export const tr: Record<Key, string> = {
   'app.title': 'Blockheads PC',
+  'app.tag': 'PC Port',
 
   'common.back': 'Geri',
   'common.next': 'İleri',

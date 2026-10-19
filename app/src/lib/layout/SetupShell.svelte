@@ -41,7 +41,7 @@
   <nav class="rail sunburst" aria-label={t('setup.stepsLabel')}>
     <div class="rb">
       <img src="/pc-icon-small.svg" alt="" width="32" height="32" />
-      <span class="rn">Blockheads<span class="tg">PC</span></span>
+      <span class="rn">Blockheads<span class="tg">{t('app.tag')}</span></span>
     </div>
     <ol class="steps">
       {#each steps as s (s.n)}

@@ -24,7 +24,7 @@
     aria-label={setup ? t('splash.setupLabel') : t('splash.label')}
   >
     <img class="ic" data-tauri-drag-region src={setup ? '/pc-icon-macos.svg' : '/pc-icon.svg'} alt="" width={setup ? 132 : 128} height={setup ? 132 : 128} />
-    <div class="wm" data-tauri-drag-region>Blockheads<span class="tg" data-tauri-drag-region>PC</span></div>
+    <div class="wm" data-tauri-drag-region>Blockheads<span class="tg" data-tauri-drag-region>{t('app.tag')}</span></div>
     {#if setup}<p class="welcome" data-tauri-drag-region>{t('splash.welcome')}</p>{/if}
     {#if state.boot === 'error'}
       <p class="err" data-tauri-drag-region role="alert">{setup ? t('splash.setupError') : t('splash.error')}</p>

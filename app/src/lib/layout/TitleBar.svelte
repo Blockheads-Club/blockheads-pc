@@ -52,7 +52,7 @@
   {/if}
   <div class="title" data-tauri-drag-region>
     <img src="/pc-icon-small.svg" alt="" width="18" height="18" data-tauri-drag-region />
-    <span class="name" data-tauri-drag-region>{t('app.title')}</span>
+    <span class="name" data-tauri-drag-region>Blockheads <span class="tg">{t('app.tag')}</span></span>
     {#if ctx}<span class="ctx" data-tauri-drag-region>{`· ${ctx}`}</span>{/if}
   </div>
   {#if os === 'windows'}
@@ -126,6 +126,7 @@
   .title img { flex: none; pointer-events: none; }
   .inactive .title img { opacity: 0.55; }
   .name { font: 700 13.5px/1 var(--f-body); white-space: nowrap; color: var(--b-fg); }
+  .tg { display: inline-block; margin-left: 2px; padding: 2px 6px 3px; border-radius: 6px; transform: rotate(-4deg); font-size: 12px; background: #ffd27a; color: #1f1a17; box-shadow: 0 2px 0 #c98a2e; }
   .ctx { font: 400 13px/1 var(--f-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--b-fg2); }
   button { border: 0; margin: 0; padding: 0; display: grid; place-items: center; cursor: default; font: inherit; color: var(--b-fg); background: transparent; }
   button:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
