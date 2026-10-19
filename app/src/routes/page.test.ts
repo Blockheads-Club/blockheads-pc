@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mock = vi.hoisted(() => ({ api: {} as Record<string, any>, win: {} as Record<string, any> }));
@@ -226,12 +227,29 @@ describe('page', () => {
     mock.win.isFullscreen = vi.fn(async () => true);
     hooks.resize?.();
     await waitFor(() => expect(store.fullscreen).toBe(true));
+    expect((await screen.findAllByText('Fullscreen — press F11 to exit')).length).toBeGreaterThan(0);
+    // without a saved configuration the toast names F11
+    store.fullscreen = false;
+    await tick();
+    const cfg = store.config;
+    store.config = { ...cfg!, keys: { ...cfg!.keys, fullscreen: '' } };
+    store.fullscreen = true;
+    await tick();
+    store.config = cfg;
     await waitFor(() => expect(screen.queryByLabelText('Window title bar')).toBeNull());
     store.screen = 'home';
     await waitFor(() => expect(screen.getByLabelText('Window title bar')).toBeVisible());
     store.screen = 'playing';
     await fireEvent.keyDown(window, { key: 'F11' });
     expect(mock.api.embedFullscreen).toHaveBeenLastCalledWith(false);
+  });
+
+  it('F11 makes the launcher window fullscreen when no game view is shown', async () => {
+    mock.api.boot = vi.fn(async () => makeBoot());
+    render(Page);
+    await screen.findByRole('heading', { name: /The Blockheads/ });
+    await fireEvent.keyDown(window, { key: 'F11' });
+    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
   });
 
   it('survives a window without close events and picks the OS from the user agent', async () => {

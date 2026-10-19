@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { toast } from '$lib/ui/toast.svelte';
   import { onMount, tick } from 'svelte';
   import { api, win } from '$lib/api';
   import { i18n, t } from '$lib/i18n.svelte';
@@ -71,6 +72,13 @@
   $effect(() => {
     document.documentElement.classList.toggle('has-tb', titleBar);
   });
+  /** Entering fullscreen says how to leave it (also when the game view's own F11 or the settings turned it on). */
+  let wasFullscreen = false;
+  $effect(() => {
+    const on = store.fullscreen;
+    if (on && !wasFullscreen) toast(t('fs.toast', { key: store.config?.keys.fullscreen || 'F11' }));
+    wasFullscreen = on;
+  });
   /** The tray menu follows the UI language. */
   $effect(() => {
     void api.trayLabels(t('tray.show'), t('tray.quit')).catch(() => {});
@@ -116,9 +124,9 @@
         e.preventDefault();
         void store.play();
       }
-    } else if (e.key === 'F11' && store.embedded) {
+    } else if (e.key === 'F11') {
       e.preventDefault();
-      void api.embedFullscreen(!store.fullscreen);
+      void store.toggleFullscreen();
     } else if ((e.ctrlKey || e.metaKey) && e.key === ',' && store.config) {
       e.preventDefault();
       store.openSettings();

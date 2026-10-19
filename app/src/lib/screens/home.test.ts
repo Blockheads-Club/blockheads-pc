@@ -157,6 +157,12 @@ describe('Home', () => {
     cleanup();
     render(Home);
     await click('Switch to dark mode');
+    await click('Fullscreen');
+    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
+    store.fullscreen = true;
+    await fireEvent.click(await screen.findByRole('button', { name: 'Exit fullscreen' }));
+    expect(mock.win.setFullscreen).toHaveBeenLastCalledWith(false);
+    store.fullscreen = false;
     await click('How to join a server');
     expect(store.dialog).toBe('join');
     await click('Game file');
@@ -167,6 +173,20 @@ describe('Home', () => {
       expect(screen.getByRole('status', { name: /Game status/ })).toBeVisible();
       unmount();
     }
+  });
+
+  it('offers fullscreen left of the join help in the full top bar', async () => {
+    render(Home);
+    viewport.compact = false;
+    const bar = screen.getByRole('button', { name: 'Fullscreen' });
+    expect(bar.nextElementSibling).toBe(screen.getByRole('button', { name: 'Join a server' }));
+    await fireEvent.click(bar);
+    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
+    cleanup();
+    store.fullscreen = true;
+    render(Home);
+    await fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }));
+    expect(mock.win.setFullscreen).toHaveBeenLastCalledWith(false);
   });
 
   it('copes without a saved configuration or a known version', () => {
@@ -193,6 +213,8 @@ describe('Playing', () => {
     expect(screen.getByRole('list', { name: 'Controls in the game' })).toBeVisible();
     await click('Home');
     expect(store.screen).toBe('home');
+    await click('Fullscreen');
+    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
     await click('How to join a server');
     expect(store.dialog).toBe('join');
     await click('View logs');

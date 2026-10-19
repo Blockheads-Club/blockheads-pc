@@ -485,6 +485,19 @@ describe('playing', () => {
     expect(mock.api.gamePoll).toHaveBeenCalledTimes(2);
   });
 
+  it('toggles fullscreen for the game view or the window, and reports a failure', async () => {
+    await store.toggleFullscreen();
+    expect(mock.win.setFullscreen).toHaveBeenCalledWith(true);
+    store.game = makeSnap({ state: 'running', embedded: true });
+    store.fullscreen = true;
+    await store.toggleFullscreen();
+    expect(mock.api.embedFullscreen).toHaveBeenCalledWith(false);
+    store.game = makeSnap({ state: 'stopped' });
+    mock.win.setFullscreen = vi.fn(async () => { throw new Error('nope'); });
+    await store.toggleFullscreen();
+    expect(msgs()).toContain('nope');
+  });
+
   it('quits from the tray, asking first while a game runs and stopping it', async () => {
     store.requestQuit();
     expect(mock.api.appQuit).toHaveBeenCalledTimes(1);

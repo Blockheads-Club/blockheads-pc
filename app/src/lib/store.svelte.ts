@@ -1,4 +1,4 @@
-import { api } from './api';
+import { api, win } from './api';
 import { errText, setLang, t } from './i18n.svelte';
 import { setTheme } from './theme.svelte';
 import { toast } from './ui/toast.svelte';
@@ -476,6 +476,17 @@ export class AppStore {
       if (!path) return;
       await api.saveLog(path);
       toast(t('logs.saved', { name: baseName(path) }));
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
+  /** Fullscreen on or off: the game view while one is shown in the window, else the launcher window itself. */
+  async toggleFullscreen() {
+    const on = !this.fullscreen;
+    try {
+      if (this.embedded) await api.embedFullscreen(on);
+      else await win.setFullscreen(on);
     } catch (e) {
       this.fail(e);
     }

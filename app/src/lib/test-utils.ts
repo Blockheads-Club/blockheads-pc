@@ -14,6 +14,7 @@ export function resetStore(overrides: Partial<Record<keyof AppStore, unknown>> =
     defaults: makeConfig({ apk: '', data_dir: '/default', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1 } }),
     prefs: { ...DEFAULT_PREFS, ...PREFS },
     screen: 'home',
+    fullscreen: false,
     boot: 'loading',
     bootError: '',
     firstRun: false,

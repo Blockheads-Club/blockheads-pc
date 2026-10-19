@@ -45,11 +45,13 @@
     <span class="sp"></span>
     {#if compact}
       <Button variant="ghost" icon={dark ? 'sun' : 'moon'} label={dark ? t('theme.toLight') : t('theme.toDark')} onclick={() => store.patchPrefs({ theme: dark ? 'light' : 'dark' })} />
+      <Button variant="ghost" icon={store.fullscreen ? 'window' : 'max'} label={store.fullscreen ? t('fs.exit') : t('fs.enter')} onclick={() => store.toggleFullscreen()} />
       <Button variant="ghost" icon="help" label={t('home.q.join')} onclick={() => (store.dialog = 'join')} />
     {:else}
       <Button size="sm" variant="ghost" pressed={dark} icon={dark ? 'sun' : 'moon'} onclick={() => store.patchPrefs({ theme: dark ? 'light' : 'dark' })}>
         {dark ? t('theme.lightMode') : t('theme.darkMode')}
       </Button>
+      <Button size="sm" variant="ghost" icon={store.fullscreen ? 'window' : 'max'} onclick={() => store.toggleFullscreen()}>{store.fullscreen ? t('fs.exit') : t('fs.enter')}</Button>
       <Button size="sm" variant="ghost" icon="help" onclick={() => (store.dialog = 'join')}>{t('home.joinTop')}</Button>
     {/if}
     <Button size={compact ? 'md' : 'sm'} icon="sliders" onclick={() => store.openSettings()}>{t('set.title')}</Button>

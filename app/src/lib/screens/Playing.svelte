@@ -76,6 +76,7 @@
     <button class="sb" title={t('play.homeTitle')} onclick={() => store.go('home')}><Icon name="home" />{t('play.home')}</button>
     <StatusPill state={failed ? 'crashed' : store.game.state} label={failed ? t('status.failed') : undefined} {minutes} />
     <span class="sp"></span>
+    <button class="sb ic" aria-label={t('fs.enter')} title={t('fs.enter')} onclick={() => store.toggleFullscreen()}><Icon name="max" /></button>
     <button class="sb ic" aria-label={t('home.q.join')} onclick={() => (store.dialog = 'join')}><Icon name="help" /></button>
     <button class="sb ic" aria-label={t('home.q.logs')} onclick={() => (store.dialog = 'logs')}><Icon name="terminal" /></button>
     {#if starting}
