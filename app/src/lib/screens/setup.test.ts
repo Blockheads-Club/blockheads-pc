@@ -214,6 +214,11 @@ describe('Window and graphics step', () => {
     expect(store.draft?.window.fullscreen).toBe(true);
     await fireEvent.click(screen.getByRole('switch', { name: 'VSync' }));
     expect(store.draft?.window.vsync).toBe(false);
+    const par = screen.getByRole('switch', { name: 'Run game threads in parallel' });
+    expect(par).toBeChecked();
+    expect(screen.getByText('Uses several CPU cores. Turn off if the game freezes or crashes.')).toBeVisible();
+    await fireEvent.click(par);
+    expect(store.draft?.window.parallel_threads).toBe(false);
     const scale = screen.getByLabelText('Game UI scale');
     await fireEvent.change(scale, { target: { value: '150' } });
     expect(store.draft?.window.ui_scale).toBe(1.5);
@@ -283,7 +288,7 @@ describe('Window and graphics step', () => {
 
   it('works without a detected display and lists an unusual current size', () => {
     store.display = null;
-    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1 } });
+    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true } });
     render(SetupGraphics);
     expect(screen.queryByText(/Detected/)).toBeNull();
     expect([...(screen.getByLabelText('Window size') as HTMLSelectElement).options].map((o) => o.textContent)).toContain('1111 × 700');
@@ -429,7 +434,7 @@ describe('Ready step', () => {
 
   it('summarises the choices and starts the launcher', async () => {
     store.apk = makeReport();
-    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1 } });
+    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true } });
     store.importSummary = { written: 3, skipped_existing: 0, ignored: 0, items: [] };
     render(SetupReady);
     expect(screen.getByRole('heading', { name: 'You’re ready to play!' })).toBeVisible();
@@ -453,10 +458,10 @@ describe('Ready step', () => {
     store.apk = makeReport({ status: 'unknown', version: null });
     store.draft = makeConfig({
       keys: { ...makeConfig().keys, back: 'F11' },
-      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', fps_limit: 0, game_speed: 1.5 }
+      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', fps_limit: 0, game_speed: 1.5, parallel_threads: false }
     });
     render(SetupReady);
-    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · FPS counter (bottom right) · UI 100 % · Game speed 1.5×')).toBeVisible();
+    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · FPS counter (bottom right) · UI 100 % · Game speed 1.5× · Game threads one at a time')).toBeVisible();
     expect(screen.getByText('Two actions share a key. Fix it in Settings.')).toBeVisible();
     expect(screen.getByText('Nothing imported')).toBeVisible();
     expect(screen.getByText('Unknown build · experimental')).toBeVisible();

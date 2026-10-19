@@ -98,6 +98,14 @@
       onchange={(v) => store.patchConfig((c) => (c.window.game_speed = Number(v)))}
     />
   </Row>
+  <Row id="set-gfx-parallel" title={t('gfx.parallel')} hint={t('gfx.parallelHint')} titleId="{uid}-p">
+    <Toggle
+      label={t('gfx.parallel')}
+      hideLabel
+      checked={w.parallel_threads}
+      onchange={(v) => store.patchConfig((c) => (c.window.parallel_threads = v))}
+    />
+  </Row>
   <Row id="set-gfx-scale" title={t('gfx.scale')} hint={t('gfx.scaleHint')}>
     <input
       type="range"

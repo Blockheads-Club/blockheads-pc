@@ -8,7 +8,7 @@ export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
     apk: '/data/game/TheBlockheads.apk',
     data_dir: '/data',
     force: false,
-    window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1 },
+    window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true },
     keys: { ...KEYS },
     controller: true,
     ...over
@@ -33,7 +33,7 @@ export function makeReport(over: Partial<ApkReport> = {}): ApkReport {
 }
 
 export function makeBoot(over: Partial<BootState> = {}): BootState {
-  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1 } }), prefs: { ...PREFS }, ...over };
+  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, ...over };
 }
 
 /** A fake of everything `$lib/api` exports. */

@@ -20,6 +20,8 @@ export interface WindowOptions {
   fps_limit: number;
   /** World speed multiplier, 0.25 to 4 (1 = normal; single-player only). */
   game_speed: number;
+  /** Run the game's threads in parallel on several CPU cores (off: one at a time, for troubleshooting). */
+  parallel_threads: boolean;
 }
 
 export interface KeyBindings {

@@ -194,6 +194,10 @@ describe('Settings search', () => {
     expect(titles()).toEqual(['Launcher language']);
     await type('vsync');
     expect(titles()).toEqual(['VSync']);
+    for (const q of ['cpu', 'thread', 'çekirdek', 'iş parçacığı', 'paralel']) {
+      await type(q);
+      expect(titles()).toEqual(['Run game threads in parallel']);
+    }
     // Hints and page names match too, and every word must match.
     await type('tearing smoother');
     expect(titles()).toEqual(['VSync']);

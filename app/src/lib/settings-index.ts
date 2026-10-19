@@ -55,6 +55,7 @@ export const SETTINGS: SettingEntry[] = [
   { id: 'set-gfx-show-fps', page: 'gfx', titleKey: 'gfx.showFps', hintKey: 'gfx.showFpsHint', keywords: ['fps', 'counter', 'frame rate', 'overlay', 'sayaç', 'kare hızı', 'göster'] },
   { id: 'set-gfx-fps-position', page: 'gfx', titleKey: 'gfx.fpsPosition', hintKey: 'gfx.fpsPositionHint', keywords: ['fps', 'corner', 'counter', 'köşe', 'konum', 'sayaç'], fallback: 'set-gfx-show-fps' },
   { id: 'set-gfx-speed', page: 'gfx', titleKey: 'gfx.gameSpeed', hintKey: 'gfx.gameSpeedHint', keywords: ['speed', 'fast', 'slow', 'time', 'hız', 'hızlı', 'yavaş', 'zaman'] },
+  { id: 'set-gfx-parallel', page: 'gfx', titleKey: 'gfx.parallel', hintKey: 'gfx.parallelHint', keywords: ['thread', 'threads', 'core', 'cores', 'cpu', 'parallel', 'freeze', 'crash', 'çekirdek', 'iş parçacığı', 'paralel', 'işlemci', 'donma', 'çökme'] },
   { id: 'set-gfx-scale', page: 'gfx', titleKey: 'gfx.scale', hintKey: 'gfx.scaleHint', keywords: ['ui', 'hud', 'size', 'zoom', 'bigger', 'smaller', 'arayüz', 'ölçek', 'büyük', 'küçük'] },
 
   { id: 'set-ctl-reset', page: 'controls', titleKey: 'ctl.resetAllConfirm', hintKey: 'ctl.resetBody', keywords: ['reset', 'default', 'defaults', 'sıfırla', 'varsayılan', ...CONTROL_WORDS] },

@@ -158,6 +158,7 @@ fn old_window_tables_get_the_new_defaults() {
     assert_eq!((c.window.width, c.window.vsync, c.window.show_fps, c.window.fps_limit), (1600, false, false, 60));
     assert_eq!(c.window.fps_position, crate::window::FpsPosition::TopLeft);
     assert_eq!(c.window.game_speed, 1.0);
+    assert!(c.window.parallel_threads, "game threads run in parallel unless switched off");
     assert!(c.controller, "controllers are on unless switched off");
     assert_eq!(c.keys.hide_ui.to_string(), "H");
     assert_eq!(crate::window::FpsPosition::TopLeft.flag(), "tl");

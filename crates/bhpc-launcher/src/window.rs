@@ -60,6 +60,9 @@ pub struct WindowOptions {
     pub fps_limit: u32,
     /// How fast the world runs compared to normal (1 = normal; single-player only, see `bhpc-run`'s `gamespeed`).
     pub game_speed: f64,
+    /// Run the game's threads in parallel on several CPU cores (off: `bhpc-run --serial-guest`, one at a time, for
+    /// troubleshooting freezes or crashes).
+    pub parallel_threads: bool,
 }
 
 impl Default for WindowOptions {
@@ -74,6 +77,7 @@ impl Default for WindowOptions {
             fps_position: FpsPosition::TopLeft,
             fps_limit: 60,
             game_speed: 1.0,
+            parallel_threads: true,
         }
     }
 }

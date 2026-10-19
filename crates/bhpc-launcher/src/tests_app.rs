@@ -156,6 +156,7 @@ fn run_args_and_config_expansion() {
     c.window.show_fps = true;
     c.window.fps_limit = 0;
     c.controller = false;
+    c.window.parallel_threads = false;
     assert_eq!(
         c.run_args()[4..],
         [
@@ -168,10 +169,12 @@ fn run_args_and_config_expansion() {
             "--fullscreen",
             "--no-vsync",
             "--show-fps",
-            "--no-controller"
+            "--no-controller",
+            "--serial-guest"
         ]
     );
     c.controller = true;
+    c.window.parallel_threads = true;
     use crate::window::FpsPosition;
     for (p, flag) in [(FpsPosition::TopRight, "tr"), (FpsPosition::BottomLeft, "bl"), (FpsPosition::BottomRight, "br")]
     {

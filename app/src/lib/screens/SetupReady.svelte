@@ -28,7 +28,8 @@
           d.window.fps_limit ? t('ready.fpsLimit', { n: d.window.fps_limit }) : t('ready.fpsUnlimited'),
           ...(d.window.show_fps ? [t('ready.showFps', { pos: fpsPositionLabel(d.window.fps_position).toLowerCase() })] : []),
           t('ready.ui', { n: Math.round(d.window.ui_scale * 100) }),
-          ...(d.window.game_speed !== 1 ? [t('ready.gameSpeed', { n: gameSpeedLabel(d.window.game_speed) })] : [])
+          ...(d.window.game_speed !== 1 ? [t('ready.gameSpeed', { n: gameSpeedLabel(d.window.game_speed) })] : []),
+          ...(d.window.parallel_threads ? [] : [t('ready.serial')])
         ].join(' · ')
       : ''
   );

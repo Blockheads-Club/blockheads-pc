@@ -23,8 +23,8 @@ config dir (`~/.config/blockheads-pc`, `%APPDATA%\blockheads-pc`, `~/Library/App
 overridable with `BHPC_CONFIG_DIR`; the data dir (`BHPC_DATA_DIR` for the default) holds worlds and a private copy of
 the APK (`game/TheBlockheads.apk`) when "Keep a private copy" is on.
 
-`bhpc-run --config launcher.toml` expands to `--apk --data-dir --window WxH [--force] [--fullscreen] [--no-vsync]`
-(`bhpc_launcher::config::expand_args`); flags given next to `--config` come first and win. `BHPC_RUN=/path` makes the
+`bhpc-run --config launcher.toml` expands to `--apk --data-dir --window WxH [--force] [--fullscreen] [--no-vsync]
+[--serial-guest] ...` (`bhpc_launcher::config::expand_args`); flags given next to `--config` come first and win. `BHPC_RUN=/path` makes the
 launcher start another `bhpc-run` build (development).
 
 ## Develop
@@ -183,7 +183,7 @@ fade when GTK animations are off), takes the mouse and the keyboard focus.
 - **Fullscreen, vsync, key bindings, window size, sound.** Applied by `bhpc-run` (`--fullscreen`, `--no-vsync`,
   `--bind ACTION=BINDING` for every non-default binding, `--window`, `--title`; sound off sets
   `SDL_AUDIODRIVER=dummy`). The bindings reach the `bhpc-input` mapper (`Bindings`): touch, pan, zoom, pinch, back,
-  fullscreen, hide game buttons. "Use a game controller" off adds `--no-controller`; the controller layout is fixed and
+  fullscreen, hide game buttons. "Use a game controller" off adds `--no-controller`; "Run game threads in parallel" (Window & graphics, on by default) off adds `--serial-guest`; the controller layout is fixed and
   shown read-only (`bhpc-input`'s `pad`). In the in-window view the launcher itself handles the fullscreen binding (it owns the window).
 - **Mute in background** is shown disabled ("not available yet"); **Game sound** off starts the game with
   `SDL_AUDIODRIVER=dummy`.

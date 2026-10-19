@@ -125,8 +125,10 @@ impl LaunchConfig {
     }
 
     /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--fps-limit N` (0 = none), `--unlock-fps`
-    /// (always: the FPS limit is the only cap), `--force`, `--fullscreen`, `--no-vsync`, `--show-fps`, `--fps-position P` (when the counter is shown and not top-left), `--game-speed F` (when not 1), `--no-controller` (when controllers are off) and a
-    /// `--bind ACTION=BINDING` for every key binding that is not the default.
+    /// (always: the FPS limit is the only cap), `--force`, `--fullscreen`, `--no-vsync`, `--show-fps`,
+    /// `--fps-position P` (when the counter is shown and not top-left), `--game-speed F` (when not 1),
+    /// `--no-controller` (when controllers are off), `--serial-guest` (when the game's threads may not run in
+    /// parallel) and a `--bind ACTION=BINDING` for every key binding that is not the default.
     pub fn run_args(&self) -> Vec<String> {
         let mut a = vec![
             "--apk".to_string(),
@@ -145,6 +147,7 @@ impl LaunchConfig {
             (!self.window.vsync, "--no-vsync"),
             (self.window.show_fps, "--show-fps"),
             (!self.controller, "--no-controller"),
+            (!self.window.parallel_threads, "--serial-guest"),
         ] {
             if on {
                 a.push(flag.to_string());
