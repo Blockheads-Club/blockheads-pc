@@ -1207,12 +1207,7 @@ mod tests {
             let g = sched.g();
             g.parallel || g.next_ticket - g.serving >= 2
         };
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-            if queued() {
-                break;
-            }
-        }
+        std::iter::repeat_with(|| std::thread::sleep(std::time::Duration::from_millis(1))).find(|()| queued());
         e.mem().write_u32(TS, 0).unwrap();
         e.mem().write_u32(TS + 4, 2_000_000).unwrap();
         let t0 = Instant::now();
