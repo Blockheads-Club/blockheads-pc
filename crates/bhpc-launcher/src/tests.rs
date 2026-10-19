@@ -147,11 +147,15 @@ fn old_window_tables_get_the_new_defaults() {
     let c = LaunchConfig::from_toml(old).unwrap();
     assert_eq!((c.window.width, c.window.vsync, c.window.show_fps, c.window.fps_limit), (1600, false, false, 60));
     assert!(!c.window.unlock_fps);
+    assert_eq!(c.window.fps_position, crate::window::FpsPosition::TopLeft);
+    assert_eq!(crate::window::FpsPosition::TopLeft.flag(), "tl");
     let mut c = LaunchConfig::new("a", "d");
     c.window.show_fps = true;
     c.window.fps_limit = 144;
     c.window.unlock_fps = true;
+    c.window.fps_position = crate::window::FpsPosition::BottomRight;
     let text = c.to_toml();
+    assert!(text.contains("fps_position = \"bottom-right\""), "{text}");
     assert!(text.contains("show_fps = true") && text.contains("fps_limit = 144"), "{text}");
     assert!(text.contains("unlock_fps = true"), "{text}");
     assert_eq!(LaunchConfig::from_toml(&text).unwrap(), c);

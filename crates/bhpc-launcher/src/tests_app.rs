@@ -170,6 +170,18 @@ fn run_args_and_config_expansion() {
             "--unlock-fps"
         ]
     );
+    use crate::window::FpsPosition;
+    for (p, flag) in [(FpsPosition::TopRight, "tr"), (FpsPosition::BottomLeft, "bl"), (FpsPosition::BottomRight, "br")]
+    {
+        c.window.fps_position = p;
+        assert_eq!(c.run_args()[13..], ["--fps-position", flag]);
+    }
+    // The position only matters with the counter on; top-left is bhpc-run's default.
+    c.window.show_fps = false;
+    assert!(!c.run_args().contains(&"--fps-position".to_string()));
+    c.window.show_fps = true;
+    c.window.fps_position = FpsPosition::TopLeft;
+    assert!(!c.run_args().contains(&"--fps-position".to_string()));
 
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     assert_eq!(expand_args(&s(&["--init-only"])).unwrap(), s(&["--init-only"]));

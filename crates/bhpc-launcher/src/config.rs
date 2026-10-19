@@ -117,7 +117,7 @@ impl LaunchConfig {
     }
 
     /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--fps-limit N` (0 = none), `--force`,
-    /// `--fullscreen`, `--no-vsync`, `--show-fps`, `--unlock-fps` and a `--bind ACTION=BINDING` for every key binding that is not the
+    /// `--fullscreen`, `--no-vsync`, `--show-fps`, `--unlock-fps`, `--fps-position P` (when the counter is shown and not top-left) and a `--bind ACTION=BINDING` for every key binding that is not the
     /// default.
     pub fn run_args(&self) -> Vec<String> {
         let mut a = vec![
@@ -140,6 +140,9 @@ impl LaunchConfig {
             if on {
                 a.push(flag.to_string());
             }
+        }
+        if self.window.show_fps && self.window.fps_position != crate::window::FpsPosition::TopLeft {
+            a.extend(["--fps-position".to_string(), self.window.fps_position.flag().to_string()]);
         }
         a.extend(self.keys.bind_flags());
         a

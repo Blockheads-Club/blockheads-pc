@@ -13,6 +13,29 @@ pub const FPS_LIMITS: [u32; 5] = [0, 30, 60, 120, 144];
 /// Accepted range of a non-zero frame-rate cap (a hand-edited file may hold any value in it).
 pub const FPS_LIMIT_RANGE: (u32, u32) = (10, 1000);
 
+/// Corner of the game picture the FPS counter sits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FpsPosition {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl FpsPosition {
+    /// The `bhpc-run --fps-position` value.
+    pub fn flag(self) -> &'static str {
+        match self {
+            FpsPosition::TopLeft => "tl",
+            FpsPosition::TopRight => "tr",
+            FpsPosition::BottomLeft => "bl",
+            FpsPosition::BottomRight => "br",
+        }
+    }
+}
+
 /// Window / graphics settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -25,6 +48,8 @@ pub struct WindowOptions {
     pub ui_scale: f32,
     /// Draw a frames-per-second counter in the top-left corner of the game picture.
     pub show_fps: bool,
+    /// Corner of the game picture the counter sits in.
+    pub fps_position: FpsPosition,
     /// Present at most this many frames per second (0 = no cap; with vsync on, the lower of the two applies).
     pub fps_limit: u32,
     /// Lift the game's own 30 FPS cap (it asks for every second refresh of a 60 Hz display); the game then draws as
@@ -41,6 +66,7 @@ impl Default for WindowOptions {
             vsync: true,
             ui_scale: 1.0,
             show_fps: false,
+            fps_position: FpsPosition::TopLeft,
             fps_limit: 60,
             unlock_fps: false,
         }
