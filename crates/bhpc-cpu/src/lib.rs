@@ -168,6 +168,22 @@ pub struct CpuOptions {
     pub code_cache_bytes: usize,
     /// Count guest cycles so [`Cpu::set_ticks`] can act as a watchdog (slightly slower).
     pub cycle_counting: bool,
+    /// Do `ldrex`/`strex` inline through the fastmem window instead of calling back into Rust (only with
+    /// `fastmem`). Same semantics: the global monitor still arbitrates between guest threads.
+    pub fastmem_exclusive: bool,
+    /// dynarmic's NaN/FPSCR shortcuts: NaN payloads may differ from ARM's and NEON honours the guest FPSCR's
+    /// flush-to-zero/default-NaN bits instead of forcing them. Results of ordinary (non-NaN) arithmetic are
+    /// unchanged.
+    pub fast_fp: bool,
+}
+
+/// Environment variable that turns the JIT tuning off (`fastmem_exclusive`, `fast_fp`) when set to anything but
+/// `0`; a debugging switch for suspected JIT problems.
+pub const SAFE_JIT_ENV: &str = "BHPC_JIT_SAFE";
+
+/// Whether the tuning is on, given the value of [`SAFE_JIT_ENV`].
+fn tuning_enabled(safe: Option<&std::ffi::OsStr>) -> bool {
+    safe.is_none_or(|v| v == "0")
 }
 
 /// Whether fastmem is on by default. On macOS the vendored dynarmic is built with its generic (no-op)
@@ -177,7 +193,28 @@ const FASTMEM_DEFAULT: bool = !cfg!(target_os = "macos");
 
 impl Default for CpuOptions {
     fn default() -> Self {
-        CpuOptions { fastmem: FASTMEM_DEFAULT, code_cache_bytes: 64 << 20, cycle_counting: false }
+        let tuned = tuning_enabled(std::env::var_os(SAFE_JIT_ENV).as_deref());
+        CpuOptions {
+            fastmem: FASTMEM_DEFAULT,
+            code_cache_bytes: 64 << 20,
+            cycle_counting: false,
+            fastmem_exclusive: tuned,
+            fast_fp: tuned,
+        }
+    }
+}
+
+impl CpuOptions {
+    /// The `bhpc_jit_new` flags for these options.
+    fn jit_flags(&self) -> u32 {
+        let mut f = 0;
+        if self.fastmem && self.fastmem_exclusive {
+            f |= ffi::JIT_FASTMEM_EXCLUSIVE;
+        }
+        if self.fast_fp {
+            f |= ffi::JIT_FAST_FP;
+        }
+        f
     }
 }
 
@@ -404,6 +441,7 @@ impl Cpu {
                 i32::from(opts.cycle_counting),
                 cpu.shared.monitor.0,
                 pid,
+                opts.jit_flags(),
             )
         };
         // SAFETY: jit was just created.
@@ -701,6 +739,11 @@ impl Cpu {
         }
         // SAFETY: valid jit; halting from a callback is the supported way to leave Run().
         unsafe { ffi::bhpc_jit_halt(self.jit) };
+    }
+
+    /// The options this CPU was created with.
+    pub fn options(&self) -> CpuOptions {
+        self.opts
     }
 
     /// True if this CPU counts cycles (the watchdog is armed).

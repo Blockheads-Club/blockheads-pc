@@ -7,6 +7,7 @@
 #include <dynarmic/interface/A32/a32.h>
 #include <dynarmic/interface/A32/config.h>
 #include <dynarmic/interface/exclusive_monitor.h>
+#include <dynarmic/interface/optimization_flags.h>
 
 #include "dynarmic/frontend/A32/a32_ir_emitter.h"
 #include "dynarmic/ir/basic_block.h"
@@ -81,7 +82,7 @@ bhpc_monitor* bhpc_monitor_new(size_t processors) { return new bhpc_monitor(proc
 void bhpc_monitor_free(bhpc_monitor* m) { delete m; }
 
 bhpc_jit* bhpc_jit_new(const bhpc_callbacks* cb, uint8_t* fastmem_base, size_t code_cache_bytes, int cycle_counting,
-                       bhpc_monitor* monitor, size_t processor_id) {
+                       bhpc_monitor* monitor, size_t processor_id, uint32_t flags) {
     auto* j = new bhpc_jit();
     j->callbacks.cb = *cb;
     Dynarmic::A32::UserConfig conf;
@@ -94,6 +95,20 @@ bhpc_jit* bhpc_jit_new(const bhpc_callbacks* cb, uint8_t* fastmem_base, size_t c
     if (fastmem_base) {
         conf.fastmem_pointer = reinterpret_cast<uintptr_t>(fastmem_base);
         conf.recompile_on_fastmem_failure = true;
+        // ldrex/strex inline against the host mapping (lock cmpxchg under the global monitor's lock) instead of a
+        // call into Rust per access. A fault (unmapped address) recompiles that access with the callbacks, which
+        // report it as before.
+        if (flags & BHPC_JIT_FASTMEM_EXCLUSIVE) {
+            conf.fastmem_exclusive_access = true;
+            conf.recompile_on_exclusive_fastmem_failure = true;
+        }
+    }
+    if (flags & BHPC_JIT_FAST_FP) {
+        // NaN payloads need not match ARM's propagation rules, and NEON may use the guest FPSCR instead of the
+        // "standard FPSCR value": saves the NaN fix-up sequences and MXCSR switches around float operations.
+        conf.unsafe_optimizations = true;
+        conf.optimizations = Dynarmic::all_safe_optimizations | Dynarmic::OptimizationFlag::Unsafe_InaccurateNaN |
+                             Dynarmic::OptimizationFlag::Unsafe_IgnoreStandardFPCRValue;
     }
     j->jit = std::make_unique<Dynarmic::A32::Jit>(conf);
     return j;

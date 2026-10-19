@@ -34,6 +34,10 @@ pub struct bhpc_callbacks {
     pub interpreter_fallback: extern "C" fn(*mut c_void, u32, usize),
 }
 
+/// `bhpc_jit_new` flags (see `bhpc_shim.h`).
+pub const JIT_FASTMEM_EXCLUSIVE: u32 = 1;
+pub const JIT_FAST_FP: u32 = 2;
+
 extern "C" {
     pub fn bhpc_monitor_new(processors: usize) -> *mut bhpc_monitor;
     pub fn bhpc_monitor_free(m: *mut bhpc_monitor);
@@ -44,6 +48,7 @@ extern "C" {
         cycle_counting: i32,
         monitor: *mut bhpc_monitor,
         processor_id: usize,
+        flags: u32,
     ) -> *mut bhpc_jit;
     pub fn bhpc_jit_set_ticks(j: *mut bhpc_jit, ticks: u64);
     pub fn bhpc_jit_ticks(j: *mut bhpc_jit) -> u64;

@@ -11,14 +11,38 @@ fn setup_with(fastmem: bool) -> Box<Cpu> {
     mem.map(CODE, 0x2000).unwrap();
     mem.map(DATA, 0x1000).unwrap();
     mem.map(0x8000, 0x1000).unwrap();
-    let mut cpu =
-        Cpu::with_options(mem, CpuOptions { fastmem, code_cache_bytes: 8 << 20, cycle_counting: false }).unwrap();
+    let mut cpu = Cpu::with_options(
+        mem,
+        CpuOptions { fastmem, code_cache_bytes: 8 << 20, cycle_counting: false, ..CpuOptions::default() },
+    )
+    .unwrap();
     cpu.set_sp(STACK_TOP);
     cpu
 }
 
 fn setup() -> Box<Cpu> {
     setup_with(true)
+}
+
+/// Like [`setup_with`] with full control over the JIT options.
+fn setup_opts(opts: CpuOptions) -> Box<Cpu> {
+    let mem = Arc::new(GuestMemory::new().unwrap());
+    mem.map(CODE, 0x2000).unwrap();
+    mem.map(DATA, 0x1000).unwrap();
+    mem.map(0x8000, 0x1000).unwrap();
+    let mut cpu = Cpu::with_options(mem, CpuOptions { code_cache_bytes: 8 << 20, ..opts }).unwrap();
+    cpu.set_sp(STACK_TOP);
+    cpu
+}
+
+/// Every fastmem / inline-exclusive combination.
+fn exclusive_variants() -> [CpuOptions; 3] {
+    let d = CpuOptions::default();
+    [
+        CpuOptions { fastmem: true, fastmem_exclusive: true, ..d },
+        CpuOptions { fastmem: true, fastmem_exclusive: false, ..d },
+        CpuOptions { fastmem: false, fastmem_exclusive: true, ..d },
+    ]
 }
 
 fn put(cpu: &Cpu, at: u32, words: &[u32]) {
@@ -410,8 +434,11 @@ fn thunk_tracing_does_not_disturb_execution() {
 fn tick_budget_stops_an_infinite_loop() {
     let mem = Arc::new(GuestMemory::new().unwrap());
     mem.map(CODE, 0x1000).unwrap();
-    let mut cpu =
-        Cpu::with_options(mem, CpuOptions { fastmem: true, code_cache_bytes: 8 << 20, cycle_counting: true }).unwrap();
+    let mut cpu = Cpu::with_options(
+        mem,
+        CpuOptions { fastmem: true, code_cache_bytes: 8 << 20, cycle_counting: true, ..CpuOptions::default() },
+    )
+    .unwrap();
     put(&cpu, CODE, &[0xEAFF_FFFE]); // b .
     cpu.set_ticks(10_000);
     cpu.set_sp(0x8000_0000);
@@ -454,8 +481,9 @@ fn traced_call_visits_every_instruction() {
 #[test]
 fn exclusive_load_store_pairs_succeed() {
     // ldrex/strex increment loops in every width, plus a failing strex to an unmapped address.
-    for fastmem in [true, false] {
-        let mut cpu = setup_with(fastmem);
+    for opts in exclusive_variants() {
+        let fastmem = (opts.fastmem, opts.fastmem_exclusive);
+        let mut cpu = setup_opts(opts);
         cpu.mem().write_u64(DATA, 0x0000_0001_0000_0041).unwrap();
         put(
             &cpu,
@@ -482,18 +510,95 @@ fn exclusive_load_store_pairs_succeed() {
             ],
         );
         let r = cpu.call(CODE, &[DATA]).unwrap();
-        assert_eq!(r.r0, 0, "strex succeeded (fastmem={fastmem})");
+        assert_eq!(r.r0, 0, "strex succeeded (fastmem, inline={fastmem:?})");
         assert_eq!(cpu.mem().read_u32(DATA).unwrap(), 0x44, "word, byte and halfword increments");
     }
 }
 
 #[test]
 fn exclusive_store_to_unmapped_memory_faults() {
-    let mut cpu = setup_with(false);
-    put(&cpu, CODE, &[0xE190_1F9F, 0xE180_2F91, BX_LR]); // ldrex r1,[r0]; strex r2,r1,[r0]
-    cpu.mem().map(0x6_0000, 0x1000).unwrap();
-    // ldrex reads fine from a mapped page; unmapping is not possible, so fault via an unmapped read instead.
-    assert!(matches!(cpu.call(CODE, &[0x0007_0000]), Err(Stop::Fault(_))));
+    for opts in exclusive_variants() {
+        let mut cpu = setup_opts(opts);
+        put(&cpu, CODE, &[0xE190_1F9F, 0xE180_2F91, BX_LR]); // ldrex r1,[r0]; strex r2,r1,[r0]
+        cpu.mem().map(0x6_0000, 0x1000).unwrap();
+        // ldrex reads fine from a mapped page; unmapping is not possible, so fault via an unmapped read instead.
+        assert_eq!(
+            cpu.call(CODE, &[0x0007_0000]),
+            Err(Stop::Fault(Fault { addr: 0x0007_0000, size: 4, write: false })),
+            "{opts:?}"
+        );
+        // The faulting access was recompiled to the callback path; a mapped address still works afterwards.
+        cpu.mem().write_u32(0x6_0000, 7).unwrap();
+        assert_eq!(cpu.call(CODE, &[0x0006_0000]).unwrap().r0, 0x6_0000, "{opts:?}");
+    }
+}
+
+#[test]
+fn exclusive_monitor_is_shared_with_inline_exclusives() {
+    // A store-exclusive fails when another CPU wrote the location after this CPU's ldrex (both inline).
+    let mut a = setup();
+    let b = a.new_thread().unwrap();
+    assert!(a.options().fastmem_exclusive && b.options().fastmem_exclusive);
+    // ldrex r1,[r0]; svc #n (thunk: other CPU's strex); strex r2,r1,[r0]; mov r0,r2; bx lr
+    let b = StdArc::new(Mutex::new(b));
+    let b2 = b.clone();
+    let t = a
+        .register_shared_thunk(
+            "other_strex",
+            Arc::new(move |_c: &mut Cpu| {
+                let mut b = b2.lock().unwrap();
+                b.set_sp(0x8800);
+                // ldrex r1,[r0]; add r1,r1,#1; strex r2,r1,[r0]; mov r0,r2; bx lr
+                put(&b, CODE + 0x200, &[0xE190_1F9F, 0xE281_1001, 0xE180_2F91, 0xE1A0_0002, BX_LR]);
+                assert_eq!(b.call(CODE + 0x200, &[DATA]).unwrap().r0, 0, "other CPU's strex succeeds");
+            }),
+        )
+        .unwrap();
+    put(
+        &a,
+        CODE,
+        &[0xE92D_4010, 0xE1A0_4000, 0xE194_1F9F, 0xE59F_C00C, 0xE12F_FF3C, 0xE184_2F91, 0xE1A0_0002, 0xE8BD_8010, t],
+    );
+    // push {r4,lr}; mov r4,r0; ldrex r1,[r4]; ldr r12,=t; blx r12; strex r2,r1,[r4]; mov r0,r2; pop {r4,pc}
+    a.mem().write_u32(DATA, 5).unwrap();
+    assert_eq!(a.call(CODE, &[DATA]).unwrap().r0, 1, "strex after a foreign write fails");
+    assert_eq!(a.mem().read_u32(DATA).unwrap(), 6);
+}
+
+#[test]
+fn jit_tuning_switch_and_flags() {
+    assert!(tuning_enabled(None));
+    assert!(tuning_enabled(Some(std::ffi::OsStr::new("0"))));
+    assert!(!tuning_enabled(Some(std::ffi::OsStr::new("1"))));
+    let d = CpuOptions::default();
+    let all = CpuOptions { fastmem: true, fastmem_exclusive: true, fast_fp: true, ..d };
+    assert_eq!(all.jit_flags(), ffi::JIT_FASTMEM_EXCLUSIVE | ffi::JIT_FAST_FP);
+    assert_eq!(CpuOptions { fastmem: false, ..all }.jit_flags(), ffi::JIT_FAST_FP, "inline exclusives need fastmem");
+    assert_eq!(CpuOptions { fastmem_exclusive: false, fast_fp: false, ..all }.jit_flags(), 0);
+    assert_eq!(setup_opts(all).options().jit_flags(), all.jit_flags());
+}
+
+#[test]
+fn fast_fp_keeps_ordinary_float_results() {
+    // (a + b) * b in VFP, and a + b with NEON, for normal and subnormal inputs.
+    let vfp = [0xEE00_0A10, 0xEE00_1A90, 0xEE30_1A20, 0xEE61_1A20, 0xEE11_0A90, BX_LR];
+    let neon = [0xEEA0_0B10, 0xEEA2_1B10, 0xF200_4D42, 0xEE14_0B10, BX_LR];
+    for fast_fp in [false, true] {
+        let mut cpu = setup_opts(CpuOptions { fast_fp, ..CpuOptions::default() });
+        put(&cpu, CODE, &vfp);
+        put(&cpu, CODE + 0x100, &neon);
+        let f = |cpu: &mut Cpu, at: u32, a: f32, b: f32| {
+            f32::from_bits(cpu.call(at, &[a.to_bits(), b.to_bits()]).unwrap().r0)
+        };
+        assert_eq!(f(&mut cpu, CODE, 1.5, 2.25), (1.5f32 + 2.25) * 2.25);
+        assert_eq!(f(&mut cpu, CODE, -3.0e7, 0.125), (-3.0e7f32 + 0.125) * 0.125);
+        assert!(f(&mut cpu, CODE, f32::NAN, 1.0).is_nan(), "NaN stays NaN (payload may differ)");
+        assert_eq!(f(&mut cpu, CODE + 0x100, 1.5, 2.25), 3.75);
+        let tiny = f32::from_bits(0x0000_1000); // subnormal
+                                                // ARM's "standard FPSCR value" flushes NEON subnormals; fast_fp honours the guest FPSCR (FZ clear) instead.
+        let neon_tiny = f(&mut cpu, CODE + 0x100, tiny, 0.0);
+        assert_eq!(neon_tiny, if fast_fp { tiny } else { 0.0 }, "fast_fp={fast_fp}");
+    }
 }
 
 // ---------- nested host-to-guest calls ----------
@@ -661,8 +766,11 @@ fn stop_regs_capture_the_failing_registers_including_nested_ones() {
 fn nested_call_shares_the_cycle_budget() {
     let mem = Arc::new(GuestMemory::new().unwrap());
     mem.map(CODE, 0x1000).unwrap();
-    let mut cpu =
-        Cpu::with_options(mem, CpuOptions { fastmem: true, code_cache_bytes: 8 << 20, cycle_counting: true }).unwrap();
+    let mut cpu = Cpu::with_options(
+        mem,
+        CpuOptions { fastmem: true, code_cache_bytes: 8 << 20, cycle_counting: true, ..CpuOptions::default() },
+    )
+    .unwrap();
     cpu.set_sp(0x8000_0000);
     put(&cpu, CODE, &[0xE3A0_0001, BX_LR]); // mov r0,#1; bx lr
     put(&cpu, CODE + 0x100, &[0xEAFF_FFFE]); // b .
@@ -873,8 +981,11 @@ fn untranslatable_instruction_requests_interpreter_fallback() {
 fn counting_cpu() -> Box<Cpu> {
     let mem = Arc::new(GuestMemory::new().unwrap());
     mem.map(CODE, 0x1000).unwrap();
-    let mut cpu =
-        Cpu::with_options(mem, CpuOptions { fastmem: true, code_cache_bytes: 8 << 20, cycle_counting: true }).unwrap();
+    let mut cpu = Cpu::with_options(
+        mem,
+        CpuOptions { fastmem: true, code_cache_bytes: 8 << 20, cycle_counting: true, ..CpuOptions::default() },
+    )
+    .unwrap();
     cpu.set_sp(0x8000_0000);
     put(&cpu, CODE, &[0xEAFF_FFFE]); // b .
     cpu
@@ -949,8 +1060,11 @@ fn threads_and_nested_calls_inherit_the_slice_policy() {
 fn cycle_counting_reflects_options() {
     assert!(!setup().cycle_counting());
     let mem = Arc::new(GuestMemory::new().unwrap());
-    let cpu =
-        Cpu::with_options(mem, CpuOptions { fastmem: false, code_cache_bytes: 8 << 20, cycle_counting: true }).unwrap();
+    let cpu = Cpu::with_options(
+        mem,
+        CpuOptions { fastmem: false, code_cache_bytes: 8 << 20, cycle_counting: true, ..CpuOptions::default() },
+    )
+    .unwrap();
     assert!(cpu.cycle_counting());
 }
 

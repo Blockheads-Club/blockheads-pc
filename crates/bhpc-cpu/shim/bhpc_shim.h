@@ -39,10 +39,15 @@ typedef struct bhpc_callbacks {
     void (*interpreter_fallback)(void* user, uint32_t pc, size_t num_instructions);
 } bhpc_callbacks;
 
+// `flags` for bhpc_jit_new: exclusive accesses through fastmem (needs a fastmem_base) ...
+#define BHPC_JIT_FASTMEM_EXCLUSIVE 1u
+// ... and float shortcuts that only change NaN payloads / NEON flush-to-zero (dynarmic "unsafe" optimisations).
+#define BHPC_JIT_FAST_FP 2u
+
 // `fastmem_base` may be NULL to force the callback path for every access. `monitor` must outlive the JIT and
 // `processor_id` must be below the processor count it was created with.
 bhpc_jit* bhpc_jit_new(const bhpc_callbacks* cb, uint8_t* fastmem_base, size_t code_cache_bytes, int cycle_counting,
-                       bhpc_monitor* monitor, size_t processor_id);
+                       bhpc_monitor* monitor, size_t processor_id, uint32_t flags);
 // Only meaningful when created with cycle_counting: run stops when the budget is used up.
 void bhpc_jit_set_ticks(bhpc_jit* j, uint64_t ticks);
 uint64_t bhpc_jit_ticks(bhpc_jit* j);
