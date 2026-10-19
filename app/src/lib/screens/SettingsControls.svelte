@@ -3,6 +3,7 @@
   import { store } from '../store.svelte';
   import { conflicts } from '../util';
   import ControlsEditor from '../parts/ControlsEditor.svelte';
+  import GamepadPanel from '../parts/GamepadPanel.svelte';
   import Alert from '../ui/Alert.svelte';
   import Button from '../ui/Button.svelte';
   import Dialog from '../ui/Dialog.svelte';
@@ -28,6 +29,7 @@
   </Alert>
 {/if}
 <ControlsEditor marks />
+<GamepadPanel />
 
 {#if confirm}
   <Dialog title={t('ctl.resetTitle')} description={t('ctl.resetBody')} onclose={() => (confirm = false)}>

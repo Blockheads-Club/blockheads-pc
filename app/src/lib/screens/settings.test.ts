@@ -345,12 +345,38 @@ describe('Settings search', () => {
     await fireEvent.click(within(nav()).getByRole('button', { name: /^Controls/ }));
     expect(results()).toBeNull();
     expect(store.section).toBe('controls');
-    expect(screen.getByRole('table')).toBeVisible();
+    expect(screen.getByRole('table', { name: 'Control bindings' })).toBeVisible();
   });
 });
 
 describe('Settings > controls', () => {
   beforeEach(() => (store.section = 'controls'));
+
+  it('lists the controller buttons and switches controllers off and on', async () => {
+    render(SettingsControls);
+    expect(screen.getByText('Hide game buttons')).toBeVisible();
+    const table = screen.getByRole('table', { name: 'Controller buttons and what they do' });
+    expect(within(table).getAllByRole('row')).toHaveLength(11); // the header and ten buttons
+    expect(within(table).getByText('Walk (uses the game’s arrow pad)')).toBeVisible();
+    expect(within(table).getByText('Pause menu')).toBeVisible();
+    const sw = screen.getByRole('switch', { name: 'Use a game controller' });
+    expect(sw).toBeChecked();
+    await fireEvent.click(sw);
+    await waitFor(() => expect(store.config?.controller).toBe(false));
+    expect(screen.queryByRole('table', { name: 'Controller buttons and what they do' })).toBeNull();
+    await fireEvent.click(sw);
+    await waitFor(() => expect(store.config?.controller).toBe(true));
+    expect(searchSettings('gamepad').map((s) => s.id)).toEqual(['set-ctl-pad', 'set-ctl-pad-map']);
+    expect(searchSettings('gizle')[0].id).toBe('set-ctl-hide_ui');
+  });
+
+  it('assumes a controller for configurations from before the setting', () => {
+    const old = makeConfig();
+    delete (old as Partial<typeof old>).controller;
+    store.config = old;
+    render(SettingsControls);
+    expect(screen.getByRole('switch', { name: 'Use a game controller' })).toBeChecked();
+  });
 
   it('marks changes and resets one or all', async () => {
     store.config = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' } });

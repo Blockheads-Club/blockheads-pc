@@ -285,6 +285,10 @@ export class AppStore {
     }
   }
 
+  async setController(on: boolean) {
+    await this.patchConfig((c) => (c.controller = on));
+  }
+
   async setBinding(action: ActionId, text: string): Promise<boolean> {
     const cfg = this.cfg;
     if (!cfg) return false;

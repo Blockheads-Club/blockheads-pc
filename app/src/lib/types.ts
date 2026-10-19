@@ -29,6 +29,7 @@ export interface KeyBindings {
   pinch: string;
   back: string;
   fullscreen: string;
+  hide_ui: string;
 }
 export type ActionId = keyof KeyBindings;
 
@@ -38,6 +39,8 @@ export interface LaunchConfig {
   force: boolean;
   window: WindowOptions;
   keys: KeyBindings;
+  /** Game controllers drive the game. */
+  controller: boolean;
 }
 
 export interface Prefs {

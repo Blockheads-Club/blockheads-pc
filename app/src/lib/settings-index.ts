@@ -15,7 +15,7 @@ export const PAGES: { id: SettingsPage; icon: IconName; labelKey: Key }[] = [
   { id: 'about', icon: 'info', labelKey: 'set.nav.about' }
 ];
 
-export const ACTIONS: ActionId[] = ['touch', 'pan', 'zoom', 'pinch', 'back', 'fullscreen'];
+export const ACTIONS: ActionId[] = ['touch', 'pan', 'zoom', 'pinch', 'back', 'fullscreen', 'hide_ui'];
 
 /**
  * A searchable setting. `id` is also the DOM id of its row on the page (the scroll and focus target);
@@ -38,8 +38,10 @@ const ACTION_WORDS: Record<ActionId, string[]> = {
   zoom: ['wheel', 'scroll', 'zoom in', 'zoom out', 'tekerlek', 'yakınlaştır', 'uzaklaştır'],
   pinch: ['gesture', 'two finger', 'iki parmak', 'hareket', 'kıstır'],
   back: ['escape', 'esc', 'menu', 'geri', 'menü', 'kapat'],
-  fullscreen: ['f11', 'full screen', 'tam ekran']
+  fullscreen: ['f11', 'full screen', 'tam ekran'],
+  hide_ui: ['hud', 'hide', 'buttons', 'interface', 'screenshot', 'gizle', 'düğmeler', 'arayüz', 'ekran görüntüsü']
 };
+const PAD_WORDS = ['controller', 'gamepad', 'joystick', 'xbox', 'playstation', 'stick', 'kol', 'oyun kolu', 'gamepad'];
 
 export const SETTINGS: SettingEntry[] = [
   { id: 'set-game-file', page: 'game', titleKey: 'set.game', hintKey: 'set.h.gameFile', keywords: ['apk', 'file', 'version', 'game', 'oyun', 'dosya', 'sürüm'] },
@@ -63,6 +65,8 @@ export const SETTINGS: SettingEntry[] = [
     hintKey: `act.${a}.desc` as Key,
     keywords: [...ACTION_WORDS[a], ...CONTROL_WORDS]
   })),
+  { id: 'set-ctl-pad', page: 'controls', titleKey: 'pad.enable', hintKey: 'pad.enableHint', keywords: [...PAD_WORDS, 'on', 'off', 'aç', 'kapat'] },
+  { id: 'set-ctl-pad-map', page: 'controls', titleKey: 'pad.mapTitle', hintKey: 'pad.mapHint', keywords: [...PAD_WORDS, 'buttons', 'layout', 'düğmeler', 'düzen'], fallback: 'set-ctl-pad' },
 
   { id: 'set-snd-sound', page: 'audio', titleKey: 'set.sound', hintKey: 'set.soundHint', keywords: ['sound', 'volume', 'music', 'effects', 'audio', 'ses', 'müzik', 'efekt', 'ses düzeyi'] },
   { id: 'set-snd-mute', page: 'audio', titleKey: 'set.muteBg', hintKey: 'set.muteSoon', keywords: ['mute', 'background', 'silent', 'sessiz', 'arka plan', 'sustur'] },

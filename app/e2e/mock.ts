@@ -14,7 +14,8 @@ export async function mockTauri(page: Page) {
       data_dir: '/home/mira/.local/share/blockheads-pc',
       force: false,
       window: { width: 1280, height: 720, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1 },
-      keys: { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11' }
+      keys: { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H' },
+      controller: true
     };
     const saved = {
       ...defaults,

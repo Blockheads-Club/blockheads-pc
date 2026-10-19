@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 import type { ApkReport, BootState, LaunchConfig, Prefs, Snapshot } from './types';
 
-export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11' };
+export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H' };
 
 export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
   return {
@@ -10,6 +10,7 @@ export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
     force: false,
     window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1 },
     keys: { ...KEYS },
+    controller: true,
     ...over
   };
 }
