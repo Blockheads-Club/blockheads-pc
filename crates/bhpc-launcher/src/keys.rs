@@ -1,6 +1,6 @@
 //! Key binding model. The actions are the ones `bhpc-input` implements; the defaults reproduce its
 //! hard-wired mapping (left button = touch, right drag = pan, wheel = zoom, Ctrl+left drag = pinch,
-//! Esc = back, F11 = fullscreen).
+//! Esc = back, F11 = fullscreen, H = hide the game's buttons).
 
 use bhpc_input::HostKey;
 use serde::{Deserialize, Serialize};
@@ -21,12 +21,14 @@ pub enum Action {
     Back,
     /// Toggle fullscreen.
     Fullscreen,
+    /// Hide / show the game's own on-screen buttons.
+    HideUi,
 }
 
 impl Action {
     /// All actions in UI order.
-    pub const ALL: [Action; 6] =
-        [Action::Touch, Action::Pan, Action::Zoom, Action::Pinch, Action::Back, Action::Fullscreen];
+    pub const ALL: [Action; 7] =
+        [Action::Touch, Action::Pan, Action::Zoom, Action::Pinch, Action::Back, Action::Fullscreen, Action::HideUi];
 
     /// Name used in `--bind NAME=BINDING` flags.
     pub fn name(self) -> &'static str {
@@ -37,6 +39,7 @@ impl Action {
             Action::Pinch => "pinch",
             Action::Back => "back",
             Action::Fullscreen => "fullscreen",
+            Action::HideUi => "hide_ui",
         }
     }
 
@@ -54,6 +57,7 @@ impl Action {
             Action::Pinch => "Pinch (drag)",
             Action::Back => "Back",
             Action::Fullscreen => "Toggle fullscreen",
+            Action::HideUi => "Hide game buttons",
         }
     }
 }
@@ -275,6 +279,7 @@ pub struct KeyBindings {
     pub pinch: Binding,
     pub back: Binding,
     pub fullscreen: Binding,
+    pub hide_ui: Binding,
 }
 
 impl Default for KeyBindings {
@@ -287,6 +292,7 @@ impl Default for KeyBindings {
             pinch: Binding { mods: ctrl, input: Input::Mouse(Button::Left) },
             back: Binding::plain(Input::Key(Key::Escape)),
             fullscreen: Binding::plain(Input::Key(Key::F(11))),
+            hide_ui: Binding::plain(Input::Key(Key::Char('H'))),
         }
     }
 }
@@ -301,6 +307,7 @@ impl KeyBindings {
             Action::Pinch => self.pinch,
             Action::Back => self.back,
             Action::Fullscreen => self.fullscreen,
+            Action::HideUi => self.hide_ui,
         }
     }
 
@@ -313,6 +320,7 @@ impl KeyBindings {
             Action::Pinch => self.pinch = b,
             Action::Back => self.back = b,
             Action::Fullscreen => self.fullscreen = b,
+            Action::HideUi => self.hide_ui = b,
         }
     }
 
@@ -340,6 +348,7 @@ impl KeyBindings {
             pinch: self.pinch.trigger(),
             back: self.back.trigger(),
             fullscreen: self.fullscreen.trigger(),
+            hide_ui: self.hide_ui.trigger(),
         }
     }
 

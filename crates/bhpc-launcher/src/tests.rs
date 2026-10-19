@@ -119,6 +119,9 @@ fn default_bindings_and_conflicts() {
     }
     assert_eq!(kb.get(Action::Back).to_string(), "Esc");
     assert_eq!(kb.get(Action::Pinch).to_string(), "Ctrl+Left");
+    assert_eq!(kb.get(Action::HideUi).to_string(), "H");
+    assert_eq!(Action::HideUi.label(), "Hide game buttons");
+    assert_eq!(Action::from_name("hide_ui"), Some(Action::HideUi));
     kb.set(Action::Pan, kb.touch);
     assert_eq!(kb.conflicts(), vec![(Action::Touch, Action::Pan)]);
 }
@@ -155,13 +158,17 @@ fn old_window_tables_get_the_new_defaults() {
     assert_eq!((c.window.width, c.window.vsync, c.window.show_fps, c.window.fps_limit), (1600, false, false, 60));
     assert_eq!(c.window.fps_position, crate::window::FpsPosition::TopLeft);
     assert_eq!(c.window.game_speed, 1.0);
+    assert!(c.controller, "controllers are on unless switched off");
+    assert_eq!(c.keys.hide_ui.to_string(), "H");
     assert_eq!(crate::window::FpsPosition::TopLeft.flag(), "tl");
     let mut c = LaunchConfig::new("a", "d");
     c.window.show_fps = true;
     c.window.fps_limit = 144;
     c.window.fps_position = crate::window::FpsPosition::BottomRight;
     c.window.game_speed = 0.75;
+    c.controller = false;
     let text = c.to_toml();
+    assert!(text.contains("controller = false"), "{text}");
     assert!(text.contains("game_speed = 0.75"), "{text}");
     assert!(text.contains("fps_position = \"bottom-right\""), "{text}");
     assert!(text.contains("show_fps = true") && text.contains("fps_limit = 144"), "{text}");
