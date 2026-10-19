@@ -462,9 +462,16 @@ fn files_paths_and_fds() {
         p.start().unwrap();
         assert!(run(&m, &p, 100) > 1000);
     }
-    // A directory is not a readable source.
-    let (_m, p, _) = setup();
-    assert!(matches!(p.set_data_source_fd(std::fs::File::open(&dir).unwrap(), 0, 10), Err(MusicError::Io(_))));
+    // An unseekable descriptor (a pipe) is not a usable source. (A directory is not portable for this: tmpfs refuses
+    // to seek it, btrfs and APFS do not.)
+    #[cfg(unix)]
+    {
+        let (_m, p, _) = setup();
+        let mut child = std::process::Command::new("true").stdout(std::process::Stdio::piped()).spawn().unwrap();
+        let pipe = std::fs::File::from(std::os::fd::OwnedFd::from(child.stdout.take().unwrap()));
+        assert!(matches!(p.set_data_source_fd(pipe, 0, 10), Err(MusicError::Io(_))));
+        child.wait().unwrap();
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
