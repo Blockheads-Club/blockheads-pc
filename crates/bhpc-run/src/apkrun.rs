@@ -370,6 +370,7 @@ impl Session {
         let env = std::env::var_os(crate::fastdiv::DISABLE_ENV);
         let mods = linker.modules();
         crate::fastdiv::install_all(cpu.mem(), env.as_deref(), mods.len(), &|i, name| mods[i].export(name))?;
+        crate::mktimer::install_all(cpu.mem(), mods.iter().map(|m| (m.name.as_str(), &m.segments[..])))?;
         cpu.clear_cache();
         report(Phase::Libraries, 1, 1);
         let mut platform = bhpc_jni::Platform::for_guest(&storage.guest);

@@ -11,6 +11,7 @@ pub mod gamespeed;
 pub mod gameui;
 pub mod input;
 pub mod mainq;
+pub mod mktimer;
 pub mod mmapio;
 pub mod overlay;
 pub mod pace;
@@ -229,6 +230,8 @@ mod tests_gamespeed;
 mod tests_gameui;
 #[cfg(test)]
 mod tests_input;
+#[cfg(test)]
+mod tests_mktimer;
 #[cfg(test)]
 mod tests_mmapio;
 #[cfg(all(test, unix))]
