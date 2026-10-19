@@ -122,10 +122,15 @@ pub const DEFAULT_TOTAL_SECS: f64 = 20.0;
 pub const HISTORY_LEN: usize = 5;
 /// No step gets less than this share of the bar, however fast it was.
 const MIN_WEIGHT: f64 = 0.02;
-/// Time left is shown after this many seconds and ...
+/// Without earlier starts, time left is shown after this many seconds and ...
 pub const ETA_AFTER_SECS: f64 = 3.0;
 /// ... at least this percentage.
 pub const ETA_FROM_PERCENT: f64 = 15.0;
+/// With earlier starts, the estimate scales their times by how this start compares with them so far, once this much
+/// of a usual start has passed (before that the usual times are taken as they are) ...
+const PACE_AFTER_SECS: f64 = 1.0;
+/// ... and within these bounds.
+const PACE_RANGE: (f64, f64) = (0.5, 3.0);
 /// A step is slow after twice its usual time, but never sooner than this ...
 pub const SLOW_MIN_SECS: f64 = 4.0;
 /// ... and always after this long.
@@ -139,12 +144,25 @@ const EASE_CAP: f64 = 0.95;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
     pub weights: [f64; 6],
+    /// The median time of each step over the remembered starts (one slow start does not skew it).
     pub usual_secs: [f64; 6],
+    /// The times come from earlier starts on this machine, not from [`DEFAULT_TOTAL_SECS`].
+    pub learned: bool,
 }
 
 impl Default for Model {
     fn default() -> Self {
-        Model { weights: DEFAULT_WEIGHTS, usual_secs: DEFAULT_WEIGHTS.map(|w| w * DEFAULT_TOTAL_SECS) }
+        Model { weights: DEFAULT_WEIGHTS, usual_secs: DEFAULT_WEIGHTS.map(|w| w * DEFAULT_TOTAL_SECS), learned: false }
+    }
+}
+
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(f64::total_cmp);
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
     }
 }
 
@@ -162,7 +180,21 @@ impl Model {
         }
         let floored = mean.map(|m| (m / total).max(MIN_WEIGHT));
         let sum: f64 = floored.iter().sum();
-        Model { weights: floored.map(|w| w / sum), usual_secs: mean }
+        let usual_secs = std::array::from_fn(|i| median(history.iter().map(|h| h[i]).collect()));
+        Model { weights: floored.map(|w| w / sum), usual_secs, learned: true }
+    }
+
+    /// Seconds left from earlier starts: the rest of step `idx` (`frac` of it done, or `in_step` seconds into a step
+    /// without counts) and the usual time of every later step, scaled by how fast this start ran against them so far.
+    fn eta(&self, idx: usize, frac: Option<f64>, in_step: f64, elapsed: f64) -> f64 {
+        let usual = self.usual_secs[idx];
+        let done_here = frac.map_or(in_step.min(usual), |f| usual * f);
+        let left = usual - done_here + self.usual_secs[idx + 1..].iter().sum::<f64>();
+        let expected = self.usual_secs[..idx].iter().sum::<f64>() + done_here;
+        let pace =
+            if expected >= PACE_AFTER_SECS { (elapsed / expected).clamp(PACE_RANGE.0, PACE_RANGE.1) } else { 1.0 };
+        // A step without counts that runs past its usual time still has a moment to go.
+        (left * pace).max(1.0)
     }
 
     fn base(&self, idx: usize) -> f64 {
@@ -218,7 +250,8 @@ pub struct Info {
     pub step: u32,
     /// Seconds since the start.
     pub elapsed_secs: f64,
-    /// Seconds left, once the spec's conditions hold (3 s and 15 %); the screen rounds it.
+    /// Seconds left: from the first progress line when earlier starts are known, else once the spec's conditions hold
+    /// (3 s and 15 %); the screen rounds it.
     pub eta_secs: Option<f64>,
     /// The current step takes much longer than usual.
     pub slow: bool,
@@ -326,8 +359,16 @@ impl Tracker {
         let secs = now.as_secs_f64();
         let in_step = now.saturating_sub(self.entered[idx].unwrap_or_default()).as_secs_f64();
         let slow_after = (2.0 * self.model.usual_secs[idx]).clamp(SLOW_MIN_SECS, SLOW_MAX_SECS);
-        let eta = (!ready && secs >= ETA_AFTER_SECS && self.shown >= ETA_FROM_PERCENT)
-            .then(|| secs * (100.0 - self.shown) / self.shown);
+        let eta = if ready {
+            None
+        } else if self.model.learned {
+            self.last.map(|(_, done, total)| {
+                let frac = (total > 0).then(|| f64::from(done.min(total)) / f64::from(total));
+                self.model.eta(idx, frac, in_step, secs)
+            })
+        } else {
+            (secs >= ETA_AFTER_SECS && self.shown >= ETA_FROM_PERCENT).then(|| secs * (100.0 - self.shown) / self.shown)
+        };
         let durations = self.durations();
         let step_secs = (0..6)
             .map(|i| match (durations, self.entered[i + 1..].first().copied().flatten()) {

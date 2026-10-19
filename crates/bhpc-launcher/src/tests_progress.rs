@@ -136,7 +136,7 @@ fn slow_and_stalled_steps() {
     assert!(!t.info(secs(3.9)).slow);
     assert!(t.info(secs(4.1)).slow);
     // A step that usually takes long is slow at 15 s at the latest.
-    let mut long = Tracker::new(Model { weights: DEFAULT_WEIGHTS, usual_secs: [100.0; 6] });
+    let mut long = Tracker::new(Model { weights: DEFAULT_WEIGHTS, usual_secs: [100.0; 6], learned: false });
     long.feed(p(Phase::Frame, 0, 0), secs(0.0));
     assert!(!long.info(secs(14.0)).slow);
     assert!(long.info(secs(15.0)).slow);
@@ -177,4 +177,40 @@ fn ready_finishes_the_bar_and_yields_the_step_times() {
     // A second ready does not move the time.
     bare.feed(Line::Ready, secs(5.0));
     assert_eq!(bare.durations().unwrap().iter().sum::<f64>(), 0.0);
+}
+
+#[test]
+fn estimate_from_earlier_starts() {
+    // Three starts; the slow one does not move the medians (1, 2, 3, 4, 0, 10 = 20 s).
+    let h = [[1.0, 2.0, 3.0, 4.0, 0.0, 10.0], [1.0, 2.0, 3.0, 4.0, 0.0, 10.0], [9.0, 9.0, 9.0, 9.0, 9.0, 60.0]];
+    let m = Model::learn(&h);
+    assert!(m.learned && !Model::default().learned);
+    assert_eq!(m.usual_secs, [1.0, 2.0, 3.0, 4.0, 0.0, 10.0]);
+    assert_eq!(Model::learn(&h[..2]).usual_secs, [1.0, 2.0, 3.0, 4.0, 0.0, 10.0], "even count");
+
+    // Shown from the first line, before 3 s and 15 %: the usual 20 s minus the part of the apk step done.
+    let mut t = Tracker::new(m.clone());
+    t.feed(p(Phase::Apk, 1, 2), secs(0.5));
+    assert!((t.info(secs(0.5)).eta_secs.unwrap() - 19.5).abs() < 1e-9);
+    // Half way through the constructors after 4.5 s, as usual: 1.5 + 4 + 0 + 10 left.
+    t.feed(p(Phase::Constructors, 50, 100), secs(4.5));
+    assert!((t.info(secs(4.5)).eta_secs.unwrap() - 15.5).abs() < 1e-9);
+    // Twice as slow as usual: twice the time left.
+    let mut slow = Tracker::new(m.clone());
+    slow.feed(p(Phase::Constructors, 50, 100), secs(9.0));
+    assert!((slow.info(secs(9.0)).eta_secs.unwrap() - 31.0).abs() < 1e-9);
+    // The pace is bounded: very fast reads as half the usual, very slow as three times.
+    let mut fast = Tracker::new(m.clone());
+    fast.feed(p(Phase::Constructors, 50, 100), secs(0.1));
+    assert!((fast.info(secs(0.1)).eta_secs.unwrap() - 7.75).abs() < 1e-9);
+    let mut crawl = Tracker::new(m.clone());
+    crawl.feed(p(Phase::Constructors, 50, 100), secs(100.0));
+    assert!((crawl.info(secs(100.0)).eta_secs.unwrap() - 46.5).abs() < 1e-9);
+    // Waiting for the first frame (no counts) past its usual 10 s: a moment left, not zero or negative.
+    let mut late = Tracker::new(m);
+    late.feed(p(Phase::Frame, 0, 0), secs(10.0));
+    assert!((late.info(secs(15.0)).eta_secs.unwrap() - 5.0).abs() < 1e-9);
+    assert_eq!(late.info(secs(40.0)).eta_secs, Some(1.0));
+    late.feed(Line::Ready, secs(41.0));
+    assert_eq!(late.info(secs(41.0)).eta_secs, None);
 }
