@@ -83,6 +83,9 @@ Umbrella rules: `../AGENTS.md`.
   baton): the baton becomes a host lock held only in host code; thunks listed in `bhpc_bionic::gate_free` run
   without it, so they must do each check-and-update in one `lock(st)` section and wait with `Sched::key_seq` + `block_seq`.
   `__futex_wait/__futex_wake` use the same ticket queues as condition variables, keyed by the futex word address.
+- Parallel threads expose guest races the baton hid. Apportable's mk_timer receive slept until a re-armed deadline
+  (seconds of input lag on the UI thread); `bhpc-run/src/mktimer.rs` patches it. To find such stalls, time the
+  blocking thunks (`watch_blocking` in play.rs) per thread and look at the caller's stack for `usleep`/cond waits.
 - `localtime`/`mktime`/`tzset` use the host zone via `HostClock::local_zone` (libc `localtime_r` on unix, UTC on
   Windows for now); `TZ=UTC` in the guest environment forces UTC.
 

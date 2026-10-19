@@ -181,6 +181,18 @@ Xvfb/llvmpipe, five interleaved rounds of `--serial-guest` / default, medians (r
   remaining work (gate-free GL and heap), and with real GPU drivers more of the frame is guest work. The launcher's
   switch and `--serial-guest` stay for troubleshooting.
 
+## Found after turning it on: the run loop that slept through clicks
+
+In the launcher's window the game kept drawing at 60 fps but answered clicks seconds late ("Skip tutorial" seemed to
+freeze, "Resume" reacted half a minute later). The Android UI thread, which delivers every click, sat for 2-35 s in a
+`usleep` inside one `CFRunLoopRunInMode(..., 0, true)` pass: Apportable's libSystem receives a fire of a Mach timer port
+by sleeping until the port's *current* deadline, and CoreFoundation re-arms the port for a later timer right after it
+armed it for one that is due, so a fire the timer thread queues in between is received with a deadline seconds away.
+With the baton that window was a few instructions; in parallel mode the timer thread hit it in 4 of 5 sessions (0 of 2
+serial). `bhpc-run/src/mktimer.rs` patches the receive in guest memory to deliver such a fire at once and keep the new
+deadline armed, like the Mach kernel (CoreFoundation re-arms after an early wake-up). After the fix: no UI-thread sleep
+over 1.5 s and no run-loop pass over 1 s in 4 parallel sessions of the same script.
+
 ## Remaining work
 
 * Make more of the hot gated host functions gate-free: GL draw calls (the `Gles` state has its own lock; EGL swap must
