@@ -119,18 +119,53 @@ pub fn hud_scale(height: u32) -> u32 {
     (height / 360).clamp(2, 8)
 }
 
-/// The counter as the window draws it: the picture and its distance from the game picture's top-left corner.
+/// The corner of the game picture the counter sits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Corner {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Corner {
+    /// `tl`, `tr`, `bl` or `br` (the `--fps-position` values).
+    pub fn parse(s: &str) -> Option<Corner> {
+        Some(match s {
+            "tl" => Corner::TopLeft,
+            "tr" => Corner::TopRight,
+            "bl" => Corner::BottomLeft,
+            "br" => Corner::BottomRight,
+            _ => return None,
+        })
+    }
+}
+
+/// The counter as the window draws it: the picture, its distance from the game picture's edges and its corner.
 #[derive(Debug, Clone)]
 pub struct Hud {
     pub overlay: Overlay,
     pub margin: u32,
+    pub corner: Corner,
 }
 
-/// The counter for `fps` on a game picture `height` pixels tall; `serial` must change with the pixels.
-pub fn fps_hud(fps: f32, serial: u64, height: u32) -> Hud {
+impl Hud {
+    /// Where the counter goes inside the game picture `(x, y, w, h)` of a GL viewport (rows counted from the bottom):
+    /// the lower-left pixel of the counter, `margin` pixels from the two edges of its corner.
+    pub fn origin(&self, (x, y, w, h): (i32, i32, i32, i32)) -> (i32, i32) {
+        let (ow, oh, m) = (self.overlay.width as i32, self.overlay.height as i32, self.margin as i32);
+        let left = matches!(self.corner, Corner::TopLeft | Corner::BottomLeft);
+        let top = matches!(self.corner, Corner::TopLeft | Corner::TopRight);
+        (if left { x + m } else { x + w - m - ow }, if top { y + h - m - oh } else { y + m })
+    }
+}
+
+/// The counter for `fps` on a game picture `height` pixels tall, in `corner`; `serial` must change with the pixels.
+pub fn fps_hud(fps: f32, serial: u64, height: u32, corner: Corner) -> Hud {
     let s = hud_scale(height);
     let p = render_label(&fps_label(fps), s);
-    Hud { overlay: Overlay { width: p.width, height: p.height, serial, rgba: Arc::new(p.rgba) }, margin: 4 * s }
+    Hud { overlay: Overlay { width: p.width, height: p.height, serial, rgba: Arc::new(p.rgba) }, margin: 4 * s, corner }
 }
 
 #[cfg(test)]
@@ -199,11 +234,30 @@ mod tests {
         assert_eq!(fps_label(-3.0), "0 FPS");
         assert_eq!(fps_label(143.2), "143 FPS");
         assert_eq!([hud_scale(0), hud_scale(768), hud_scale(1080), hud_scale(2160), hud_scale(99999)], [2, 2, 3, 6, 8]);
-        let h = fps_hud(30.0, 7, 1080);
+        let h = fps_hud(30.0, 7, 1080, Corner::TopLeft);
         assert_eq!(h.overlay.serial, 7);
         assert_eq!(h.margin, 12);
         let p = render_label("30 FPS", 3);
         assert_eq!((h.overlay.width, h.overlay.height), (p.width, p.height));
         assert_eq!(*h.overlay.rgba, p.rgba);
+    }
+
+    #[test]
+    fn the_counter_sits_in_its_corner_of_the_game_picture() {
+        assert_eq!(Corner::default(), Corner::TopLeft);
+        let names = ["tl", "tr", "bl", "br"].map(|s| Corner::parse(s).unwrap());
+        assert_eq!(names, [Corner::TopLeft, Corner::TopRight, Corner::BottomLeft, Corner::BottomRight]);
+        assert_eq!(Corner::parse("middle"), None);
+        // A 1080p picture letterboxed at x 240 in a 2400-wide window; the counter is 123x39 with a 12 px margin.
+        let vp = (240, 0, 1920, 1080);
+        let at = |corner| {
+            let mut h = fps_hud(30.0, 1, 1080, corner);
+            h.overlay.width = 123;
+            h.origin(vp)
+        };
+        assert_eq!(at(Corner::TopLeft), (252, 1080 - 12 - 39));
+        assert_eq!(at(Corner::TopRight), (240 + 1920 - 12 - 123, 1080 - 12 - 39));
+        assert_eq!(at(Corner::BottomLeft), (252, 12));
+        assert_eq!(at(Corner::BottomRight), (240 + 1920 - 12 - 123, 12));
     }
 }

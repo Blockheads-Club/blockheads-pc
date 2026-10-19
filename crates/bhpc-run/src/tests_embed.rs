@@ -20,6 +20,7 @@ fn flags_default_to_the_plain_desktop_window() {
             embed: None,
             fps_limit: None,
             show_fps: false,
+            fps_position: bhpc_app::hud::Corner::TopLeft,
             unlock_fps: false
         }
     );
@@ -34,6 +35,8 @@ fn flags_carry_the_launcher_settings() {
         "30",
         "--show-fps",
         "--unlock-fps",
+        "--fps-position",
+        "br",
         "--title",
         "Blockheads PC · Playing",
         "--embed",
@@ -49,6 +52,7 @@ fn flags_carry_the_launcher_settings() {
     .unwrap();
     assert!(f.fullscreen && !f.vsync && f.show_fps && f.unlock_fps);
     assert_eq!(f.fps_limit, Some(30));
+    assert_eq!(f.fps_position, bhpc_app::hud::Corner::BottomRight);
     // The first --fps-limit wins (explicit flags come before the config's); 0 means no cap.
     assert_eq!(parse_play_flags(&s(&["--fps-limit", "0", "--fps-limit", "60"])).unwrap().fps_limit, None);
     assert_eq!(f.title.as_deref(), Some("Blockheads PC · Playing"));
@@ -65,6 +69,8 @@ fn bad_flags_are_reported() {
     assert!(parse_play_flags(&s(&["--embed"])).unwrap_err().contains("--embed"));
     assert!(parse_play_flags(&s(&["--fps-limit"])).unwrap_err().contains("--fps-limit"));
     assert!(parse_play_flags(&s(&["--fps-limit", "fast"])).unwrap_err().contains("--fps-limit"));
+    assert!(parse_play_flags(&s(&["--fps-position", "middle"])).unwrap_err().contains("--fps-position"));
+    assert!(parse_play_flags(&s(&["--fps-position"])).unwrap_err().contains("--fps-position"));
 }
 
 #[test]

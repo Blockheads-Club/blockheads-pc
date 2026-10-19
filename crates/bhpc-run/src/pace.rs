@@ -4,7 +4,7 @@
 //! would freeze every other guest thread for the whole wait. [`GuestClock`] hands the baton over while it sleeps and
 //! takes it back for the last stretch, which [`FramePacer`] spends spinning for an accurate wake-up.
 
-use bhpc_app::hud::{fps_hud, Hud};
+use bhpc_app::hud::{fps_hud, Corner, Hud};
 use bhpc_app::{Clock, FpsCounter, FramePacer, SystemClock};
 use bhpc_bionic::sched::{Sched, WaitEnd};
 use std::sync::Arc;
@@ -44,17 +44,17 @@ impl Clock for GuestClock {
 pub struct SwapPacer {
     pacer: FramePacer,
     clock: GuestClock,
-    /// The counter and the serial of its latest picture, when it is shown.
-    fps: Option<(FpsCounter, u64)>,
+    /// The counter, the serial of its latest picture and its corner, when it is shown.
+    fps: Option<(FpsCounter, u64, Corner)>,
 }
 
 impl SwapPacer {
-    /// `limit`: frames per second at most (`None`: no cap); `show_fps`: produce the counter picture.
-    pub fn new(sched: Arc<Sched>, limit: Option<u32>, show_fps: bool) -> SwapPacer {
+    /// `limit`: frames per second at most (`None`: no cap); `fps`: produce the counter picture for this corner.
+    pub fn new(sched: Arc<Sched>, limit: Option<u32>, fps: Option<Corner>) -> SwapPacer {
         SwapPacer {
             pacer: FramePacer::new(limit),
             clock: GuestClock::new(sched),
-            fps: show_fps.then(|| (FpsCounter::default(), 0)),
+            fps: fps.map(|c| (FpsCounter::default(), 0, c)),
         }
     }
 
@@ -62,10 +62,10 @@ impl SwapPacer {
     /// (for a game picture `height` pixels tall) when the rate was re-measured.
     pub fn frame(&mut self, height: u32) -> Option<Hud> {
         self.pacer.end_frame(&mut self.clock);
-        let (counter, serial) = self.fps.as_mut()?;
+        let (counter, serial, corner) = self.fps.as_mut()?;
         let rate = counter.frame(self.clock.now())?;
         *serial += 1;
-        Some(fps_hud(rate, *serial, height))
+        Some(fps_hud(rate, *serial, height, *corner))
     }
 }
 
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn frames_are_capped_and_counted() {
-        let mut p = SwapPacer::new(Arc::new(Sched::new()), Some(50), true);
+        let mut p = SwapPacer::new(Arc::new(Sched::new()), Some(50), Some(Corner::BottomRight));
         let start = Instant::now();
         let mut huds = Vec::new();
         for _ in 0..36 {
@@ -102,9 +102,9 @@ mod tests {
         assert!(took >= Duration::from_millis(695), "{took:?}");
         assert!(!huds.is_empty() && huds.len() <= 2, "about one update per 500 ms: {}", huds.len());
         assert_eq!(huds[0].overlay.serial, 1);
-        assert_eq!(huds[0].margin, 12);
+        assert_eq!((huds[0].margin, huds[0].corner), (12, Corner::BottomRight));
         // No counter, no cap: returns at once with nothing to draw.
-        let mut q = SwapPacer::new(Arc::new(Sched::new()), None, false);
+        let mut q = SwapPacer::new(Arc::new(Sched::new()), None, None);
         let start = Instant::now();
         for _ in 0..1000 {
             assert!(q.frame(768).is_none());

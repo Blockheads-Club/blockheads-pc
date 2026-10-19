@@ -24,6 +24,8 @@ pub struct PlayFlags {
     pub fps_limit: Option<u32>,
     /// Draw the FPS counter over the game picture (`--show-fps`).
     pub show_fps: bool,
+    /// Corner of the FPS counter (`--fps-position tl|tr|bl|br`, default top-left).
+    pub fps_position: bhpc_app::hud::Corner,
     /// Lift the game's 30 FPS cap (`--unlock-fps`, see `fpsunlock`).
     pub unlock_fps: bool,
 }
@@ -49,6 +51,10 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             .transpose()?
             .filter(|n| *n > 0),
         show_fps: args.iter().any(|a| a == "--show-fps"),
+        fps_position: value("--fps-position")
+            .map(|v| v.as_deref().and_then(bhpc_app::hud::Corner::parse).ok_or("--fps-position needs tl, tr, bl or br"))
+            .transpose()?
+            .unwrap_or_default(),
         unlock_fps: args.iter().any(|a| a == "--unlock-fps"),
     })
 }

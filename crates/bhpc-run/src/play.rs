@@ -80,6 +80,8 @@ pub struct PlayConfig {
     pub fps_limit: Option<u32>,
     /// Draw the FPS counter over the game picture.
     pub show_fps: bool,
+    /// Corner of the game picture the FPS counter sits in.
+    pub fps_position: bhpc_app::hud::Corner,
     /// Let the game draw at every display refresh instead of every second one (`fpsunlock`).
     pub unlock_fps: bool,
     /// Window title.
@@ -114,6 +116,7 @@ impl PlayConfig {
             vsync: true,
             fps_limit: None,
             show_fps: false,
+            fps_position: bhpc_app::hud::Corner::TopLeft,
             unlock_fps: false,
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
@@ -735,7 +738,7 @@ fn boot(
         None => None,
     });
     let (shot, shot_at, check_gl) = (cfg.shot.clone(), cfg.shot_at, cfg.check_gl);
-    let (fps_limit, show_fps) = (cfg.fps_limit, cfg.show_fps);
+    let (fps_limit, fps_hud) = (cfg.fps_limit, cfg.show_fps.then_some(cfg.fps_position));
     let mut sess = Session::open_setup(&icfg, Box::new(std::io::stdout()), None, &mut |cpu, st| {
         let primary = window
             .create_context(None)
@@ -764,7 +767,7 @@ fn boot(
             shot_at,
             overlay: crate::overlay::OverlayFeed::default(),
             sdl: sdl.clone(),
-            pace: Mutex::new(crate::pace::SwapPacer::new(lock(st).sched.clone(), fps_limit, show_fps)),
+            pace: Mutex::new(crate::pace::SwapPacer::new(lock(st).sched.clone(), fps_limit, fps_hud)),
             embed: embed_out.lock().unwrap_or_else(PoisonError::into_inner).take().map(Mutex::new),
         });
         // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.

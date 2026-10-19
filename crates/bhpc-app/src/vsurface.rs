@@ -603,9 +603,9 @@ unsafe fn draw(g: &Gl, sh: &mut Shared, vp: Viewport, layers: &Layers, target: u
         draw_overlay(g, (op, os), &mut sh.overlay, ov, full);
     }
     if let Some(h) = layers.hud {
-        // One texel per pixel at the game picture's top-left corner (GL counts rows from the bottom).
-        let (w, ht, m) = (h.overlay.width as i32, h.overlay.height as i32, h.margin as i32);
-        let at = Viewport { x: vp.x + m, y: vp.y + vp.h - m - ht, w, h: ht };
+        // One texel per pixel in its corner of the game picture (not of the window: clear of the black bars).
+        let (x, y) = h.origin((vp.x, vp.y, vp.w, vp.h));
+        let at = Viewport { x, y, w: h.overlay.width as i32, h: h.overlay.height as i32 };
         draw_overlay(g, (op, os), &mut sh.hud, &h.overlay, at);
     }
 
