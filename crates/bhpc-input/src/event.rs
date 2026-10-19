@@ -83,6 +83,8 @@ pub enum HostEvent {
         logical_height: u32,
     },
     Quit,
+    /// A game controller.
+    Pad(crate::pad::PadEvent),
 }
 
 /// What the host application itself must do (not for the guest).
@@ -94,6 +96,14 @@ pub enum HostAction {
     StartTextInput,
     /// The text field lost focus: call `SDL_StopTextInput`.
     StopTextInput,
+    /// Hide or show the game's own on-screen buttons (its HUD).
+    ToggleGameButtons,
+    /// Zoom the game's camera one step in / out, or to its next zoom level.
+    ZoomIn,
+    ZoomOut,
+    ZoomCycle,
+    /// Open (or close) the game's pause menu.
+    Pause,
 }
 
 /// `com.apportable.Lifecycle` static natives.
@@ -355,6 +365,8 @@ pub struct Bindings {
     pub back: Trigger,
     /// Toggle fullscreen (a host action, not for the guest).
     pub fullscreen: Trigger,
+    /// Hide / show the game's on-screen buttons (a host action; ignored while a text field has focus).
+    pub hide_ui: Trigger,
 }
 
 impl Default for Bindings {
@@ -366,6 +378,7 @@ impl Default for Bindings {
             pinch: Trigger { mods: Mods { ctrl: true, ..Mods::default() }, input: Input::Mouse(MouseButton::Left) },
             back: Trigger::plain(Input::Key(HostKey::Escape)),
             fullscreen: Trigger::plain(Input::Key(HostKey::F(11))),
+            hide_ui: Trigger::plain(Input::Key(HostKey::Char('h'))),
         }
     }
 }

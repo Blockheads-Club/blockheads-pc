@@ -18,19 +18,27 @@
 //! | minimise / restore | the `Lifecycle` natives (resign active + background / foreground + become active) |
 //! | resize | `SurfaceChanged` (`nativeOnSurfaceChanged` + `nativeRootGeometryChanged`) |
 //! | fullscreen binding (F11) / window close | [`HostAction::ToggleFullscreen`] / [`HostAction::Quit`] |
+//! | hide-buttons binding (H, not while typing) | [`HostAction::ToggleGameButtons`] |
+//! | game controller | see [`pad`]: cursor, touch at the cursor, walking, zoom, pause |
 //!
 //! The long press of the game is a held left button; it needs no mapping.
 
 pub mod event;
+pub mod grid;
 pub mod keymap;
 mod mapper;
+pub mod pad;
 pub mod text;
 
 pub use event::{
     Bindings, EventSink, GuestEvent, HostAction, HostEvent, HostKey, Input, Lifecycle, Mods, MouseButton, Recorder,
     Target, Trigger, KEYCODE_BACK,
 };
+pub use grid::Grid;
 pub use mapper::{Config, Geometry, InputMapper};
+pub use pad::{PadAxis, PadButton, PadConfig, PadEvent};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_pad;

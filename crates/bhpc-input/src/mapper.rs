@@ -4,6 +4,7 @@ use crate::event::{
     Bindings, EventSink, GuestEvent, HostAction, HostEvent, HostKey, Input, Lifecycle, Mods, MouseButton,
 };
 use crate::keymap;
+use crate::pad::{PadConfig, PadState};
 use crate::text::TextModel;
 
 /// How the game's content surface sits in the window: scaled uniformly to fit and centred (letterboxed).
@@ -65,6 +66,8 @@ pub struct Config {
     pub pinch_idle_ms: i64,
     /// What the buttons, wheel and keys do.
     pub bindings: Bindings,
+    /// Game controller tunables.
+    pub pad: PadConfig,
 }
 
 impl Default for Config {
@@ -79,6 +82,7 @@ impl Default for Config {
             pinch_max_radius: 400.0,
             pinch_idle_ms: 150,
             bindings: Bindings::default(),
+            pad: PadConfig::default(),
         }
     }
 }
@@ -116,11 +120,24 @@ pub struct InputMapper {
     /// Last cursor position in content units (what the guest last saw).
     pos: Pt,
     text: Option<TextFocus>,
+    pad: PadState,
 }
 
 impl InputMapper {
     pub fn new(cfg: Config) -> InputMapper {
-        InputMapper { cfg, gesture: Gesture::None, owner: None, pos: (0.0, 0.0), text: None }
+        let bounds = cfg.content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
+        let pad = PadState::new(cfg.pad, bounds);
+        InputMapper { cfg, gesture: Gesture::None, owner: None, pos: (0.0, 0.0), text: None, pad }
+    }
+
+    /// The controller state (cursor, game knowledge for walking and snapping).
+    pub fn pad(&self) -> &PadState {
+        &self.pad
+    }
+
+    /// The controller state, to tell it where the game's D-pad and tiles are.
+    pub fn pad_mut(&mut self) -> &mut PadState {
+        &mut self.pad
     }
 
     /// True while a touch, pan or pinch is in progress.
@@ -141,6 +158,7 @@ impl InputMapper {
     /// The game announced a new content size (`VerdeActivity.setContentSize`).
     pub fn set_content(&mut self, width: f32, height: f32) {
         self.cfg.content = Some((width, height));
+        self.pad.set_bounds((width, height));
     }
 
     /// Contents of the focused text field as the host tracks it, if one has focus.
@@ -167,12 +185,14 @@ impl InputMapper {
                 self.end_gesture(now_ms, sink);
             }
         }
+        self.pad.tick(now_ms, sink);
     }
 
     /// Process one host event.
     pub fn handle(&mut self, ev: HostEvent, now_ms: i64, sink: &mut dyn EventSink) {
         match ev {
             HostEvent::MouseMove { x, y } => {
+                self.pad.mouse_moved();
                 let p = self.to_content(x, y);
                 self.move_to(p, now_ms, sink);
             }
@@ -192,10 +212,15 @@ impl InputMapper {
             // A desktop game keeps running unfocused. Android's resign-active would pause the game (it shows its pause
             // menu), and the focus flips of a compositor around every click would trigger that, so focus changes
             // only drop a touch in progress. Only a minimised window goes to the background.
-            HostEvent::FocusGained => {}
-            HostEvent::FocusLost => self.cancel_gesture(now_ms, sink),
+            HostEvent::FocusGained => self.pad.set_focused(true),
+            HostEvent::FocusLost => {
+                self.cancel_gesture(now_ms, sink);
+                self.pad.release(now_ms, sink);
+                self.pad.set_focused(false);
+            }
             HostEvent::Minimized => {
                 self.cancel_gesture(now_ms, sink);
+                self.pad.release(now_ms, sink);
                 sink.deliver(&GuestEvent::Lifecycle(Lifecycle::WillResignActive));
                 sink.deliver(&GuestEvent::Lifecycle(Lifecycle::DidEnterBackground));
             }
@@ -208,6 +233,10 @@ impl InputMapper {
                 sink.deliver(&GuestEvent::SurfaceChanged { width, height });
             }
             HostEvent::Quit => sink.host_action(HostAction::Quit),
+            HostEvent::Pad(e) => {
+                let busy = self.gesture != Gesture::None;
+                self.pad.handle(e, now_ms, busy, sink);
+            }
         }
     }
 
@@ -266,7 +295,8 @@ impl InputMapper {
         if matches!(self.gesture, Gesture::Pinch { anchor: None, .. }) {
             self.end_gesture(now_ms, sink);
         }
-        if self.gesture != Gesture::None {
+        // Pointer 0 is taken by another gesture or by the controller's touch.
+        if self.gesture != Gesture::None || self.pad.touching() {
             return;
         }
         self.pos = p;
@@ -338,6 +368,13 @@ impl InputMapper {
         if b.fullscreen.fires(Input::Key(key), mods) {
             if pressed && !repeat {
                 sink.host_action(HostAction::ToggleFullscreen);
+            }
+            return;
+        }
+        // A letter would be typed into a focused text field instead.
+        if b.hide_ui.fires(Input::Key(key), mods) && self.text.is_none() {
+            if pressed && !repeat {
+                sink.host_action(HostAction::ToggleGameButtons);
             }
             return;
         }
