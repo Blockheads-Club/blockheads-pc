@@ -14,6 +14,18 @@ Umbrella rules: `../AGENTS.md`.
 - `third_party/dynarmic` is a verbatim pinned copy (see `third_party/dynarmic/VENDORED.md`); do not edit it, patch in
   the shim instead.
 
+## Test gates (agents: use these, not ad-hoc cargo commands)
+- Every commit: `scripts/check-fast.sh` (changed crates only: fmt, clippy, coverage 100 % via `COVERAGE_PACKAGES`,
+  doctests, tests of dependent crates, app vitest if `app/` changed; ~1 min). `--dry-run` shows the selection.
+- Before merging into `dev`: `scripts/check-full.sh` (workspace fmt/clippy with `play`, `scripts/coverage.sh`, doctests,
+  app check + vitest + Playwright in parallel, then `scripts/smoke-game.sh`, a ~35 s headless boot -> world -> menu run).
+  Never merge with a red full gate; no multi-round benchmarks in gates.
+- Worktrees share build caches: dynarmic archives in `~/.cache/bhpc/dynarmic-<hash>` (reused by every profile and
+  checkout, `BHPC_DYNARMIC_CACHE=0` off) and sccache for crates.io deps when installed. Keep one `target/` per
+  worktree (no shared `CARGO_TARGET_DIR`: cargo's lock would serialise agents). Run the scripts with `TMPDIR` on a disk
+  with space if `/tmp` (tmpfs) is full.
+- Playwright: `PW_PORT` picks the preview port (check-full uses a free one) so parallel worktrees do not collide.
+
 ## Gotchas learned in M0
 - dynarmic forbids nested `Run()` on one `Jit`; host functions that must call guest code use `Cpu::tail_call`
   (thunk stubs return through `r12`).

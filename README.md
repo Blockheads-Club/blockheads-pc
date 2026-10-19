@@ -42,9 +42,11 @@ Build prerequisites (only x86_64 Linux is verified so far; arm64, Windows and ma
 | Boost headers | dynarmic (header-only use) | Arch `boost`, Debian/Ubuntu `libboost-dev`, Fedora `boost-devel` |
 | `cargo-llvm-cov` | `scripts/coverage.sh` only | `cargo install cargo-llvm-cov` |
 
-Every cargo profile (debug, release, the coverage target dir) builds its own copy of dynarmic: the **first build of
-each takes about 3.5 minutes** (a clean `cargo test --workspace` plus the coverage build is therefore about 8 to 10
-minutes), later builds are incremental. CI caches the dynarmic build.
+dynarmic and the shim are built once per machine: `crates/bhpc-cpu/build.rs` keeps the archives in
+`~/.cache/bhpc/dynarmic-<hash>` (the hash covers the vendored sources, the shim, the CMake wrapper, the target, the
+compiler and its flags) and every later build with the same inputs links them from there, whatever the profile, the
+target dir or the checkout. Only the first build on a machine pays the **~1.5-3.5 minutes** of CMake.
+`BHPC_DYNARMIC_CACHE=0` turns the cache off, `BHPC_DYNARMIC_CACHE=DIR` moves it. CI also caches the dynarmic build.
 
 ```sh
 cargo build --release
@@ -189,11 +191,32 @@ Rebuilding the fixture needs the Android NDK (r27, `ANDROID_NDK_HOME` or `~/Andr
 
 ## Tests and coverage
 
+Two tiers; both keep the 100 % coverage rule:
+
 ```sh
-cargo test --workspace
-scripts/coverage.sh            # fails below 100% line or function coverage
+scripts/check-fast.sh          # every commit: only the crates the change touches (~1 min)
+scripts/check-full.sh          # before merging into dev: everything below plus a headless game smoke test
+scripts/coverage.sh            # fails below 100% line or function coverage (whole workspace)
 scripts/coverage.sh --html     # browsable report in target/llvm-cov/html
 ```
+
+* `check-fast.sh` diffs against the merge base with `dev` (`BASE=<ref>` to change; working-tree changes count) and
+  runs, for the changed crates: `cargo fmt --check`, `clippy -D warnings`, `scripts/coverage.sh` limited to them
+  (`COVERAGE_PACKAGES`; this runs their tests and enforces 100 %) and their doctests; then `cargo test` for the
+  workspace crates that depend on them, and the app's vitest (100 % thresholds) when `app/` changed. A change to
+  `Cargo.toml`, `Cargo.lock`, `third_party/` or the coverage script selects every crate. `--dry-run` prints the
+  selection; `CRATES="bhpc-x bhpc-y"` overrides it.
+* `check-full.sh` runs `cargo fmt --check`, `clippy --workspace --all-targets --features bhpc-run/play -D warnings`,
+  `scripts/coverage.sh` (every workspace test, instrumented, 100 % gate), the doctests, and in parallel the app's
+  `bun run check`, vitest (100 %) and Playwright e2e on a free port (`PW_PORT`); then `scripts/smoke-game.sh`.
+* `scripts/smoke-game.sh` builds the release play binary and runs the game once under Xvfb with a private D-Bus
+  session, HOME and data dir: boot, the first-run world creation, in the world, exit to the main menu, under a time
+  limit (`BHPC_SMOKE_TIMEOUT`, default 150 s; about 35 s here). It needs your own APK (`BHPC_APK`, else the
+  launcher's imported copy, else `~/Downloads/The Blockheads_1.7.6.apk`) and is skipped without one.
+* Both scripts use `sccache` as `RUSTC_WRAPPER` when it is installed (`cargo install sccache --locked
+  --no-default-features`; `BHPC_SCCACHE=0` opts out): crates.io dependencies without build scripts are then compiled
+  once per machine instead of once per checkout. Each checkout keeps its own `target/` (a shared `CARGO_TARGET_DIR`
+  would make parallel agent worktrees wait on cargo's lock and rebuild each other's workspace crates).
 
 The gate (`scripts/coverage.sh`, run by the GitHub Actions workflow `.github/workflows/ci.yml` together with fmt,
 build, `clippy -D warnings` and the tests) requires **100% of lines and functions** of our own Rust code.
