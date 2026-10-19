@@ -8,6 +8,10 @@ pub const MIN_EDGE: u32 = 320;
 pub const MAX_EDGE: u32 = 16384;
 /// UI scale limits.
 pub const SCALE_RANGE: (f32, f32) = (0.5, 4.0);
+/// Frame-rate caps the launcher offers (0 = no cap: vsync, if on, is the only limit).
+pub const FPS_LIMITS: [u32; 5] = [0, 30, 60, 120, 144];
+/// Accepted range of a non-zero frame-rate cap (a hand-edited file may hold any value in it).
+pub const FPS_LIMIT_RANGE: (u32, u32) = (10, 1000);
 
 /// Window / graphics settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -19,11 +23,23 @@ pub struct WindowOptions {
     pub vsync: bool,
     /// Multiplier for the launcher and in-window UI.
     pub ui_scale: f32,
+    /// Draw a frames-per-second counter in the top-left corner of the game picture.
+    pub show_fps: bool,
+    /// Present at most this many frames per second (0 = no cap; with vsync on, the lower of the two applies).
+    pub fps_limit: u32,
 }
 
 impl Default for WindowOptions {
     fn default() -> Self {
-        WindowOptions { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1.0 }
+        WindowOptions {
+            width: 1024,
+            height: 768,
+            fullscreen: false,
+            vsync: true,
+            ui_scale: 1.0,
+            show_fps: false,
+            fps_limit: 60,
+        }
     }
 }
 
@@ -37,6 +53,12 @@ impl WindowOptions {
         }
         if !(SCALE_RANGE.0..=SCALE_RANGE.1).contains(&self.ui_scale) {
             return Err(format!("ui_scale {} is outside {}..={}", self.ui_scale, SCALE_RANGE.0, SCALE_RANGE.1));
+        }
+        if self.fps_limit != 0 && !(FPS_LIMIT_RANGE.0..=FPS_LIMIT_RANGE.1).contains(&self.fps_limit) {
+            return Err(format!(
+                "fps_limit {} is outside {}..={} (0 = no limit)",
+                self.fps_limit, FPS_LIMIT_RANGE.0, FPS_LIMIT_RANGE.1
+            ));
         }
         Ok(())
     }

@@ -116,8 +116,9 @@ impl LaunchConfig {
         crate::apk::validate(&self.apk, self.force).map_err(LauncherError::Apk)
     }
 
-    /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--force`, `--fullscreen`, `--no-vsync`
-    /// and a `--bind ACTION=BINDING` for every key binding that is not the default.
+    /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--fps-limit N` (0 = none), `--force`,
+    /// `--fullscreen`, `--no-vsync`, `--show-fps` and a `--bind ACTION=BINDING` for every key binding that is not the
+    /// default.
     pub fn run_args(&self) -> Vec<String> {
         let mut a = vec![
             "--apk".to_string(),
@@ -126,10 +127,15 @@ impl LaunchConfig {
             self.data_dir.display().to_string(),
             "--window".to_string(),
             format!("{}x{}", self.window.width, self.window.height),
+            "--fps-limit".to_string(),
+            self.window.fps_limit.to_string(),
         ];
-        for (on, flag) in
-            [(self.force, "--force"), (self.window.fullscreen, "--fullscreen"), (!self.window.vsync, "--no-vsync")]
-        {
+        for (on, flag) in [
+            (self.force, "--force"),
+            (self.window.fullscreen, "--fullscreen"),
+            (!self.window.vsync, "--no-vsync"),
+            (self.window.show_fps, "--show-fps"),
+        ] {
             if on {
                 a.push(flag.to_string());
             }

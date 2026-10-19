@@ -3,7 +3,7 @@
 //!
 //! * [`apk`]: validate the user's APK against the known `libApplication.so` hashes.
 //! * [`keys`]: actions and bindings matching the `bhpc-input` mappings, parsed from / printed as text.
-//! * [`window`]: resolution, fullscreen, vsync and UI scale.
+//! * [`window`]: resolution, fullscreen, vsync, UI scale, FPS counter and frame-rate cap.
 //! * [`config`]: [`LaunchConfig`], the TOML-persisted result that `bhpc-run` consumes.
 //! * [`import`]: Android save folder or zip into the `bhpc-vfs` data dir layout.
 //! * [`wizard`]: the first-run step state machine.

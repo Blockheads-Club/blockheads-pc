@@ -144,13 +144,21 @@ fn import_summary_groups_items() {
 fn run_args_and_config_expansion() {
     let t = tempfile::tempdir().unwrap();
     let mut c = LaunchConfig::new("/x/game.apk", "/data");
-    assert_eq!(c.run_args(), ["--apk", "/x/game.apk", "--data-dir", "/data", "--window", "1024x768"]);
+    assert_eq!(
+        c.run_args(),
+        ["--apk", "/x/game.apk", "--data-dir", "/data", "--window", "1024x768", "--fps-limit", "60"]
+    );
     c.force = true;
     c.window.fullscreen = true;
     c.window.vsync = false;
     c.window.width = 1600;
     c.window.height = 900;
-    assert_eq!(c.run_args()[4..], ["--window", "1600x900", "--force", "--fullscreen", "--no-vsync"]);
+    c.window.show_fps = true;
+    c.window.fps_limit = 0;
+    assert_eq!(
+        c.run_args()[4..],
+        ["--window", "1600x900", "--fps-limit", "0", "--force", "--fullscreen", "--no-vsync", "--show-fps"]
+    );
 
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     assert_eq!(expand_args(&s(&["--init-only"])).unwrap(), s(&["--init-only"]));
