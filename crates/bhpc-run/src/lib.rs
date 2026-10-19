@@ -4,6 +4,7 @@ pub mod apkrun;
 pub mod bench;
 pub mod dl;
 pub mod embed;
+pub mod fastdiv;
 pub mod fpsunlock;
 pub mod framestats;
 pub mod gamespeed;
@@ -218,6 +219,8 @@ mod tests;
 mod tests_dl;
 #[cfg(test)]
 mod tests_embed;
+#[cfg(test)]
+mod tests_fastdiv;
 #[cfg(test)]
 mod tests_fpsunlock;
 #[cfg(test)]

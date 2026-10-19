@@ -130,3 +130,19 @@ Umbrella rules: `../AGENTS.md`.
 - Text: labels use `TextStyle` (font asset `BlockheadsFont-Regular.otf` from the APK, size in px, colour, alignment,
   lines, shadow); missing/unparsable fonts fall back to the bundled Liberation Sans. `dumpviews` shows bg colour, clip,
   bitmaps (`WxH:opaque-pixels`) and the text style.
+
+## Gotchas learned: JIT tuning and guest HLE (perf/jit-hle)
+- `CpuOptions::fastmem_exclusive` (ldrex/strex inline through fastmem, the global monitor still arbitrates) and
+  `fast_fp` (dynarmic `Unsafe_InaccurateNaN | Unsafe_IgnoreStandardFPCRValue`: NaN payloads may differ, NEON honours
+  the guest FPSCR instead of forcing flush-to-zero/default-NaN) are on by default; `BHPC_JIT_SAFE=1` turns both off.
+  Never enable `Unsafe_IgnoreGlobalMonitor` (guest threads share the monitor).
+- Thunk dispatch (`tramp::svc`) reads the handler from a lock-free slot array (`ThunkTable::slots`): no RwLock or
+  `Arc` clone per call, which matters once guest threads run in parallel. Rebound handlers stay alive in the table.
+- libgcc's integer division helpers in `libv.so` (`__aeabi_uidiv`, `__aeabi_idivmod`, `__modsi3`, ...) are redirected
+  to `udiv`/`sdiv` routines (`bhpc-run/src/fastdiv.rs`) after linking; zero divisors still take the helper's own path.
+  `BHPC_GUEST_HLE=0` disables it. Differential check against the real libv:
+  `BHPC_APK=... cargo test -p bhpc-run --test fastdiv_apk -- --ignored`.
+- Profiling: `PERF_BUILDID_DIR=DIR` makes dynarmic write `DIR/perf-PID.map` (one line per translated block,
+  `a32_a<PC>_...`), usable with `perf report` or any sampler that records host RIPs. libc/libm/malloc are already host
+  thunks; guest-side hot spots are diffuse (objc_msgSend ~3%, zlib/png/Skia during loading), and a thunk round trip
+  (~25 ns) costs more than objc_msgSend's cache-hit path, so it stays guest code.

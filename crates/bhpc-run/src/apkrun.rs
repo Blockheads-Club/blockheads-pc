@@ -365,6 +365,10 @@ impl Session {
             linker.load_all(&[ROOT_LIB], &mut apk, &mut hle)?
         };
         register_exidx(&linker, &st);
+        let env = std::env::var_os(crate::fastdiv::DISABLE_ENV);
+        let mods = linker.modules();
+        crate::fastdiv::install_all(cpu.mem(), env.as_deref(), mods.len(), &|i, name| mods[i].export(name))?;
+        cpu.clear_cache();
         report(Phase::Libraries, 1, 1);
         let mut platform = bhpc_jni::Platform::for_guest(&storage.guest);
         if let Some((w, h)) = cfg.screen {
