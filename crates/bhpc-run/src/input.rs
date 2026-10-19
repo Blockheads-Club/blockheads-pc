@@ -4,7 +4,10 @@
 use crate::mainq::MainQueue;
 use bhpc_app::{Event, Key, MouseButton as AppButton};
 use bhpc_cpu::Cpu;
-use bhpc_input::{EventSink, Geometry, GuestEvent, HostAction, HostEvent, HostKey, Mods, MouseButton};
+use bhpc_input::pad::axis_value;
+use bhpc_input::{
+    EventSink, Geometry, GuestEvent, HostAction, HostEvent, HostKey, Mods, MouseButton, PadAxis, PadButton, PadEvent,
+};
 use bhpc_jni::{Data, Obj, TouchPhase, Ty, Value, Vm};
 use std::sync::Arc;
 
@@ -39,6 +42,14 @@ pub fn host_event(ev: &Event) -> Option<HostEvent> {
             HostEvent::Key { key: host_key(*key), pressed: *pressed, repeat: *repeat, mods: mods(m) }
         }
         Event::Text(t) => HostEvent::TextInput(t.clone()),
+        Event::PadAdded(id) => HostEvent::Pad(PadEvent::Added(*id)),
+        Event::PadRemoved(id) => HostEvent::Pad(PadEvent::Removed(*id)),
+        Event::PadButton { id, button, pressed } => {
+            HostEvent::Pad(PadEvent::Button { pad: *id, button: PadButton::from_sdl(*button), pressed: *pressed })
+        }
+        Event::PadAxis { id, axis, value } => {
+            HostEvent::Pad(PadEvent::Axis { pad: *id, axis: PadAxis::from_sdl(*axis), value: axis_value(*value) })
+        }
     })
 }
 
@@ -88,6 +99,8 @@ pub struct JniSink<'a> {
     /// Where touch, key and text natives run: the guest main thread (the only one with a GL context). `None`
     /// calls them on the current thread.
     pub main: Option<Arc<MainQueue>>,
+    /// The game's controls, told when the controller's walking finger goes down or up (before the game sees it).
+    pub game: Option<Arc<crate::gameui::GameUi>>,
 }
 
 /// Events whose natives the game handles on its main thread (the rest are lifecycle/surface/focus natives that
@@ -159,19 +172,23 @@ pub fn args_for(vm: &Vm, ev: &GuestEvent, i: usize) -> Vec<Value> {
     }
 }
 
-/// The single-finger touch of `ev` for the control layer (`Vm::ui_touch`); multi-finger gestures never hit controls.
+/// The touch of pointer 0 in `ev` for the control layer (`Vm::ui_touch`) when it is the only finger; multi-finger
+/// gestures and the controller's walking finger never hit controls.
 pub fn control_touch(ev: &GuestEvent) -> Option<(TouchPhase, f32, f32)> {
     match ev {
         GuestEvent::TouchBegin { id: 0, x, y, .. } => Some((TouchPhase::Begin, *x, *y)),
         GuestEvent::TouchEnd { id: 0, x, y, .. } => Some((TouchPhase::End, *x, *y)),
-        GuestEvent::TouchMove { ids, xs, ys, .. } if ids.len() == 1 => Some((TouchPhase::Move, xs[0], ys[0])),
-        GuestEvent::TouchCancel { ids, xs, ys, .. } if ids.len() == 1 => Some((TouchPhase::Cancel, xs[0], ys[0])),
+        GuestEvent::TouchMove { ids, xs, ys, .. } if ids[..] == [0] => Some((TouchPhase::Move, xs[0], ys[0])),
+        GuestEvent::TouchCancel { ids, xs, ys, .. } if ids[..] == [0] => Some((TouchPhase::Cancel, xs[0], ys[0])),
         _ => None,
     }
 }
 
 impl EventSink for JniSink<'_> {
     fn deliver(&mut self, ev: &GuestEvent) -> bool {
+        if let Some(g) = &self.game {
+            g.track_walk(ev);
+        }
         if let Some((phase, x, y)) = control_touch(ev) {
             // The touch is in content pixels, the Java views are laid out in screen pixels.
             let (x, y) = content_to_screen(self.vm.content_scale(), x, y);

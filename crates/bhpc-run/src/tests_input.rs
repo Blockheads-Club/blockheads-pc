@@ -44,6 +44,17 @@ fn window_events_are_translated() {
         })
     );
     assert_eq!(host_event(&Event::Text("é".into())), Some(HostEvent::TextInput("é".into())));
+    use bhpc_input::{PadAxis, PadButton, PadEvent};
+    assert_eq!(host_event(&Event::PadAdded(4)), Some(HostEvent::Pad(PadEvent::Added(4))));
+    assert_eq!(host_event(&Event::PadRemoved(4)), Some(HostEvent::Pad(PadEvent::Removed(4))));
+    assert_eq!(
+        host_event(&Event::PadButton { id: 4, button: 1, pressed: true }),
+        Some(HostEvent::Pad(PadEvent::Button { pad: 4, button: PadButton::B, pressed: true }))
+    );
+    assert_eq!(
+        host_event(&Event::PadAxis { id: 4, axis: 2, value: 32767 }),
+        Some(HostEvent::Pad(PadEvent::Axis { pad: 4, axis: PadAxis::RightX, value: 1.0 }))
+    );
 }
 
 #[test]
@@ -118,8 +129,15 @@ fn delivery_calls_natives_and_collects_errors() {
     let c = calls.clone();
     jni.vm.set_log(move |m| c.lock().unwrap().push(m.to_string()));
     jni.set_trace_calls(true);
-    let mut sink =
-        JniSink { vm: &jni.vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false, main: None };
+    let mut sink = JniSink {
+        vm: &jni.vm,
+        cpu: &mut cpu,
+        actions: Vec::new(),
+        errors: Vec::new(),
+        returned: false,
+        main: None,
+        game: None,
+    };
     // No guest is loaded, so the natives are reported stubs that answer 0/void.
     assert!(!sink.deliver(&GuestEvent::KeyDown { key_code: 4, unicode: 0, meta: 0, time_ms: 1 }), "boolean 0");
     assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 0.0, y: 0.0, time_ms: 1 }), "void is accepted");
@@ -158,6 +176,9 @@ fn single_finger_touches_reach_the_control_layer() {
     );
     let two = GuestEvent::TouchMove { ids: vec![0, 1], xs: vec![1.0, 2.0], ys: vec![1.0, 2.0], time_ms: 0 };
     assert_eq!(control_touch(&two), None);
+    // The controller's walking finger alone is not pointer 0.
+    let walk = GuestEvent::TouchMove { ids: vec![2], xs: vec![1.0], ys: vec![1.0], time_ms: 0 };
+    assert_eq!(control_touch(&walk), None);
     assert_eq!(control_touch(&GuestEvent::TouchBegin { id: 1, x: 0.0, y: 0.0, time_ms: 0 }), None);
 }
 
@@ -187,8 +208,15 @@ fn controls_take_touches_and_text_goes_to_the_focused_field() {
         vm.call_method(&mut cpu, window, "addSubview", "(Lcom/apportable/ui/View;)V", &[Value::Ref(Some(child))])
             .unwrap();
     }
-    let mut sink =
-        JniSink { vm: &vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false, main: None };
+    let mut sink = JniSink {
+        vm: &vm,
+        cpu: &mut cpu,
+        actions: Vec::new(),
+        errors: Vec::new(),
+        returned: false,
+        main: None,
+        game: None,
+    };
     // A press on the button is swallowed by the control layer.
     assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
     assert!(sink.deliver(&GuestEvent::TouchEnd { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
@@ -255,11 +283,23 @@ fn touch_key_and_text_natives_run_on_the_main_thread_queue() {
     let c2 = cell.clone();
     let q = MainQueue::new(move |c| c2.get().unwrap().drain(c), 5);
     cell.set(q.clone()).ok();
-    let mut sink =
-        JniSink { vm: &jni.vm, cpu: &mut cpu, actions: Vec::new(), errors: Vec::new(), returned: false, main: Some(q) };
+    let game = std::sync::Arc::new(crate::gameui::GameUi::default());
+    let mut sink = JniSink {
+        vm: &jni.vm,
+        cpu: &mut cpu,
+        actions: Vec::new(),
+        errors: Vec::new(),
+        returned: false,
+        main: Some(q),
+        game: Some(game.clone()),
+    };
     assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 0.0, y: 0.0, time_ms: 1 }));
     assert!(!sink.deliver(&GuestEvent::KeyDown { key_code: 4, unicode: 0, meta: 0, time_ms: 1 }));
     // Surface events stay on the calling thread.
     assert!(sink.deliver(&GuestEvent::SurfaceChanged { width: 1, height: 1 }));
     assert!(sink.errors.is_empty(), "{:?}", sink.errors);
+    // The walking finger is announced to the game's controls before the game gets it.
+    game.toggle();
+    sink.deliver(&GuestEvent::TouchBegin { id: 2, x: 0.0, y: 0.0, time_ms: 2 });
+    assert!(!game.suppress(true));
 }

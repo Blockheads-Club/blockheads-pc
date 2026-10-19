@@ -72,3 +72,40 @@ fn the_window_default_ignores_overlays() {
     }
     Bare.set_overlay(None);
 }
+
+#[test]
+fn the_cursor_and_messages_become_sprites_rebuilt_only_on_change() {
+    use crate::overlay::{PadView, SpriteCache, MESSAGE_TIME};
+    use std::time::{Duration, Instant};
+    let now = Instant::now();
+    let mut cache = SpriteCache::default();
+    let mut v = PadView { cursor: Some((250.0, 200.0)), tile: None, content: (1000.0, 800.0), message: None };
+    // A 2000x1600 picture: twice the content, the default cursor is 64 px.
+    let s = cache.sprites(&v, (2000, 1600), now);
+    assert_eq!(s.len(), 1);
+    assert_eq!((s[0].overlay.width, s[0].at), (64, (0.25, 0.25)));
+    let serial = s[0].overlay.serial;
+    v.cursor = Some((500.0, 400.0));
+    let s = cache.sprites(&v, (2000, 1600), now);
+    assert_eq!((s[0].overlay.serial, s[0].at), (serial, (0.5, 0.5)), "same picture, new place");
+    v.tile = Some(20.0);
+    let s = cache.sprites(&v, (2000, 1600), now);
+    assert_eq!(s[0].overlay.width, 40);
+    assert_ne!(s[0].overlay.serial, serial);
+    // A message shows for a while, under the cursor's slot.
+    v.message = Some(("GAME BUTTONS HIDDEN".into(), now));
+    let s = cache.sprites(&v, (2000, 1600), now + Duration::from_millis(10));
+    assert_eq!(s.len(), 2);
+    assert_eq!(s[1].at, (0.5, 0.12));
+    let m = s[1].overlay.serial;
+    assert_eq!(cache.sprites(&v, (2000, 1600), now).last().unwrap().overlay.serial, m);
+    v.cursor = None;
+    let s = cache.sprites(&v, (2000, 1600), now + MESSAGE_TIME - Duration::from_millis(1));
+    assert_eq!((s.len(), s[0].overlay.serial), (1, m));
+    assert!(cache.sprites(&v, (2000, 1600), now + MESSAGE_TIME).is_empty(), "expired");
+    v.message = Some(("GAME BUTTONS SHOWN".into(), now));
+    assert_ne!(cache.sprites(&v, (2000, 1600), now)[0].overlay.serial, m);
+    // Nothing to place things on.
+    assert!(cache.sprites(&v, (0, 1600), now).is_empty());
+    assert!(cache.sprites(&PadView::default(), (2000, 1600), now).is_empty());
+}

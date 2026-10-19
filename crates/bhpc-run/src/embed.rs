@@ -30,6 +30,8 @@ pub struct PlayFlags {
     pub unlock_fps: bool,
     /// World speed multiplier (`--game-speed F`, default 1: untouched; see `gamespeed`).
     pub game_speed: f64,
+    /// Game controllers drive the game (off with `--no-controller`).
+    pub controller: bool,
 }
 
 /// Reads the flags above from a command line.
@@ -67,6 +69,7 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             })
             .transpose()?
             .unwrap_or(1.0),
+        controller: !args.iter().any(|a| a == "--no-controller"),
     })
 }
 

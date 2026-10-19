@@ -171,6 +171,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             cfg.fps_position = f.fps_position;
             cfg.unlock_fps = f.unlock_fps;
             cfg.game_speed = f.game_speed;
+            cfg.controller = f.controller;
         }
         Err(e) => {
             let _ = writeln!(stderr, "bhpc-run: {e}");

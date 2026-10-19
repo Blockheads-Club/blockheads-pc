@@ -19,6 +19,9 @@
 //! +100  minimize               # minimised / `restore`d: the game goes to the background and back
 //! +100  resize 1600 900        # resize the window (logical pixels); `key f11` toggles fullscreen
 //! +100  dumpviews               # print the view tree (kind, window rectangle, text) to stderr
+//! +100  padadd 0                # a game controller with instance id 0 is plugged in (`padremove 0`: unplugged)
+//! +100  pad a 80                # press controller button `a` for 80 ms (default 80; `paddown a` / `padup a`)
+//! +100  stick right 0.5 -1      # tilt a stick (`left`/`right`) to x, y (-1..1); `stick right 0 0` centres it
 //! +100  wait                   # no-op, only moves the clock
 //! 60000 quit
 //! ```
@@ -58,6 +61,25 @@ pub fn click_events(x: f32, y: f32) -> [(u64, Event); 3] {
 
 /// How long a `waittext`/`clicktext` waits for its text.
 pub const WAIT_TIMEOUT_MS: u64 = 180_000;
+
+/// SDL game controller button number of a button name (`a b x y back guide start ls rs lb rb up down left right`).
+pub fn pad_button(name: &str) -> Option<u8> {
+    const NAMES: [&str; 15] =
+        ["a", "b", "x", "y", "back", "guide", "start", "ls", "rs", "lb", "rb", "up", "down", "left", "right"];
+    NAMES.iter().position(|n| n.eq_ignore_ascii_case(name)).map(|i| i as u8)
+}
+
+/// Scripted controllers are instance 0.
+const PAD: u32 = 0;
+
+fn pad_event(button: u8, pressed: bool) -> Event {
+    Event::PadButton { id: PAD, button, pressed }
+}
+
+/// SDL's raw axis value of a -1..1 tilt.
+fn raw_axis(v: f32) -> i16 {
+    (v.clamp(-1.0, 1.0) * 32767.0).round() as i16
+}
 
 /// HID usage id of a key name.
 pub fn key_code(name: &str) -> Option<Key> {
@@ -187,6 +209,43 @@ fn command(t: u64, words: &[&str], rest: &str) -> Result<(Vec<Step>, u64), Strin
         }
         "minimize" | "restore" => {
             out.push((t, Action::Event(Event::Visible(words[0] == "restore"))));
+            t
+        }
+        "padadd" | "padremove" => {
+            let id = match words.get(1) {
+                Some(_) => num(words, 1, "controller id")?,
+                None => PAD,
+            };
+            let e = if words[0] == "padadd" { Event::PadAdded(id) } else { Event::PadRemoved(id) };
+            out.push((t, Action::Event(e)));
+            t
+        }
+        "pad" | "paddown" | "padup" => {
+            let name = words.get(1).copied().unwrap_or("");
+            let b = pad_button(name).ok_or_else(|| format!("unknown controller button {name:?}"))?;
+            match words[0] {
+                "pad" => {
+                    let ms: u64 = if words.len() > 2 { num(words, 2, "ms")? } else { 80 };
+                    out.push((t, Action::Event(pad_event(b, true))));
+                    out.push((t + ms, Action::Event(pad_event(b, false))));
+                    t + ms
+                }
+                which => {
+                    out.push((t, Action::Event(pad_event(b, which == "paddown"))));
+                    t
+                }
+            }
+        }
+        "stick" => {
+            let first = match words.get(1).copied() {
+                Some("left") => 0,
+                Some("right") => 2,
+                _ => return Err("stick needs left or right".into()),
+            };
+            let (x, y): (f32, f32) = (num(words, 2, "x")?, num(words, 3, "y")?);
+            for (axis, v) in [(first, x), (first + 1, y)] {
+                out.push((t, Action::Event(Event::PadAxis { id: PAD, axis, value: raw_axis(v) })));
+            }
             t
         }
         "wait" => t,

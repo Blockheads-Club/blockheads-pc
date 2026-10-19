@@ -1,4 +1,4 @@
-use crate::script::{build, click_events, click_line, key_code, parse, Action};
+use crate::script::{build, click_events, click_line, key_code, pad_button, parse, Action};
 use bhpc_app::{Event, Key, Mods, MouseButton};
 
 fn at(steps: &[(u64, Action)], i: usize) -> u64 {
@@ -128,4 +128,37 @@ fn window_commands() {
     assert!(matches!(&s[5].1, Action::Event(Event::Key { key, pressed: true, .. }) if key.0 == 68));
     assert!(parse("0 focus maybe").unwrap_err().contains("line 1"));
     assert!(parse("0 resize 5").is_err());
+}
+
+#[test]
+fn controller_commands() {
+    let s = parse("0 padadd\n+0 padadd 3\n+10 pad a\n+0 pad start 200\n+0 paddown rb\n+5 padup rb\n+0 stick left 1 -0.5\n+0 stick right 0 2\n+0 padremove 3\n").unwrap();
+    let ev = |i: usize| match &s[i].1 {
+        Action::Event(e) => (s[i].0, e.clone()),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(ev(0), (0, Event::PadAdded(0)));
+    assert_eq!(ev(1), (0, Event::PadAdded(3)));
+    assert_eq!(ev(2), (10, Event::PadButton { id: 0, button: 0, pressed: true }));
+    assert_eq!(ev(3), (90, Event::PadButton { id: 0, button: 0, pressed: false }));
+    assert_eq!(ev(4), (90, Event::PadButton { id: 0, button: 6, pressed: true }));
+    assert_eq!(ev(5), (290, Event::PadButton { id: 0, button: 6, pressed: false }));
+    assert_eq!(ev(6), (290, Event::PadButton { id: 0, button: 10, pressed: true }));
+    assert_eq!(ev(7), (295, Event::PadButton { id: 0, button: 10, pressed: false }));
+    assert_eq!(ev(8), (295, Event::PadAxis { id: 0, axis: 0, value: 32767 }));
+    assert_eq!(ev(9), (295, Event::PadAxis { id: 0, axis: 1, value: -16384 }));
+    assert_eq!(ev(10), (295, Event::PadAxis { id: 0, axis: 2, value: 0 }));
+    assert_eq!(ev(11), (295, Event::PadAxis { id: 0, axis: 3, value: 32767 }));
+    assert_eq!(ev(12), (295, Event::PadRemoved(3)));
+    assert_eq!(pad_button("RIGHT"), Some(14));
+    assert_eq!(pad_button("z"), None);
+    for (bad, why) in [
+        ("0 pad z\n", "unknown controller button"),
+        ("0 pad a x\n", "bad ms"),
+        ("0 padadd q\n", "controller id"),
+        ("0 stick up 1 1\n", "left or right"),
+        ("0 stick left 1\n", "bad y"),
+    ] {
+        assert!(parse(bad).unwrap_err().contains(why), "{bad}: {}", parse(bad).unwrap_err());
+    }
 }

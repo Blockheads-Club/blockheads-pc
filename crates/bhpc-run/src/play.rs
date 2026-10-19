@@ -86,6 +86,8 @@ pub struct PlayConfig {
     pub unlock_fps: bool,
     /// World speed multiplier, single-player only (`gamespeed`; 1: no hook).
     pub game_speed: f64,
+    /// Game controllers drive the game (`bhpc_input::pad`).
+    pub controller: bool,
     /// Window title.
     pub title: String,
     /// What the buttons, wheel and keys do.
@@ -121,6 +123,7 @@ impl PlayConfig {
             fps_position: bhpc_app::hud::Corner::TopLeft,
             unlock_fps: false,
             game_speed: 1.0,
+            controller: true,
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
             embed: None,
@@ -208,6 +211,8 @@ struct Flags {
     ui_stop: Mutex<Option<String>>,
     /// Registers of the faulting guest thread.
     fail: Mutex<Option<(String, [u32; 16])>>,
+    /// The controller cursor and the host's messages, drawn over the frame.
+    pad_view: Mutex<crate::overlay::PadView>,
 }
 
 /// A failure to get a window or GL context: in-window mode reports that it cannot work here (the launcher falls back
@@ -243,6 +248,8 @@ struct Hooks {
     sdl: Arc<bhpc_app::sdl::SdlGl>,
     /// The frame-rate cap and the FPS counter.
     pace: Mutex<crate::pace::SwapPacer>,
+    /// Pictures of the controller cursor and the messages.
+    sprites: Mutex<crate::overlay::SpriteCache>,
 }
 
 /// Frame file and scratch buffer of the in-window mode.
@@ -345,6 +352,17 @@ impl Hooks {
         let height = self.window.surface_size().1.min(self.window.drawable_size().1);
         if let Some(hud) = self.pace.lock().unwrap_or_else(PoisonError::into_inner).frame(height) {
             self.sdl.set_hud(Some(hud));
+        }
+        {
+            let view = self.flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            let (sw, sh) = self.window.surface_size();
+            let (dw, dh) = self.window.drawable_size();
+            // The game picture as the window letterboxes it.
+            let fit = (dw as f32 / sw.max(1) as f32).min(dh as f32 / sh.max(1) as f32);
+            let picture = ((sw as f32 * fit) as u32, (sh as f32 * fit) as u32);
+            let sprites =
+                self.sprites.lock().unwrap_or_else(PoisonError::into_inner).sprites(&view, picture, Instant::now());
+            self.sdl.set_sprites(sprites);
         }
         // The Java views (popups) go over the game's frame, also in screenshots.
         let vm = self.flags.vm.lock().unwrap_or_else(PoisonError::into_inner).clone();
@@ -504,6 +522,9 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
     if cfg.embed.is_some() {
         // No window of our own: SDL's offscreen driver gives the GL context, the launcher shows the frames.
         std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        // An offscreen window never has the focus, and SDL drops controller input of unfocused applications; the
+        // launcher's focus commands decide instead (`bhpc_input::pad`).
+        std::env::set_var("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
         // The game picks its content size from the screen size once, so start with the size of the launcher's view
         // (its first `size` command) instead of a guess.
         let (first_tx, first_rx) = channel();
@@ -514,9 +535,13 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
         }
     }
     let cfg = &cfg;
-    let (mut backend, gl) =
-        SdlBackend::new(&WindowConfig { title: cfg.title.clone(), size: cfg.window, ..WindowConfig::default() })
-            .map_err(|e| no_window(cfg, e))?;
+    let (mut backend, gl) = SdlBackend::new(&WindowConfig {
+        title: cfg.title.clone(),
+        size: cfg.window,
+        controllers: cfg.controller,
+        ..WindowConfig::default()
+    })
+    .map_err(|e| no_window(cfg, e))?;
     gl.set_vsync_allowed(cfg.vsync);
     let mut icon = include_bytes!("../assets/icon-32.rgba").to_vec();
     backend.set_icon(&mut icon, 32, 32);
@@ -771,6 +796,7 @@ fn boot(
             overlay: crate::overlay::OverlayFeed::default(),
             sdl: sdl.clone(),
             pace: Mutex::new(crate::pace::SwapPacer::new(lock(st).sched.clone(), fps_limit, fps_hud)),
+            sprites: Mutex::default(),
             embed: embed_out.lock().unwrap_or_else(PoisonError::into_inner).take().map(Mutex::new),
         });
         // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.
@@ -828,6 +854,13 @@ fn boot(
             Err(e) => eprintln!("[play] cannot change the game speed: {e}"),
         }
     }
+    let game = match install_game_ui(&mut sess) {
+        Ok(g) => Some(g),
+        Err(e) => {
+            eprintln!("[play] the game's buttons cannot be hidden and the controller cannot walk or zoom: {e}");
+            None
+        }
+    };
     for f in &cfg.trace_fn {
         if let Err(e) = hook_trace(&mut sess, f) {
             eprintln!("[play] cannot trace {f}: {e}");
@@ -887,6 +920,7 @@ fn boot(
     }
     let ui = UiThread {
         main: Some(main_q),
+        game,
         vm: vm.clone(),
         flags: flags.clone(),
         cfg: cfg.clone(),
@@ -944,6 +978,8 @@ fn boot(
 /// What the Android UI thread needs (moved into its start routine).
 struct UiThread {
     main: Option<Arc<crate::mainq::MainQueue>>,
+    /// The game's on-screen controls (hide, walk, zoom, pause), when the hooks went in.
+    game: Option<Arc<GameHooks>>,
     vm: Vm,
     flags: Arc<Flags>,
     cfg: PlayConfig,
@@ -1020,9 +1056,62 @@ impl UiThread {
         let mut mapper = InputMapper::new(InputConfig {
             window: self.cfg.window,
             bindings: self.cfg.bindings,
+            pad: bhpc_input::PadConfig { enabled: self.cfg.controller, ..bhpc_input::PadConfig::default() },
             ..InputConfig::default()
         });
         Ok(self.ui_loop(c, &mut mapper, rx.as_ref()))
+    }
+
+    /// The host actions that steer the game's own controls: hide its buttons, zoom, pause.
+    fn game_actions(&self, c: &mut Cpu, actions: &[HostAction]) {
+        use crate::gameui::{message, zoom_cycle, zoom_step};
+        for a in actions {
+            let Some(g) = &self.game else {
+                if *a == HostAction::ToggleGameButtons {
+                    self.say("GAME BUTTONS CANNOT BE HIDDEN");
+                }
+                continue;
+            };
+            let mem = c.mem().clone();
+            match a {
+                HostAction::ToggleGameButtons => {
+                    let hidden = g.ui.toggle();
+                    eprintln!("[play] game buttons {}", if hidden { "hidden" } else { "shown" });
+                    self.say(message(hidden));
+                }
+                HostAction::ZoomIn | HostAction::ZoomOut | HostAction::ZoomCycle => {
+                    let Some(z) = g.ui.zoom(&mem) else { continue };
+                    let to = match a {
+                        HostAction::ZoomIn => zoom_step(z, true),
+                        HostAction::ZoomOut => zoom_step(z, false),
+                        _ => zoom_cycle(z),
+                    };
+                    g.ui.set_zoom(&mem, to);
+                }
+                HostAction::Pause => {
+                    let Some(world) = g.ui.world(&mem) else { continue };
+                    let (imp, sel) = if g.ui.pause_shown(&mem) { g.resume } else { g.pause };
+                    let main = self.main.clone();
+                    let run = move |c: &mut Cpu| {
+                        c.set_ticks(FOREVER);
+                        if let Err(e) = c.call(imp, &[world, sel]) {
+                            eprintln!("[play] pause: guest stopped: {e:?}");
+                        }
+                    };
+                    match main {
+                        Some(q) => q.call(c, run),
+                        None => run(c),
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Show a short message over the game.
+    fn say(&self, text: &str) {
+        self.flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner).message =
+            Some((text.to_string(), Instant::now()));
     }
 
     /// Press a button of `alert` (`None`: the configured or first button, else the cancel button).
@@ -1122,6 +1211,7 @@ impl UiThread {
                     errors: Vec::new(),
                     returned: false,
                     main: self.main.clone(),
+                    game: self.game.as_ref().map(|g| g.ui.clone()),
                 };
                 match focus {
                     Some(f) => {
@@ -1138,11 +1228,21 @@ impl UiThread {
                 errors: Vec::new(),
                 returned: false,
                 main: self.main.clone(),
+                game: self.game.as_ref().map(|g| g.ui.clone()),
             };
             let mut escape = false;
             // The game announced (or changed) its content size: touches map into it.
             if let Some((w, h)) = vm.content_size().filter(|s| Some(*s) != mapper.geometry().content) {
                 mapper.set_content(w, h);
+            }
+            if let Some(g) = &self.game {
+                let content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
+                let mem = sink.cpu.mem().clone();
+                let dpad = g.ui.dpad(&mem).and_then(|(size, right)| {
+                    crate::gameui::dpad_centre(size, content, right, crate::gameui::DPAD_INSET)
+                });
+                mapper.pad_mut().set_grid(g.ui.grid(&mem, content));
+                mapper.pad_mut().set_dpad(dpad);
             }
             let pending: Vec<Event> = std::iter::from_fn(|| rx.and_then(|r| r.try_recv().ok())).collect();
             for ev in crate::input::coalesce_moves(pending) {
@@ -1171,6 +1271,13 @@ impl UiThread {
             if actions.contains(&HostAction::ToggleFullscreen) && cfg.embed.is_none() {
                 flags.toggle_fullscreen.store(true, Ordering::SeqCst);
             }
+            self.game_actions(c, &actions);
+            {
+                let mut v = flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner);
+                v.cursor = mapper.pad().cursor();
+                v.tile = mapper.pad().tile_size();
+                v.content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
+            }
             if let Some(alert) = text_alert.take_if(|_| returned || escape) {
                 let pick = if returned { None } else { Some(alert.cancel.as_ref().map_or(0, |b| b.1)) };
                 eprintln!("[play] text alert answered with {:?}: {:?}", pick, alert.field.map(|f| vm.text_of(f)));
@@ -1182,6 +1289,7 @@ impl UiThread {
                     errors: Vec::new(),
                     returned: false,
                     main: self.main.clone(),
+                    game: self.game.as_ref().map(|g| g.ui.clone()),
                 };
                 mapper.set_text_focus(None, &mut sink);
                 focused = None;
@@ -1307,12 +1415,33 @@ fn hook_at(
     symbol: &str,
     hook: impl Fn(&mut Cpu) + Send + Sync + 'static,
 ) -> Result<(), String> {
+    hook_or_skip(sess, entry, symbol, move |c| {
+        hook(c);
+        None
+    })
+}
+
+/// Like [`hook_at`], but `decide` may answer for the function: `Some(r0)` returns that to the caller at once
+/// without running the function.
+fn hook_or_skip(
+    sess: &mut Session,
+    entry: u32,
+    symbol: &str,
+    decide: impl Fn(&mut Cpu) -> Option<u32> + Send + Sync + 'static,
+) -> Result<(), String> {
     if entry & 1 != 0 {
         return Err(format!("{symbol} is Thumb code"));
     }
     let mem = sess.cpu.mem().clone();
-    let tramp = lock(&sess.st).heap.alloc(16);
     let orig = mem.read_bytes(entry, 8).map_err(|e| e.to_string())?;
+    // The displaced instructions run elsewhere: they must not read the pc.
+    for w in orig.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) {
+        let (class, rn, imm) = ((w >> 26) & 3, (w >> 16) & 0xf, w & (1 << 25) != 0);
+        if rn == 15 || (class == 0 && !imm && w & 0xf == 15) {
+            return Err(format!("{symbol} starts with a pc-relative instruction ({w:#010x})"));
+        }
+    }
+    let tramp = lock(&sess.st).heap.alloc(16);
     let mut code = orig.clone();
     code.extend_from_slice(&0xE51F_F004u32.to_le_bytes()); // ldr pc, [pc, #-4]
     code.extend_from_slice(&(entry + 8).to_le_bytes());
@@ -1321,9 +1450,10 @@ fn hook_at(
         .cpu
         .register_shared_thunk(
             &format!("bhpc:trace:{symbol}"),
-            Arc::new(move |c: &mut Cpu| {
-                hook(c);
-                c.tail_call(tramp);
+            Arc::new(move |c: &mut Cpu| match decide(c) {
+                // Not continuing anywhere returns to the caller.
+                Some(r0) => c.set_reg(0, r0),
+                None => c.tail_call(tramp),
             }),
         )
         .map_err(|e| e.to_string())?;
@@ -1357,6 +1487,69 @@ fn unlock_fps(sess: &mut Session) -> Result<usize, String> {
     })?;
     sess.cpu.clear_cache();
     Ok(patched)
+}
+
+/// The game's on-screen controls as the host steers them (see `gameui`), and the pause button's two actions
+/// (implementation and selector name, called with the `World`).
+struct GameHooks {
+    ui: Arc<crate::gameui::GameUi>,
+    pause: (u32, u32),
+    resume: (u32, u32),
+}
+
+/// The methods "Hide game buttons" stops while the buttons are hidden: class, selector, whether it is the D-pad's
+/// touch handling (the controller's walking finger still goes there) and what it answers then (`NO` for the
+/// touch questions, nothing for the renderers).
+const HIDDEN_METHODS: [(&str, &str, bool); 9] = [
+    ("WorldUI", "render:translation:pinchScale:paused:", false),
+    ("WorldUI", "touchIsInUI:", false),
+    ("WorldUI", "tap:", false),
+    ("WorldUI", "startTouch:tapCount:index:", false),
+    ("WorldUI", "startTouch:tapCount:paused:index:", false),
+    ("DPad", "render:", false),
+    ("DPad", "touchIsInUI:", true),
+    ("DPad", "touchIsInViewAtAll:", true),
+    ("DPad", "startTouch:tapCount:index:", true),
+];
+
+/// Hook the game's controls (see `gameui`): remember the `GameView` it renders, stop the buttons' rendering and
+/// touch handling while they are hidden, and find the pause actions.
+fn install_game_ui(sess: &mut Session) -> Result<Arc<GameHooks>, String> {
+    use crate::fpsunlock::methods;
+    let mem = sess.cpu.mem().clone();
+    let export = |name: &str| sess.linker.modules().iter().find_map(|m| m.export(name));
+    let ivars = crate::gameui::Ivars::read(&mem, &export)?;
+    let class = |name: &str| export(&format!("OBJC_CLASS_$_{name}")).ok_or(format!("no class {name}"));
+    // Implementation and selector-name pointer of a method (the runtime is not up yet: names are C strings).
+    let method = |cls: &str, sel: &str| -> Result<(u32, u32), String> {
+        let c = class(cls)?;
+        let ro = mem.read_u32(c + 16).map_err(|e| e.to_string())? & !3;
+        let list = mem.read_u32(ro + 20).map_err(|e| e.to_string())?;
+        let found = methods(&mem, c, false).into_iter().position(|(n, _)| n == sel);
+        let i = found.ok_or(format!("no -[{cls} {sel}]"))? as u32;
+        let size = mem.read_u32(list).map_err(|e| e.to_string())? & !3;
+        let at = list + 8 + i * size;
+        Ok((mem.read_u32(at + 8).map_err(|e| e.to_string())?, mem.read_u32(at).map_err(|e| e.to_string())?))
+    };
+    let render = method("GameView", "render:")?.0;
+    let hidden: Vec<(u32, &str, &str, bool)> = HIDDEN_METHODS
+        .iter()
+        .map(|(cls, sel, dpad)| method(cls, sel).map(|(imp, _)| (imp, *cls, *sel, *dpad)))
+        .collect::<Result<_, _>>()?;
+    let (pause, resume) = (method("World", "pauseButtonTapped")?, method("World", "pauseResumeButtonTapped")?);
+    let ui = Arc::new(crate::gameui::GameUi::new(ivars));
+    let g = ui.clone();
+    hook_at(sess, render, "-[GameView render:]", move |c| g.saw_game_view(c.reg(0)))?;
+    for (imp, cls, sel, dpad) in hidden {
+        let g = ui.clone();
+        let renders = sel.starts_with("render:");
+        hook_or_skip(sess, imp, &format!("-[{cls} {sel}]"), move |_| {
+            let off = if renders { g.hidden() } else { g.suppress(dpad) };
+            off.then_some(0)
+        })?;
+    }
+    sess.cpu.clear_cache();
+    Ok(Arc::new(GameHooks { ui, pause, resume }))
 }
 
 /// The "Game speed" option (see `gamespeed`): scale the steps `-[World update:accurateDT:pinchScale:dragInProgress:]`
