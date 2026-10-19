@@ -52,11 +52,13 @@ pub struct InitConfig {
     pub parallel_guest: bool,
 }
 
-/// Whether guest threads run in parallel when nothing says otherwise.
-pub const DEFAULT_PARALLEL_GUEST: bool = false;
+/// Whether guest threads run in parallel when nothing says otherwise (`--serial-guest` / `BHPC_PARALLEL_GUEST=0`
+/// bring back the one-at-a-time scheduler).
+pub const DEFAULT_PARALLEL_GUEST: bool = true;
 
-/// The parallel-guest choice of a command line (`--parallel-guest` / `--serial-guest`, the later one wins) and the
-/// `BHPC_PARALLEL_GUEST` environment variable (`1`/`on`/`true` or `0`/`off`/`false`), in that order of precedence.
+/// The parallel-guest choice of a command line (`--serial-guest`, or `--parallel-guest`, which only undoes an earlier
+/// `--serial-guest` now that parallel is the default; the later one wins) and the `BHPC_PARALLEL_GUEST` environment
+/// variable (`1`/`on`/`true` or `0`/`off`/`false`), in that order of precedence.
 pub fn parallel_guest(args: &[String], env: Option<&str>) -> bool {
     let flag = args.iter().rev().find_map(|a| match a.as_str() {
         "--parallel-guest" => Some(true),

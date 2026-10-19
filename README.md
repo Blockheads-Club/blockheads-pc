@@ -24,7 +24,7 @@ known issues (see [Known issues](#known-issues)). Architecture and milestones: [
 | `bhpc-mem` | 4 GiB guest address window (host `mmap`), guest heap |
 | `bhpc-cpu` | dynarmic A32 JIT behind a small C ABI shim (`crates/bhpc-cpu/shim`), SVC thunk ABI, cycle budget and time slices |
 | `bhpc-loader` | ELF32/ARM loader: PT_LOAD mapping, relocations, symbol binding, constructors, EHABI backtraces, APK access |
-| `bhpc-bionic` | host re-implementation of the bionic libc the game imports: stdio and `scanf`, string, math, time (host time zone), pthread and a cooperative guest scheduler with time slices, futex, files |
+| `bhpc-bionic` | host re-implementation of the bionic libc the game imports: stdio and `scanf`, string, math, time (host time zone), pthread and a guest scheduler (threads run in parallel, host functions behind one lock; `--serial-guest` for one at a time), futex, files |
 | `bhpc-vfs` | Lazy read-only APK assets, writable data dir, Android path mapping, system fonts (OFL font bundled) |
 | `bhpc-jni` | permissive fake `JavaVM`/`JNIEnv` |
 | `bhpc-gles`, `bhpc-audio`, `bhpc-input`, `bhpc-app` | OpenGL ES / EGL, audio, input mapping, window and main loop (later milestones) |
@@ -88,6 +88,7 @@ Useful flags (all optional):
 | `--shot FILE.png` with `--shot-at N` | save a screenshot of swap N (and `FILE-first.png` of the first frame); `--exit-after-shot` quits afterwards |
 | `--script FILE` | scripted input, see below; `--click X,Y@MS` is a one-off click at a time in ms; `--shot-dir DIR` is where script `shot` steps go |
 | `--force` | run a build that is not one of the known versions |
+| `--serial-guest` | run the game's threads one at a time instead of in parallel on several cores (troubleshooting; `BHPC_PARALLEL_GUEST=0` does the same) |
 | `--trace-objc`, `--trace-fs`, `--trace-jni`, `--trace-jni-calls`, `--trace-fn LIST`, `--jni-report FILE` | tracing of the guest's Objective-C messages, file access and the fake JVM; `BHPC_TRACE_NET=1` in the environment logs every socket call |
 | `-v` | verbose |
 
