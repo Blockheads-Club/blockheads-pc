@@ -15,6 +15,45 @@ pub fn supported() -> bool {
 
 pub use imp::{close, layout, open, set_fullscreen, Opts};
 
+/// How close (logical pixels) to the window's side or bottom edge a press on the game view resizes the window.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const RESIZE_BORDER: f64 = 6.0;
+
+/// The edge of a `width` x `height` game view (which spans the window's width and reaches its bottom) that
+/// `(x, y)` is within `border` of: the sides, the bottom, or a bottom corner.
+#[cfg(target_os = "linux")]
+fn resize_edge(x: f64, y: f64, width: f64, height: f64, border: f64) -> Option<gtk::gdk::WindowEdge> {
+    use gtk::gdk::WindowEdge as E;
+    let (left, right, bottom) = (x < border, x >= width - border, y >= height - border);
+    match (left, right, bottom) {
+        (true, _, true) => Some(E::SouthWest),
+        (_, true, true) => Some(E::SouthEast),
+        (true, _, _) => Some(E::West),
+        (_, true, _) => Some(E::East),
+        (_, _, true) => Some(E::South),
+        _ => None,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::resize_edge;
+    use gtk::gdk::WindowEdge as E;
+
+    #[test]
+    fn edges_of_the_game_view() {
+        let at = |x, y| resize_edge(x, y, 800.0, 600.0, 6.0);
+        assert_eq!(at(400.0, 300.0), None);
+        assert_eq!(at(400.0, 0.0), None, "the top is the title strip's");
+        assert_eq!(at(2.0, 300.0), Some(E::West));
+        assert_eq!(at(797.0, 300.0), Some(E::East));
+        assert_eq!(at(400.0, 596.0), Some(E::South));
+        assert_eq!(at(1.0, 599.0), Some(E::SouthWest));
+        assert_eq!(at(799.0, 599.0), Some(E::SouthEast));
+        assert_eq!(at(6.0, 593.9), None);
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
     use bhpc_input::{Input, Trigger};
@@ -211,11 +250,21 @@ mod imp {
         let t = tx.clone();
         area.connect_motion_notify_event(move |w, ev| {
             let (x, y) = ev.position();
+            show_resize_cursor(w, resize_edge_at(w, x, y));
             send(&t, Cmd::Move { x: (x * scale(w)) as f32, y: (y * scale(w)) as f32 });
             Propagation::Stop
         });
         let t = tx.clone();
         area.connect_button_press_event(move |w, ev| {
+            // The view covers the window's side and bottom edges: a press there resizes the (frameless) window.
+            let (x, y) = ev.position();
+            if let (1, Some(edge)) = (ev.button(), resize_edge_at(w, x, y)) {
+                if let Some(gw) = w.toplevel().and_then(|t| t.window()) {
+                    let (rx, ry) = ev.root();
+                    gw.begin_resize_drag(edge, 1, rx as i32, ry as i32, ev.time());
+                    return Propagation::Stop;
+                }
+            }
             w.grab_focus();
             button(&t, w, ev, true)
         });
@@ -309,6 +358,27 @@ mod imp {
             }
             Propagation::Stop
         });
+    }
+
+    /// The window edge under `(x, y)` of the view, when the window can be resized there (not fullscreen or maximized).
+    fn resize_edge_at(w: &gtk::DrawingArea, x: f64, y: f64) -> Option<gdk::WindowEdge> {
+        let state = w.toplevel().and_then(|t| t.window()).map(|gw| gw.state())?;
+        if state.intersects(gdk::WindowState::FULLSCREEN | gdk::WindowState::MAXIMIZED) {
+            return None;
+        }
+        let a = w.allocation();
+        super::resize_edge(x, y, f64::from(a.width()), f64::from(a.height()), super::RESIZE_BORDER)
+    }
+
+    fn show_resize_cursor(w: &gtk::DrawingArea, edge: Option<gdk::WindowEdge>) {
+        let Some(gw) = w.window() else { return };
+        let name = edge.map(|e| match e {
+            gdk::WindowEdge::West | gdk::WindowEdge::East => "ew-resize",
+            gdk::WindowEdge::SouthWest => "sw-resize",
+            gdk::WindowEdge::SouthEast => "se-resize",
+            _ => "s-resize",
+        });
+        gw.set_cursor(name.and_then(|n| gdk::Cursor::from_name(&gw.display(), n)).as_ref());
     }
 
     fn button(tx: &Sender<String>, w: &gtk::DrawingArea, ev: &gdk::EventButton, pressed: bool) -> Propagation {
