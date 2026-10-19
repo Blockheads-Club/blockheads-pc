@@ -958,3 +958,146 @@ fn cycle_counting_reflects_options() {
 fn default_fastmem_matches_platform() {
     assert_eq!(CpuOptions::default().fastmem, !cfg!(target_os = "macos"));
 }
+
+/// A host gate for one thread that records what the CPU does with it.
+struct LogGate {
+    held: Mutex<bool>,
+    log: Mutex<Vec<&'static str>>,
+}
+
+impl HostGate for LogGate {
+    fn enter(&self) -> bool {
+        let mut h = self.held.lock().unwrap();
+        if *h {
+            return false;
+        }
+        *h = true;
+        self.log.lock().unwrap().push("enter");
+        true
+    }
+
+    fn leave(&self) -> bool {
+        let mut h = self.held.lock().unwrap();
+        if !*h {
+            return false;
+        }
+        *h = false;
+        self.log.lock().unwrap().push("leave");
+        true
+    }
+}
+
+#[test]
+fn the_host_gate_is_released_for_guest_code_and_taken_for_thunks() {
+    let mut cpu = setup();
+    assert!(!cpu.has_gate());
+    let gate = StdArc::new(LogGate { held: Mutex::new(true), log: Mutex::new(Vec::new()) });
+    assert!(cpu.set_gate(gate.clone()));
+    assert!(cpu.has_gate());
+    assert!(!cpu.set_gate(gate.clone()), "a gate is set once");
+    put(&cpu, CODE, &[0xE3A0_0009, BX_LR]); // mov r0,#9; bx lr
+    let g2 = gate.clone();
+    let t = cpu
+        .register_shared_thunk(
+            "outer",
+            StdArc::new(move |c: &mut Cpu| {
+                assert!(*g2.held.lock().unwrap(), "thunks run holding the gate");
+                // A nested guest call gives it up again while the guest code runs.
+                let r = c.call(CODE, &[]).unwrap();
+                assert!(*g2.held.lock().unwrap());
+                c.ret_u32(r.r0 + 1);
+            }),
+        )
+        .unwrap();
+    assert_eq!(cpu.call(t, &[]).unwrap().r0, 10);
+    assert_eq!(*gate.log.lock().unwrap(), ["leave", "enter", "leave", "enter", "leave", "enter"]);
+    assert!(*gate.held.lock().unwrap());
+
+    // A thread that does not hold the gate takes it only for the thunk.
+    *gate.held.lock().unwrap() = false;
+    gate.log.lock().unwrap().clear();
+    let leaf = cpu.register_thunk("leaf", Box::new(|c: &mut Cpu| c.ret_u32(3))).unwrap();
+    assert_eq!(cpu.call(leaf, &[]).unwrap().r0, 3);
+    assert_eq!(*gate.log.lock().unwrap(), ["enter", "leave"]);
+    assert!(!*gate.held.lock().unwrap());
+
+    // A gate-free thunk runs without it; registering the name again clears the mark.
+    assert!(!cpu.table().set_gate_free("nope"));
+    assert!(cpu.table().set_gate_free("leaf"));
+    gate.log.lock().unwrap().clear();
+    assert_eq!(cpu.call(leaf, &[]).unwrap().r0, 3);
+    assert!(gate.log.lock().unwrap().is_empty());
+    assert_eq!(cpu.register_thunk("leaf", Box::new(|c: &mut Cpu| c.ret_u32(4))).unwrap(), leaf);
+    assert_eq!(cpu.call(leaf, &[]).unwrap().r0, 4);
+    assert_eq!(*gate.log.lock().unwrap(), ["enter", "leave"]);
+}
+
+#[test]
+fn thunk_statistics_count_calls_and_host_time() {
+    let mut cpu = setup();
+    let a = cpu.register_thunk("a", Box::new(|c: &mut Cpu| c.ret_u32(1))).unwrap();
+    let b = cpu
+        .register_thunk(
+            "b",
+            Box::new(|c: &mut Cpu| {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                c.ret_u32(2)
+            }),
+        )
+        .unwrap();
+    cpu.call(a, &[]).unwrap();
+    assert!(cpu.table().stats().is_empty(), "nothing is counted while statistics are off");
+    cpu.table().set_stats(true);
+    for _ in 0..3 {
+        cpu.call(a, &[]).unwrap();
+    }
+    cpu.call(b, &[]).unwrap();
+    assert!(cpu.table().set_gate_free("a"));
+    cpu.table().set_stats(false);
+    cpu.call(b, &[]).unwrap();
+    let st = cpu.table().stats();
+    assert_eq!(st.len(), 2);
+    assert_eq!((st[0].name.as_str(), st[0].calls, st[0].free), ("b", 1, false));
+    assert!(st[0].nanos >= 2_000_000);
+    assert_eq!((st[1].name.as_str(), st[1].calls, st[1].free), ("a", 3, true));
+    // Rebinding starts over.
+    cpu.register_thunk("a", Box::new(|c: &mut Cpu| c.ret_u32(1))).unwrap();
+    assert_eq!(cpu.table().stats().len(), 1);
+    cpu.table().record(9999, 1);
+}
+
+#[test]
+fn code_invalidations_reach_the_other_threads_cpus() {
+    let mut a = setup();
+    let mut b = a.new_thread().unwrap();
+    b.set_sp(STACK_TOP - 0x800);
+    put(&a, CODE, &[0xE3A0_0001, BX_LR]); // mov r0,#1
+    assert_eq!(a.call(CODE, &[]).unwrap().r0, 1);
+    assert_eq!(b.call(CODE, &[]).unwrap().r0, 1);
+    // A patches the code and flushes it; B's translation goes too.
+    put(&a, CODE, &[0xE3A0_0002, BX_LR]);
+    a.invalidate(CODE, 8);
+    assert_eq!(b.call(CODE, &[]).unwrap().r0, 2);
+    // The same for a whole-cache clear made from inside a thunk.
+    let clear = a
+        .register_thunk(
+            "clear",
+            Box::new(|c: &mut Cpu| {
+                c.mem().write_u32(CODE, 0xE3A0_0003).unwrap();
+                c.clear_cache();
+            }),
+        )
+        .unwrap();
+    a.call(clear, &[]).unwrap();
+    assert_eq!(b.call(CODE, &[]).unwrap().r0, 3);
+    // A CPU that fell more than the log behind drops everything.
+    put(&a, CODE, &[0xE3A0_0004, BX_LR]);
+    for i in 0..=CODE_LOG as u32 {
+        a.invalidate(DATA + 4 * i, 4);
+    }
+    assert_eq!(b.call(CODE, &[]).unwrap().r0, 4);
+    // A new CPU starts with nothing to catch up on.
+    let mut c = a.new_thread().unwrap();
+    c.set_sp(STACK_TOP - 0x400);
+    assert_eq!(c.call(CODE, &[]).unwrap().r0, 4);
+}

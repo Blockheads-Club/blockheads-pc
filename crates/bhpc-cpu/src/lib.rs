@@ -23,12 +23,14 @@ mod buildcfg;
 mod ffi;
 mod table;
 
-pub use table::{SharedThunkFn, ThunkFn, ThunkTable};
+pub use table::{SharedThunkFn, ThunkFn, ThunkStat, ThunkTable};
 
 use bhpc_mem::{GuestMemory, MemError};
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::fmt;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// Guest address of the thunk page.
 pub const THUNK_BASE: u32 = 0xFFFC_0000;
@@ -207,6 +209,18 @@ impl CallResult {
     }
 }
 
+/// Lock that serialises host code across guest threads (see [`Cpu::set_gate`]). A host thread holds it while it
+/// runs host code and gives it up while its CPU executes guest instructions, so guest code of several threads runs
+/// in parallel while thunks still run one at a time.
+pub trait HostGate: Send + Sync {
+    /// The calling host thread is about to run host code (a thunk). Returns true if it took the gate (false: it
+    /// already held it).
+    fn enter(&self) -> bool;
+    /// The calling host thread is about to run guest code. Returns true if it gave the gate up (false: it did not
+    /// hold it, for example a host thread that is not a scheduled guest thread).
+    fn leave(&self) -> bool;
+}
+
 /// Owner of the global exclusive monitor.
 struct Monitor(*mut ffi::bhpc_monitor);
 
@@ -229,6 +243,33 @@ struct Shared {
     monitor: Monitor,
     /// Bit `i` set = processor id `i` is taken.
     pids: Mutex<u64>,
+    /// Host-code lock of parallel guest execution; unset: nothing is done around guest code.
+    gate: OnceLock<Arc<dyn HostGate>>,
+    /// Code invalidations so far, and the latest ones (each CPU applies those it has not seen; see [`Cpu::sync_code`]).
+    code_gen: AtomicU64,
+    code_log: Mutex<VecDeque<(u64, Flush)>>,
+}
+
+/// One code invalidation for the other CPUs.
+#[derive(Debug, Clone, Copy)]
+enum Flush {
+    Range(u32, u32),
+    All,
+}
+
+/// Invalidations kept for CPUs that have not caught up yet; one that falls further behind drops all its code.
+const CODE_LOG: usize = 1024;
+
+impl Shared {
+    fn publish(&self, f: Flush) {
+        let mut log = self.code_log.lock().unwrap_or_else(PoisonError::into_inner);
+        let gen = self.code_gen.load(Ordering::Relaxed) + 1;
+        if log.len() == CODE_LOG {
+            log.pop_front();
+        }
+        log.push_back((gen, f));
+        self.code_gen.store(gen, Ordering::Release);
+    }
 }
 
 impl Shared {
@@ -269,6 +310,8 @@ pub struct Cpu {
     slice: Option<Slice>,
     /// Cycle budget not yet handed to the JIT (always 0 without a slice policy).
     reserve: u64,
+    /// The last code invalidation of the guest this CPU applied.
+    code_seen: u64,
 }
 
 // SAFETY: a Cpu is only ever driven from one thread at a time (it owns its JIT instance); the
@@ -287,7 +330,15 @@ impl Cpu {
         let table = ThunkTable::new(mem.clone())?;
         // SAFETY: plain allocation; freed by `Monitor::drop`.
         let monitor = Monitor(unsafe { ffi::bhpc_monitor_new(MAX_CPUS) });
-        let shared = Arc::new(Shared { mem, table, monitor, pids: Mutex::new(0) });
+        let shared = Arc::new(Shared {
+            mem,
+            table,
+            monitor,
+            pids: Mutex::new(0),
+            gate: OnceLock::new(),
+            code_gen: AtomicU64::new(0),
+            code_log: Mutex::new(VecDeque::new()),
+        });
         let pid = shared.alloc_pid()?;
         Ok(Self::build(shared, opts, pid, true, 0))
     }
@@ -321,7 +372,9 @@ impl Cpu {
             stop_regs: None,
             slice: None,
             reserve: 0,
+            code_seen: 0,
         });
+        cpu.code_seen = cpu.shared.code_gen.load(Ordering::Acquire);
         let cb = ffi::bhpc_callbacks {
             user: (&mut *cpu as *mut Cpu).cast::<c_void>(),
             read8: tramp::read8,
@@ -356,6 +409,24 @@ impl Cpu {
         // SAFETY: jit was just created.
         unsafe { ffi::bhpc_jit_set_cpsr(cpu.jit, CPSR_USER) };
         cpu
+    }
+
+    /// Run guest code of several host threads in parallel: from now on every CPU of this guest gives `gate` up
+    /// while it executes guest instructions and takes it for every thunk. Set it once, before the guest has more
+    /// than one thread; returns false (and changes nothing) if a gate is already set.
+    pub fn set_gate(&self, gate: Arc<dyn HostGate>) -> bool {
+        self.shared.gate.set(gate).is_ok()
+    }
+
+    /// True once [`Cpu::set_gate`] was called for this guest.
+    pub fn has_gate(&self) -> bool {
+        self.shared.gate.get().is_some()
+    }
+
+    /// The gate as a raw pointer, so it can be used while `self` is borrowed mutably. Valid as long as `self`:
+    /// `shared` (which owns the gate) outlives every use inside a method of this CPU.
+    fn gate_ptr(&self) -> Option<*const dyn HostGate> {
+        self.shared.gate.get().map(Arc::as_ptr)
     }
 
     /// The thunk table shared by this CPU and all its siblings.
@@ -547,7 +618,8 @@ impl Cpu {
         }
     }
 
-    /// Drop all translated code (of this CPU's whole nested-call chain).
+    /// Drop all translated code: at once in this CPU's whole nested-call chain, and in every other CPU of the guest
+    /// the next time it enters the JIT or returns from a thunk.
     pub fn clear_cache(&mut self) {
         let mut c = Some(self.root());
         while let Some(cpu) = c {
@@ -555,11 +627,12 @@ impl Cpu {
             unsafe { ffi::bhpc_jit_clear_cache(cpu.jit) };
             c = cpu.child.as_deref_mut();
         }
+        self.shared.publish(Flush::All);
     }
 
-    /// Invalidate translated code for `[start, start+len)` (cacheflush) in this CPU's whole
-    /// nested-call chain. Invalidating a running JIT makes it leave `Run()`; [`Cpu::run`] resumes
-    /// transparently. Other threads' JITs are not touched (call this on each of them).
+    /// Invalidate translated code for `[start, start+len)` (cacheflush): at once in this CPU's whole nested-call
+    /// chain, and in every other CPU of the guest (other threads) the next time it enters the JIT or returns from a
+    /// thunk. Invalidating a running JIT makes it leave `Run()`; [`Cpu::run`] resumes transparently.
     pub fn invalidate(&mut self, start: u32, len: u32) {
         let mut c = Some(self.root());
         while let Some(cpu) = c {
@@ -567,6 +640,29 @@ impl Cpu {
             unsafe { ffi::bhpc_jit_invalidate(cpu.jit, start, len as usize) };
             c = cpu.child.as_deref_mut();
         }
+        self.shared.publish(Flush::Range(start, len));
+    }
+
+    /// Apply the code invalidations other CPUs published since this one last looked.
+    fn sync_code(&mut self) {
+        let gen = self.shared.code_gen.load(Ordering::Acquire);
+        if gen == self.code_seen {
+            return;
+        }
+        let log = self.shared.code_log.lock().unwrap_or_else(PoisonError::into_inner);
+        let missed = log.front().is_none_or(|(first, _)| *first > self.code_seen + 1);
+        for (_, f) in log.iter().filter(|(g, _)| *g > self.code_seen && !missed) {
+            match *f {
+                // SAFETY: valid jit (invalidating from a callback of this JIT is allowed).
+                Flush::Range(start, len) => unsafe { ffi::bhpc_jit_invalidate(self.jit, start, len as usize) },
+                Flush::All => unsafe { ffi::bhpc_jit_clear_cache(self.jit) },
+            }
+        }
+        if missed {
+            // SAFETY: valid jit.
+            unsafe { ffi::bhpc_jit_clear_cache(self.jit) };
+        }
+        self.code_seen = log.back().map_or(gen, |(g, _)| *g);
     }
 
     // ---------- thunk argument/return ABI (AAPCS softfp) ----------
@@ -624,12 +720,20 @@ impl Cpu {
     pub fn run(&mut self) -> Stop {
         self.stop = None;
         self.running = true;
+        let gate = self.gate_ptr();
         let stop = loop {
+            self.sync_code();
+            // SAFETY: the gate lives in `self.shared`, which outlives this call.
+            let released = gate.is_some_and(|g| unsafe { (*g).leave() });
             // SAFETY: valid jit; callbacks use `self` through the raw pointer registered at creation.
             let halt = unsafe {
                 ffi::bhpc_jit_clear_halt(self.jit);
                 ffi::bhpc_jit_run(self.jit, (self as *mut Cpu).cast())
             };
+            if let Some(g) = gate.filter(|_| released) {
+                // SAFETY: as above.
+                unsafe { (*g).enter() };
+            }
             match self.stop.take() {
                 Some(s) => break s,
                 // A cacheflush inside a thunk only asks the JIT to re-enter with fresh code.
@@ -910,13 +1014,25 @@ mod tramp {
                 c.reg(12)
             );
         }
-        match c.shared.table.handler(slot) {
-            Some(h) => {
-                if h.invoke(c).is_err() {
-                    c.request_stop(Stop::Nested);
-                }
-            }
-            None => c.request_stop(Stop::BadSvc(swi)),
+        let Some((h, free)) = c.shared.table.handler(slot) else {
+            c.request_stop(Stop::BadSvc(swi));
+            return;
+        };
+        let gate = c.gate_ptr().filter(|_| !free);
+        // SAFETY: the gate lives in `c.shared`, which outlives this callback.
+        let took = gate.is_some_and(|g| unsafe { (*g).enter() });
+        let t0 = c.shared.table.stats_on().then(std::time::Instant::now);
+        if h.invoke(c).is_err() {
+            c.request_stop(Stop::Nested);
+        }
+        if let Some(t0) = t0 {
+            c.shared.table.record(slot, t0.elapsed().as_nanos() as u64);
+        }
+        // Code another thread invalidated meanwhile must not run when this one returns to the guest.
+        c.sync_code();
+        if let Some(g) = gate.filter(|_| took) {
+            // SAFETY: as above.
+            unsafe { (*g).leave() };
         }
     }
 

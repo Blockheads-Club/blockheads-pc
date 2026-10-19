@@ -4,6 +4,7 @@ use crate::{Cpu, CpuError, MAX_THUNKS, THUNK_BASE, THUNK_REGION, THUNK_STRIDE};
 use bhpc_mem::{GuestMemory, MemError};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 /// A stateful host function bound to an `svc` number. It is serialised: only one guest thread
@@ -52,6 +53,27 @@ impl Handler {
 struct Entry {
     name: String,
     handler: Option<Handler>,
+    /// Runs without the host gate (see [`ThunkTable::set_gate_free`]).
+    free: bool,
+    /// Calls and nanoseconds spent, while statistics are on.
+    calls: AtomicU64,
+    nanos: AtomicU64,
+}
+
+impl Entry {
+    fn new(name: &str, handler: Option<Handler>) -> Entry {
+        Entry { name: name.to_string(), handler, free: false, calls: AtomicU64::new(0), nanos: AtomicU64::new(0) }
+    }
+}
+
+/// Per-thunk call statistics (see [`ThunkTable::set_stats`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThunkStat {
+    pub name: String,
+    pub calls: u64,
+    pub nanos: u64,
+    /// Runs without the host gate.
+    pub free: bool,
 }
 
 struct Inner {
@@ -64,6 +86,7 @@ struct Inner {
 pub struct ThunkTable {
     mem: Arc<GuestMemory>,
     inner: RwLock<Inner>,
+    stats: AtomicBool,
 }
 
 impl ThunkTable {
@@ -73,10 +96,8 @@ impl ThunkTable {
         mem.map(THUNK_BASE, THUNK_REGION)?;
         let t = ThunkTable {
             mem,
-            inner: RwLock::new(Inner {
-                entries: vec![Entry { name: "<return>".into(), handler: None }],
-                by_name: HashMap::new(),
-            }),
+            inner: RwLock::new(Inner { entries: vec![Entry::new("<return>", None)], by_name: HashMap::new() }),
+            stats: AtomicBool::new(false),
         };
         t.write_stub(0)?;
         Ok(Arc::new(t))
@@ -93,7 +114,8 @@ impl ThunkTable {
     fn register(&self, name: &str, h: Handler) -> Result<u32, CpuError> {
         let mut g = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(&slot) = g.by_name.get(name) {
-            g.entries[slot as usize].handler = Some(h);
+            // A new function makes no promise about the gate.
+            g.entries[slot as usize] = Entry::new(name, Some(h));
             return Ok(THUNK_BASE + slot * THUNK_STRIDE);
         }
         let slot = g.entries.len() as u32;
@@ -101,7 +123,7 @@ impl ThunkTable {
             return Err(CpuError::TooManyThunks);
         }
         self.write_stub(slot)?;
-        g.entries.push(Entry { name: name.to_string(), handler: Some(h) });
+        g.entries.push(Entry::new(name, Some(h)));
         g.by_name.insert(name.to_string(), slot);
         Ok(THUNK_BASE + slot * THUNK_STRIDE)
     }
@@ -141,8 +163,55 @@ impl ThunkTable {
         self.inner.read().unwrap_or_else(PoisonError::into_inner).entries.len() - 1
     }
 
-    pub(crate) fn handler(&self, slot: usize) -> Option<Handler> {
+    /// Let the registered thunk `name` run without the host gate (`Cpu::set_gate`), in parallel with other host code.
+    /// Only for functions that need no serialisation: they touch nothing but guest memory they are given and state
+    /// with its own lock, and never block in the scheduler. Registering the name again clears the mark. Returns false
+    /// if no such thunk is registered.
+    pub fn set_gate_free(&self, name: &str) -> bool {
+        let mut g = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+        let Some(&slot) = g.by_name.get(name) else { return false };
+        g.entries[slot as usize].free = true;
+        true
+    }
+
+    /// Count calls and host time per thunk from now on (`on`), or stop counting.
+    pub fn set_stats(&self, on: bool) {
+        self.stats.store(on, Ordering::Relaxed);
+    }
+
+    pub(crate) fn stats_on(&self) -> bool {
+        self.stats.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn record(&self, slot: usize, nanos: u64) {
         let g = self.inner.read().unwrap_or_else(PoisonError::into_inner);
-        g.entries.get(slot).and_then(|e| e.handler.clone())
+        if let Some(e) = g.entries.get(slot) {
+            e.calls.fetch_add(1, Ordering::Relaxed);
+            e.nanos.fetch_add(nanos, Ordering::Relaxed);
+        }
+    }
+
+    /// The thunks called while statistics were on, most host time first.
+    pub fn stats(&self) -> Vec<ThunkStat> {
+        let g = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        let mut v: Vec<ThunkStat> = g
+            .entries
+            .iter()
+            .filter(|e| e.calls.load(Ordering::Relaxed) > 0)
+            .map(|e| ThunkStat {
+                name: e.name.clone(),
+                calls: e.calls.load(Ordering::Relaxed),
+                nanos: e.nanos.load(Ordering::Relaxed),
+                free: e.free,
+            })
+            .collect();
+        v.sort_by(|a, b| b.nanos.cmp(&a.nanos).then(a.name.cmp(&b.name)));
+        v
+    }
+
+    /// The handler of `slot` and whether it runs without the gate.
+    pub(crate) fn handler(&self, slot: usize) -> Option<(Handler, bool)> {
+        let g = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        g.entries.get(slot).and_then(|e| Some((e.handler.clone()?, e.free)))
     }
 }
