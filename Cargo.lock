@@ -46,6 +46,7 @@ dependencies = [
  "bhpc-cpu",
  "bhpc-gles",
  "bhpc-mem",
+ "libc",
  "sdl2",
 ]
 
@@ -112,6 +113,7 @@ dependencies = [
  "bhpc-loader",
  "bhpc-vfs",
  "dirs",
+ "libc",
  "serde",
  "tempfile",
  "toml",

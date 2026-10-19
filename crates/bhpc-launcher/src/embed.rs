@@ -5,7 +5,9 @@
 //!   newest frame into a native widget. The file has a small header and three pixel slots; the writer never touches
 //!   the slot the header currently names, so the reader gets whole frames without locks (a reader that is two
 //!   frames late detects that and skips). Pixels are BGRA, top row first, premultiplied (opaque), which is what
-//!   cairo and most compositors take.
+//!   cairo and most compositors take, unless the launcher asked for another [`Layout`] ([`Cmd::Layout`]): a view
+//!   that draws with OpenGL takes the runner's read-back as it is (RGBA, bottom row first), which saves the runner
+//!   the conversion. Each frame says its layout, so a change of mind takes effect with the next frame.
 //! * Input goes the other way as text lines on the runner's stdin ([`Cmd`]): one command per line, in device pixels
 //!   of the frame, HID usage ids for keys. The runner exits when stdin closes, so it never outlives the launcher.
 
@@ -64,13 +66,42 @@ fn u64_at(b: &[u8], i: usize) -> u64 {
     u64::from_le_bytes(b[i..i + 8].try_into().expect("8 bytes"))
 }
 
-/// Header: magic, version, slot capacity, sequence number of the newest frame (0 = none), its width, height, slot.
+/// How the pixels of a frame are laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layout {
+    /// BGRA, top row first (cairo's `ARGB32` on little-endian machines).
+    #[default]
+    Bgra,
+    /// RGBA, bottom row first: what `glReadPixels` returns and `glTexSubImage2D` takes.
+    GlRgba,
+}
+
+impl Layout {
+    fn code(self) -> u32 {
+        match self {
+            Layout::Bgra => 0,
+            Layout::GlRgba => 1,
+        }
+    }
+
+    fn from_code(code: u32) -> Option<Layout> {
+        match code {
+            0 => Some(Layout::Bgra),
+            1 => Some(Layout::GlRgba),
+            _ => None,
+        }
+    }
+}
+
+/// Header: magic, version, slot capacity, sequence number of the newest frame (0 = none), its width, height, slot
+/// and pixel layout.
 struct Header {
     cap: u64,
     seq: u64,
     width: u32,
     height: u32,
     slot: u32,
+    layout: u32,
 }
 
 fn read_header(f: &File) -> io::Result<Header> {
@@ -85,6 +116,7 @@ fn read_header(f: &File) -> io::Result<Header> {
         width: u32_at(&b, 24),
         height: u32_at(&b, 28),
         slot: u32_at(&b, 32),
+        layout: u32_at(&b, 36),
     })
 }
 
@@ -130,6 +162,7 @@ pub struct FrameInfo {
     pub width: u32,
     pub height: u32,
     pub seq: u64,
+    pub layout: Layout,
 }
 
 /// The launcher's end: creates the file and reads the newest frame.
@@ -138,6 +171,55 @@ pub struct FrameReader {
     path: PathBuf,
     cap: u64,
     seen: u64,
+    /// The whole file mapped into memory ([`FrameReader::read_with`]), made on first use.
+    #[cfg(unix)]
+    map: Option<Map>,
+    /// Where [`FrameReader::read_with`] copies frames without a mapping.
+    #[cfg(not(unix))]
+    scratch: Vec<u8>,
+}
+
+/// A read-only shared mapping of a frame file.
+#[cfg(unix)]
+pub(crate) struct Map {
+    ptr: *mut libc::c_void,
+    len: usize,
+}
+
+#[cfg(unix)]
+impl Map {
+    pub(crate) fn new(file: &File, len: u64) -> io::Result<Map> {
+        use std::os::unix::io::AsRawFd;
+        let len = len as usize;
+        // SAFETY: a fresh shared read-only mapping of an open file; nothing else aliases it in this process.
+        let ptr =
+            unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
+        if ptr == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Map { ptr, len })
+    }
+
+    /// `len` bytes at `at`; the caller checked the range against the file size.
+    fn bytes(&self, at: u64, len: u64) -> &[u8] {
+        let (at, len) = (at as usize, len as usize);
+        assert!(at + len <= self.len, "range outside the mapping");
+        // SAFETY: inside the mapping (checked above), which lives as long as `self`. The writer may change the bytes
+        // meanwhile (another process); the reader detects that with the sequence number and drops the frame.
+        unsafe { std::slice::from_raw_parts(self.ptr.cast::<u8>().add(at), len) }
+    }
+}
+
+// SAFETY: the mapping is read-only and owned by one `FrameReader`; any thread may read it.
+#[cfg(unix)]
+unsafe impl Send for Map {}
+
+#[cfg(unix)]
+impl Drop for Map {
+    fn drop(&mut self) {
+        // SAFETY: unmaps exactly what `new` mapped.
+        unsafe { libc::munmap(self.ptr, self.len) };
+    }
 }
 
 impl FrameReader {
@@ -150,7 +232,16 @@ impl FrameReader {
         h[4..8].copy_from_slice(&1u32.to_le_bytes());
         h[8..16].copy_from_slice(&MAX_FRAME_BYTES.to_le_bytes());
         write_at(&file, &h, 0)?;
-        Ok(FrameReader { file, path: path.to_path_buf(), cap: MAX_FRAME_BYTES, seen: 0 })
+        Ok(FrameReader {
+            file,
+            path: path.to_path_buf(),
+            cap: MAX_FRAME_BYTES,
+            seen: 0,
+            #[cfg(unix)]
+            map: None,
+            #[cfg(not(unix))]
+            scratch: Vec::new(),
+        })
     }
 
     /// Sequence number of the newest frame (changes whenever the runner published one). Cheap: reads 8 bytes.
@@ -163,20 +254,60 @@ impl FrameReader {
     /// Copies the newest frame into `buf` (resized to fit) unless it was already returned. `None` when there is no
     /// new frame, or when the runner overwrote it while it was read (the next call gets the newer one).
     pub fn read(&mut self, buf: &mut Vec<u8>) -> io::Result<Option<FrameInfo>> {
+        let Some((info, at, len)) = self.newest()? else { return Ok(None) };
+        buf.resize(len as usize, 0);
+        read_at(&self.file, buf, at)?;
+        self.accept(info)
+    }
+
+    /// Like [`FrameReader::read`], but hands the newest frame's pixels to `use_pixels` where they are (a mapping of
+    /// the file) instead of copying them out first. `use_pixels` must be done with them when it returns; when the
+    /// runner overwrote the frame meanwhile the result is `None` (and whatever `use_pixels` made of it is stale).
+    pub fn read_with(&mut self, mut use_pixels: impl FnMut(FrameInfo, &[u8])) -> io::Result<Option<FrameInfo>> {
+        self.read_with_dyn(&mut use_pixels)
+    }
+
+    fn read_with_dyn(&mut self, use_pixels: &mut dyn FnMut(FrameInfo, &[u8])) -> io::Result<Option<FrameInfo>> {
+        let Some((info, at, len)) = self.newest()? else { return Ok(None) };
+        #[cfg(unix)]
+        {
+            if self.map.is_none() {
+                self.map = Some(Map::new(&self.file, HEADER + SLOTS * self.cap)?);
+            }
+            use_pixels(info, self.map.as_ref().expect("mapped above").bytes(at, len));
+        }
+        #[cfg(not(unix))]
+        {
+            let mut buf = std::mem::take(&mut self.scratch);
+            buf.resize(len as usize, 0);
+            read_at(&self.file, &mut buf, at)?;
+            use_pixels(info, &buf);
+            self.scratch = buf;
+        }
+        self.accept(info)
+    }
+
+    /// The newest frame when it is new: its description, where its pixels are and how many bytes they take.
+    fn newest(&self) -> io::Result<Option<(FrameInfo, u64, u64)>> {
         let h = read_header(&self.file)?;
         if h.seq == 0 || h.seq == self.seen {
             return Ok(None);
         }
         let len = u64::from(h.width) * u64::from(h.height) * 4;
-        if len == 0 || len > self.cap || u64::from(h.slot) >= SLOTS {
+        let layout = Layout::from_code(h.layout);
+        let (Some(layout), true) = (layout, len != 0 && len <= self.cap && u64::from(h.slot) < SLOTS) else {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "bad frame header"));
-        }
-        buf.resize(len as usize, 0);
-        read_at(&self.file, buf, slot_offset(u64::from(h.slot), self.cap))?;
-        let intact = !overwritten(h.seq, self.seq()?);
+        };
+        let info = FrameInfo { width: h.width, height: h.height, seq: h.seq, layout };
+        Ok(Some((info, slot_offset(u64::from(h.slot), self.cap), len)))
+    }
+
+    /// `info` once its pixels have been taken, unless the runner has come round to its slot meanwhile.
+    fn accept(&mut self, info: FrameInfo) -> io::Result<Option<FrameInfo>> {
+        let intact = !overwritten(info.seq, self.seq()?);
         Ok(intact.then(|| {
-            self.seen = h.seq;
-            FrameInfo { width: h.width, height: h.height, seq: h.seq }
+            self.seen = info.seq;
+            info
         }))
     }
 
@@ -203,18 +334,24 @@ impl FrameWriter {
 
     /// Publishes a `width` x `height` frame of BGRA pixels. `Ok(false)` when it does not fit the file.
     pub fn publish(&mut self, width: u32, height: u32, bgra: &[u8]) -> io::Result<bool> {
+        self.publish_as(width, height, Layout::Bgra, bgra)
+    }
+
+    /// Publishes a `width` x `height` frame of pixels in `layout`. `Ok(false)` when it does not fit the file.
+    pub fn publish_as(&mut self, width: u32, height: u32, layout: Layout, pixels: &[u8]) -> io::Result<bool> {
         let len = u64::from(width) * u64::from(height) * 4;
-        if len == 0 || len > self.cap || bgra.len() as u64 != len {
+        if len == 0 || len > self.cap || pixels.len() as u64 != len {
             return Ok(false);
         }
         let next = self.seq + 1;
         let slot = next % SLOTS;
-        write_at(&self.file, bgra, slot_offset(slot, self.cap))?;
-        let mut h = [0u8; 20];
+        write_at(&self.file, pixels, slot_offset(slot, self.cap))?;
+        let mut h = [0u8; 16];
         h[0..4].copy_from_slice(&width.to_le_bytes());
         h[4..8].copy_from_slice(&height.to_le_bytes());
         h[8..12].copy_from_slice(&(slot as u32).to_le_bytes());
-        write_at(&self.file, &h[..12], 24)?;
+        h[12..16].copy_from_slice(&layout.code().to_le_bytes());
+        write_at(&self.file, &h, 24)?;
         write_at(&self.file, &next.to_le_bytes(), 16)?;
         self.seq = next;
         Ok(true)
@@ -263,6 +400,8 @@ pub enum Cmd {
     Text(String),
     Focus(bool),
     Visible(bool),
+    /// The pixel layout the view wants frames in from now on.
+    Layout(Layout),
     Quit,
 }
 
@@ -282,6 +421,7 @@ impl Cmd {
             Cmd::Text(t) => format!("text {}", t.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")),
             Cmd::Focus(on) => format!("focus {}", flag(*on)),
             Cmd::Visible(on) => format!("visible {}", flag(*on)),
+            Cmd::Layout(l) => format!("layout {}", l.code()),
             Cmd::Quit => "quit".to_string(),
         }
     }
@@ -339,6 +479,7 @@ impl Cmd {
             },
             "focus" => Cmd::Focus(on(num())?),
             "visible" => Cmd::Visible(on(num())?),
+            "layout" => Cmd::Layout(Layout::from_code(num()?.parse().ok()?)?),
             "quit" => Cmd::Quit,
             _ => return None,
         })

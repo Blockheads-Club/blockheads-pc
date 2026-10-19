@@ -15,5 +15,8 @@ toml = "0.8"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 dirs = "6"
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tempfile = "3"

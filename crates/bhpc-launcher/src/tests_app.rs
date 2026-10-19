@@ -604,7 +604,7 @@ mod embed_tests {
         assert!(w.publish(4, 2, &bgra(4, 2, 9)).unwrap());
         assert_eq!(r.seq().unwrap(), 1);
         let info = r.read(&mut buf).unwrap().unwrap();
-        assert_eq!(info, FrameInfo { width: 4, height: 2, seq: 1 });
+        assert_eq!(info, FrameInfo { width: 4, height: 2, seq: 1, layout: Layout::Bgra });
         assert_eq!(buf, bgra(4, 2, 9));
         assert_eq!(r.read(&mut buf).unwrap(), None, "already seen");
         // A different size, then the writer runs ahead by several frames while the reader sleeps.
@@ -624,6 +624,48 @@ mod embed_tests {
         assert_eq!(r.read(&mut buf).unwrap().unwrap().seq, 7);
         r.remove();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn frames_say_their_layout_and_can_be_used_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        let mut r = FrameReader::create(&path).unwrap();
+        let mut used = false;
+        assert_eq!(r.read_with(|_, _| used = true).unwrap(), None, "no frame yet");
+        let mut w = FrameWriter::open(&path).unwrap();
+        assert!(w.publish_as(2, 1, Layout::GlRgba, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap());
+        let mut seen = Vec::new();
+        let info = r.read_with(|_, px| seen = px.to_vec()).unwrap().unwrap();
+        assert_eq!(info, FrameInfo { width: 2, height: 1, seq: 1, layout: Layout::GlRgba });
+        assert_eq!(seen, [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(r.read_with(|_, _| used = true).unwrap(), None, "already seen");
+        assert!(!used);
+        // The mapping is made once and follows later frames.
+        assert!(w.publish(1, 1, &[9, 9, 9, 255]).unwrap());
+        let info = r.read_with(|_, px| assert_eq!(px, [9, 9, 9, 255])).unwrap().unwrap();
+        assert_eq!(info.layout, Layout::Bgra);
+        // The runner came round to the slot while the pixels were used: the frame does not count.
+        assert!(w.publish(1, 1, &[1; 4]).unwrap());
+        let mut w2 = FrameWriter::open(&path).unwrap();
+        let late = r.read_with(|_, _| {
+            w2.publish(1, 1, &[2; 4]).unwrap();
+            w2.publish(1, 1, &[3; 4]).unwrap();
+        });
+        assert_eq!(late.unwrap(), None);
+        assert_eq!(Layout::default(), Layout::Bgra);
+        assert!(crate::embed::Map::new(&std::fs::File::open(&path).unwrap(), 0).is_err(), "an empty mapping");
+    }
+
+    #[test]
+    fn a_frame_with_an_unknown_layout_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        let mut r = FrameReader::create(&path).unwrap();
+        FrameWriter::open(&path).unwrap().publish(1, 1, &[0; 4]).unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        std::os::unix::fs::FileExt::write_all_at(&f, &7u32.to_le_bytes(), 36).unwrap();
+        assert_eq!(r.read_with(|_, _| {}).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]
@@ -700,6 +742,8 @@ mod embed_tests {
             Cmd::Focus(true),
             Cmd::Focus(false),
             Cmd::Visible(false),
+            Cmd::Layout(Layout::GlRgba),
+            Cmd::Layout(Layout::Bgra),
             Cmd::Quit,
         ];
         for c in all {
@@ -722,6 +766,9 @@ mod embed_tests {
             "focus",
             "focus 2",
             "key 1 x 0 0",
+            "layout",
+            "layout 5",
+            "layout x",
         ] {
             assert_eq!(Cmd::parse(bad), None, "{bad:?}");
         }
