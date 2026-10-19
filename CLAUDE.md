@@ -77,6 +77,10 @@ Umbrella rules: `../AGENTS.md`.
   cycles and have a budget). Whoever builds the main CPU (`bhpc-run`) has to call it for the main thread; threads
   made with `pthread_create` inherit it. `sched::set_wall_deadline` is the host watchdog checked at slice ends.
 - `pthread_once` is IN_PROGRESS while the initialiser runs; other threads block in `sched::block` until it returns.
+- Waits are keyed (`sched::block_on(addr)` / `notify_key(addr)`; `block`/`notify` = anything): a waker only wakes
+  the waiters of its object. `--parallel-guest` (off by default, `docs/perf/parallel-guest-threads.md`) turns the
+  baton into a host lock held only in host code; thunks listed in `bhpc_bionic::gate_free` run without it, so they
+  must do each check-and-update in one `lock(st)` section and wait with `Sched::key_seq` + `block_seq`.
   `__futex_wait/__futex_wake` use the same ticket queues as condition variables, keyed by the futex word address.
 - `localtime`/`mktime`/`tzset` use the host zone via `HostClock::local_zone` (libc `localtime_r` on unix, UTC on
   Windows for now); `TZ=UTC` in the guest environment forces UTC.
