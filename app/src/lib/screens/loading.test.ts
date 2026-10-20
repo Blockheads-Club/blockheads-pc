@@ -1,3 +1,4 @@
+import { tick } from 'svelte';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -141,24 +142,20 @@ describe('LoadingView', () => {
 describe('Playing while the game boots', () => {
   const bar = () => screen.queryByRole('progressbar');
 
-  it('shows nothing for a start under 400 ms, then the loader, then fades into the game', async () => {
+  it('shows the loader at once, then fades into the game', async () => {
     store.screen = 'playing';
     store.game = makeSnap({ state: 'starting', running_secs: 0, progress: prog() });
     const { unmount } = render(Playing);
-    expect(bar()).toBeNull();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible();
-    // Fast: the first frame comes before the loader would show.
-    store.game = makeSnap({ state: 'running', running_secs: 1, progress: prog({ ready: true, percent: 100 }) });
-    await vi.advanceTimersByTimeAsync(600);
-    expect(bar()).toBeNull();
-    expect(screen.getByRole('button', { name: 'Stop game' })).toBeVisible();
+    await tick();
+    expect(bar()).not.toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Cancel' })[0]).toBeVisible();
     unmount();
     cleanup();
 
-    // Slow: the loader shows after 400 ms, hands over on ready and is gone 240 ms later.
+    // The loader hands over on ready and is gone 240 ms later.
     store.game = makeSnap({ state: 'starting', running_secs: 0, progress: prog() });
     render(Playing);
-    await vi.advanceTimersByTimeAsync(450);
+    await tick();
     expect(bar()).not.toBeNull();
     expect(screen.getByRole('status', { name: 'Game status: Starting…' })).toBeVisible();
     store.game = makeSnap({ state: 'running', running_secs: 5, progress: prog({ ready: true, percent: 100 }) });

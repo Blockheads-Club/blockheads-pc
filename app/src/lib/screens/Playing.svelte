@@ -16,8 +16,6 @@
   const embedded = $derived(store.embedded);
   const hideBars = $derived(embedded && store.fullscreen);
 
-  /** The loading screen shows only if booting takes longer than this (a faster start goes straight to the game). */
-  const SHOW_AFTER_MS = 400;
   /** The loader fades out over this long once the first frame is up (the CSS transition has the same length). */
   const HANDOVER_MS = 240;
   const starting = $derived(store.starting);
@@ -29,11 +27,9 @@
   const logTail = $derived(store.log.slice(-3));
 
   $effect(() => {
-    if (starting) {
-      const id = setTimeout(() => (shown = true), SHOW_AFTER_MS);
-      return () => clearTimeout(id);
-    }
-    if (!ready) shown = false;
+    // The loader shows at once: a boot takes seconds, and without it the empty (black) stage shows.
+    if (starting) shown = true;
+    else if (!ready) shown = false;
   });
   // First frame: the loader fades out, the game (already rendering behind it) takes the focus.
   $effect(() => {
