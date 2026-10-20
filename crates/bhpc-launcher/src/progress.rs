@@ -137,6 +137,8 @@ pub const SLOW_MIN_SECS: f64 = 4.0;
 pub const SLOW_MAX_SECS: f64 = 15.0;
 /// No progress line for this long counts as a stall.
 pub const STALL: Duration = Duration::from_secs(60);
+/// With earlier starts the time-based bar stops here until the first frame is up.
+const TIMED_CAP: f64 = 99.0;
 /// A step without measurable steps never fills more than this much of its share.
 const EASE_CAP: f64 = 0.95;
 
@@ -352,8 +354,11 @@ impl Tracker {
 
     /// The loading screen's numbers at time `now`.
     pub fn info(&mut self, now: Duration) -> Info {
-        self.shown = self.shown.max(self.raw(now)).min(100.0);
         let ready = self.ready_at.is_some();
+        // With earlier starts the bar follows the time estimate (below), so the percentage and the time left agree.
+        if ready || !self.model.learned {
+            self.shown = self.shown.max(self.raw(now)).min(100.0);
+        }
         let phase = self.last.map_or(Phase::Apk, |l| l.0);
         let idx = phase.index();
         let secs = now.as_secs_f64();
@@ -369,6 +374,11 @@ impl Tracker {
         } else {
             (secs >= ETA_AFTER_SECS && self.shown >= ETA_FROM_PERCENT).then(|| secs * (100.0 - self.shown) / self.shown)
         };
+        if let (false, true, Some(left)) = (ready, self.model.learned, eta) {
+            // Elapsed over elapsed plus left: a start that runs long slows the bar instead of stalling at a high
+            // percentage; it never goes back and leaves the last percent for the first frame.
+            self.shown = self.shown.max(secs / (secs + left) * 100.0).min(TIMED_CAP);
+        }
         let durations = self.durations();
         let step_secs = (0..6)
             .map(|i| match (durations, self.entered[i + 1..].first().copied().flatten()) {

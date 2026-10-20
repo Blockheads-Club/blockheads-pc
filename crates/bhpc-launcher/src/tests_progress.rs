@@ -194,11 +194,17 @@ fn estimate_from_earlier_starts() {
     assert!((t.info(secs(0.5)).eta_secs.unwrap() - 19.5).abs() < 1e-9);
     // Half way through the constructors after 4.5 s, as usual: 1.5 + 4 + 0 + 10 left.
     t.feed(p(Phase::Constructors, 50, 100), secs(4.5));
-    assert!((t.info(secs(4.5)).eta_secs.unwrap() - 15.5).abs() < 1e-9);
+    let i = t.info(secs(4.5));
+    assert!((i.eta_secs.unwrap() - 15.5).abs() < 1e-9);
+    // The bar agrees with the time left: 4.5 s of 20.
+    assert!((i.percent - 22.5).abs() < 1e-9, "{}", i.percent);
     // Twice as slow as usual: twice the time left.
     let mut slow = Tracker::new(m.clone());
     slow.feed(p(Phase::Constructors, 50, 100), secs(9.0));
-    assert!((slow.info(secs(9.0)).eta_secs.unwrap() - 31.0).abs() < 1e-9);
+    let i = slow.info(secs(9.0));
+    assert!((i.eta_secs.unwrap() - 31.0).abs() < 1e-9);
+    // Twice as slow: the bar is no further along than the time says (9 s of 40), not at the step's 39 %.
+    assert!((i.percent - 22.5).abs() < 1e-9, "{}", i.percent);
     // The pace is bounded: very fast reads as half the usual, very slow as three times.
     let mut fast = Tracker::new(m.clone());
     fast.feed(p(Phase::Constructors, 50, 100), secs(0.1));
@@ -210,7 +216,12 @@ fn estimate_from_earlier_starts() {
     let mut late = Tracker::new(m);
     late.feed(p(Phase::Frame, 0, 0), secs(10.0));
     assert!((late.info(secs(15.0)).eta_secs.unwrap() - 5.0).abs() < 1e-9);
-    assert_eq!(late.info(secs(40.0)).eta_secs, Some(1.0));
+    let i = late.info(secs(40.0));
+    assert_eq!(i.eta_secs, Some(1.0));
+    assert!(i.percent < 99.0 + 1e-9, "the last percent waits for the first frame: {}", i.percent);
+    // A longer wait never moves the bar back.
+    assert!(late.info(secs(80.0)).percent >= i.percent);
     late.feed(Line::Ready, secs(41.0));
-    assert_eq!(late.info(secs(41.0)).eta_secs, None);
+    let i = late.info(secs(41.0));
+    assert_eq!((i.eta_secs, i.percent), (None, 100.0));
 }
