@@ -1,19 +1,25 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# Builds the "Blockheads PC" launcher installers (Tauri 2) on Linux, Windows and macOS: the game runner `bhpc-run`
-# goes in as a sidecar (scripts/build-sidecar.sh), then `tauri build` makes
-#   Linux: AppImage, deb, rpm   Windows: NSIS, MSI   macOS: .app, dmg
-# Bundles hold the launcher, the sidecar and icons only; the Linux job checks that no game file slipped in.
-# Written like ci-crossplat.yml and, like it, never run yet: treat the first failures on Windows and macOS as
-# expected and fix forward (see docs/launcher.md).
+# Builds the "Blockheads PC" launcher installers (Tauri 2) for every shipped target; the game runner `bhpc-run` goes
+# in as a sidecar (scripts/build-sidecar.sh), then `tauri build` makes
+#   Linux x86_64 + arm64: AppImage, deb, rpm   Windows x86_64 + arm64: NSIS, MSI   macOS x86_64 + arm64: dmg
+# Bundles hold the launcher, the sidecar and icons only; scripts/check-bundle.sh checks every bundle for the sidecar
+# and for game files that must never be in it.
+#
+# Run by hand with `release_tag` set (a draft or pre-release), the bundles also replace that release's assets.
 name: launcher-bundles
 
 on:
   push:
-    branches: [dev, main]
-    paths: ["app/**", "crates/**", "scripts/build-sidecar.sh", "scripts/ensure-sidecar.mjs", "scripts/check-bundle.sh", ".github/workflows/launcher-bundles.yml"]
+    branches: [dev, main, "port/**"]
+    paths: ["app/**", "crates/**", "Cargo.lock", "scripts/build-sidecar.sh", "scripts/ensure-sidecar.mjs", "scripts/check-bundle.sh", ".github/workflows/launcher-bundles.yml"]
   pull_request:
-    paths: ["app/**", "scripts/build-sidecar.sh", ".github/workflows/launcher-bundles.yml"]
+    paths: ["app/**", "scripts/build-sidecar.sh", "scripts/check-bundle.sh", ".github/workflows/launcher-bundles.yml"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Upload the bundles to this (draft or pre-)release, replacing its assets"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -24,6 +30,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # linuxdeploy and the AppImage runtime are AppImages themselves; runners have no FUSE.
+  APPIMAGE_EXTRACT_AND_RUN: "1"
 
 jobs:
   bundle:
@@ -35,7 +43,9 @@ jobs:
       matrix:
         include:
           - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
           - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { name: windows-arm64, os: windows-11-arm, target: aarch64-pc-windows-msvc }
           - { name: macos-x86_64, os: macos-15-intel, target: x86_64-apple-darwin }
           - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
     steps:
@@ -98,8 +108,8 @@ jobs:
           BHPC_SKIP_SIDECAR: "1"
         run: bun run tauri build --target ${{ matrix.target }}
 
-      - name: No game files in the bundles
-        if: runner.os == 'Linux'
+      - name: Sidecar inside, no game files
+        shell: bash
         run: scripts/check-bundle.sh app/src-tauri/target/${{ matrix.target }}/release/bundle
 
       - uses: actions/upload-artifact@v4
@@ -113,3 +123,27 @@ jobs:
             app/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             app/src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
             app/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+  release:
+    name: release assets
+    needs: bundle
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          pattern: blockheads-pc-*
+          merge-multiple: true
+      - name: Replace the release's assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          ls -l bundles
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+            while IFS= read -r a; do gh release delete-asset "$TAG" "$a" -R "$GITHUB_REPOSITORY" --yes; done
+          gh release upload "$TAG" bundles/* -R "$GITHUB_REPOSITORY" --clobber
