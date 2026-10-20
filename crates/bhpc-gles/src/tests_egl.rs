@@ -332,6 +332,15 @@ fn swapping_and_intervals() {
 }
 
 #[test]
+fn the_host_knows_where_a_context_is_current() {
+    let mut e = Env::new();
+    let (surf, ctx) = setup(&mut e);
+    assert!(!e.gl.context_current());
+    e.call("eglMakeCurrent", &[EGL_DISPLAY, surf, surf, ctx]);
+    assert!(e.gl.context_current());
+}
+
+#[test]
 fn frame_hook_runs_before_each_swap() {
     let mut e = Env::new();
     let (surf, ctx) = setup(&mut e);

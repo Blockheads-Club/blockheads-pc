@@ -74,6 +74,62 @@ pub fn host_key(k: Key) -> HostKey {
     bhpc_input::keymap::host_key_from_hid(k.0)
 }
 
+/// The dialog's share of the window events: [`dialog_input`] plus the releases of the keys and controller buttons
+/// whose press the dialog took. Those must not reach the game either: it acts on the back key when it is released,
+/// so a released Escape that cancelled the "Exit?" alert would ask again.
+#[derive(Debug, Default)]
+pub struct DialogInput {
+    taken: std::collections::HashSet<u64>,
+}
+
+impl DialogInput {
+    /// Like [`dialog_input`]; `dialog` is `None` while no dialog is shown, else whether it has an input line.
+    pub fn filter(&mut self, ev: &Event, dialog: Option<bool>, back: bool) -> Option<Option<bhpc_jni::DialogNav>> {
+        let (id, pressed) = match ev {
+            Event::Key { key, pressed, .. } => (u64::from(key.0), *pressed),
+            Event::PadButton { id, button, pressed } => (1 << 40 | u64::from(*id) << 8 | u64::from(*button), *pressed),
+            _ => (u64::MAX, true),
+        };
+        if !pressed && self.taken.remove(&id) {
+            return Some(None);
+        }
+        let r = dialog_input(ev, dialog?, back);
+        if r.is_some() && pressed && id != u64::MAX {
+            self.taken.insert(id);
+        }
+        r
+    }
+}
+
+/// What a window event does while an alert's dialog is shown: `Some(Some(nav))` steers the dialog, `Some(None)` is
+/// a press the dialog swallows (the game must not see it), `None` goes on to the game as usual (releases, the
+/// mouse, which the dialog takes through its touches). `text`: the dialog has an input line, so keys type into it
+/// (Return and Escape answer it elsewhere) and only the controller steers it. `back`: the key is the Back binding.
+pub fn dialog_input(ev: &Event, text: bool, back: bool) -> Option<Option<bhpc_jni::DialogNav>> {
+    use bhpc_jni::DialogNav as N;
+    match ev {
+        Event::Key { key, pressed: true, mods, .. } if !text => Some(match host_key(*key) {
+            HostKey::Enter | HostKey::Space => Some(N::Accept),
+            HostKey::Escape => Some(N::Cancel),
+            _ if back => Some(N::Cancel),
+            HostKey::Left | HostKey::Up => Some(N::Prev),
+            HostKey::Right | HostKey::Down => Some(N::Next),
+            HostKey::Tab => Some(if mods.shift { N::Prev } else { N::Next }),
+            _ => None,
+        }),
+        Event::Text(_) if !text => Some(None),
+        // SDL controller buttons: A, B, then D-pad up, down, left, right (11..=14).
+        Event::PadButton { button, pressed: true, .. } => Some(match button {
+            0 => Some(N::Accept),
+            1 => Some(N::Cancel),
+            11 | 13 => Some(N::Prev),
+            12 | 14 => Some(N::Next),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
 /// A position in content pixels (what touches carry) as a position in the screen pixels the Java views are laid out
 /// in; `scale` is `Vm::content_scale`.
 pub fn content_to_screen(scale: (f32, f32), x: f32, y: f32) -> (f32, f32) {

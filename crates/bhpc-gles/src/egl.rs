@@ -241,6 +241,11 @@ impl Gles {
         Ok(())
     }
 
+    /// Whether the calling thread has a current context (it can present a frame).
+    pub fn context_current(&self) -> bool {
+        self.lock().egl.current.contains_key(&std::thread::current().id())
+    }
+
     /// `eglSwapInterval`.
     pub fn egl_swap_interval(&self, interval: i32) -> bool {
         let ok = self.window.set_swap_interval(interval.max(0));

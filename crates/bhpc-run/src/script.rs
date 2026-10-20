@@ -14,7 +14,7 @@
 //! +100  shot menu              # screenshot `<name>.png` in the shot directory on the next presented frame
 //! +100  mark world              # start a frame-time segment (p50/p99 are reported per segment)
 //! +100  waittext Welcome         # wait (up to 3 minutes) until a view shows this text; later times shift
-//! +100  clicktext OK            # wait for the text, then click the button that shows it
+//! +100  clicktext OK            # wait for the text, then click the button that shows it (also an alert's dialog)
 //! +100  focus off              # window focus lost / gained (`focus on`); no lifecycle is sent
 //! +100  minimize               # minimised / `restore`d: the game goes to the background and back
 //! +100  resize 1600 900        # resize the window (logical pixels); `key f11` toggles fullscreen

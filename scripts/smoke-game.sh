@@ -44,12 +44,14 @@ run="$(mktemp -d "${TMPDIR:-/tmp}/bhpc-smoke.XXXXXX")"
 trap '[[ "${KEEP:-0}" == 1 ]] || rm -rf "$run"' EXIT
 mkdir -p "$run/home" "$run/data" "$run/shots"
 
-# On a fresh data dir the game creates "My First World" by itself right after booting (the first-run flow has no
-# world options, and it is already the cheapest world creation: ~10 s). The script waits for the in-world welcome
-# popup, enters the world, then pauses and exits to the main menu. Times are ms after the first frame (`+N` = after
+# On a fresh data dir the game first asks for consent (a system alert, drawn as a host dialog: "Allow" is clicked),
+# then creates "My First World" by itself (the first-run flow has no world options, and it is already the cheapest
+# world creation: ~10 s). The script waits for the in-world welcome popup, enters the world, then pauses and exits
+# to the main menu. Times are ms after the first frame (`+N` = after
 # the previous step); `clicktext` waits for its text. Coordinates are for the default 1024x768 window.
 cat > "$run/smoke.script" << 'EOF'
-0     clicktext OK
+0     clicktext Allow
++0    clicktext OK
 +1500 mark world
 +500  shot inworld
 +300  click 20 20

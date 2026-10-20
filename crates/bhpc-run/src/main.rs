@@ -224,6 +224,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
         cfg.shot_dir = d.into();
     }
     cfg.alert_choice = opt(args, "--alert-choice").and_then(|v| v.parse().ok());
+    cfg.auto_alerts = cfg.alert_choice.is_some() || args.iter().any(|a| a == "--auto-alerts");
     cfg.trace_objc = args.iter().any(|a| a == "--trace-objc");
     if let Some(list) = opt(args, "--trace-fn") {
         cfg.trace_fn = list.split(',').map(str::to_string).collect();

@@ -1,10 +1,12 @@
-//! The dialog of an alert with an input line (the game's "World Name" prompt and the other name prompts).
+//! The dialog of an alert: the system alerts with buttons only ("Exit?", the privacy consent, "Restore
+//! Double-Time") and the ones with an input line (the "World Name" prompt and the other name prompts).
 //!
-//! On Android `AlertView` with a `TextField` becomes a system `AlertDialog` with an `EditText`: the system draws it
+//! On Android `AlertView` becomes a system `AlertDialog` (with an `EditText` for an input line): the system draws it
 //! and the soft keyboard types into it. The game's own views hold nothing to draw (the alert has no frame), so the
 //! host draws the dialog over everything: title, message, the field with the text and the caret, and the buttons.
 //! The dialog is modal: while it is shown it takes every touch, and a click on one of its buttons is kept for the
-//! runner ([`Vm::take_dialog_pick`]), which answers the alert with it. Return and Escape answer it too (the runner).
+//! runner ([`Vm::take_dialog_pick`]), which answers the alert with it. Keys and controller buttons move the focus
+//! between the buttons and press them ([`Vm::dialog_nav`]). Alerts shown while one is up wait their turn.
 
 use super::{measure, wrap, Canvas, FontRef, Item, Rect};
 use crate::ui::{TextStyle, TouchPhase};
@@ -20,6 +22,8 @@ pub(crate) struct Dialog {
     pub caret: Option<usize>,
     /// The button a touch went down on.
     pub pressed: Option<i32>,
+    /// The button the keyboard or controller would press: the default (positive) one at first.
+    pub focus: Option<i32>,
     /// The button the user clicked, until the runner takes it.
     pub pick: Option<i32>,
 }
@@ -32,8 +36,10 @@ pub(crate) struct Layout {
     pub panel: Rect,
     pub title: Rect,
     pub message: Option<Rect>,
-    pub field: Rect,
-    /// Caption, button index, rectangle: the cancel button first (left), the way Android lays out a dialog.
+    /// The input line, for an alert with a text field.
+    pub field: Option<Rect>,
+    /// Caption, button index, rectangle: the cancel button first (left), the way Android lays out a dialog; more
+    /// than three are stacked.
     pub buttons: Vec<(String, i32, Rect)>,
 }
 
@@ -43,6 +49,8 @@ const WHITE: u32 = 0xFFFF_FFFF;
 const GREY: u32 = 0xFFD0_D0D0;
 const BLACK: u32 = 0xFF00_0000;
 const BUTTON: u32 = 0xFF3D_3D3D;
+/// The focused button (keyboard, controller).
+const FOCUS: u32 = 0xFF5A_5A5A;
 /// Android's (Holo) accent: the field's underline and a pressed button.
 const ACCENT: u32 = 0xFF33_B5E5;
 
@@ -86,9 +94,13 @@ pub(crate) fn layout(screen: (f32, f32), alert: &Alert, font: &FontArc) -> Layou
         let sf = Canvas::scaled_for([0.0, 0.0, inner, 0.0], &alert.message, font, &st);
         wrap(&sf, &alert.message, inner, 0).len() as f32 * (sf.height() + sf.line_gap())
     };
-    let (gap, field_h, button_h) = (12.0 * s, 36.0 * s, 40.0 * s);
-    let height =
-        pad + title_h + gap + message_h + if message_h > 0.0 { gap } else { 0.0 } + field_h + 20.0 * s + button_h + pad;
+    let (gap, button_h) = (12.0 * s, 40.0 * s);
+    let field_h = if alert.field.is_some() { 36.0 * s + 20.0 * s } else { 8.0 * s };
+    let all: Vec<(String, i32)> = alert.cancel.iter().chain(&alert.buttons).cloned().collect();
+    let bgap = 8.0 * s;
+    let stacked = all.len() > 3;
+    let buttons_h = if stacked { all.len() as f32 * (button_h + bgap) - bgap } else { button_h };
+    let height = pad + title_h + gap + message_h + if message_h > 0.0 { gap } else { 0.0 } + field_h + buttons_h + pad;
     let x0 = ((sw - width) / 2.0).round();
     let y0 = ((sh - height) / 2.0).max(0.0).round();
     let (l, r) = (x0 + pad, x0 + width - pad);
@@ -100,17 +112,16 @@ pub(crate) fn layout(screen: (f32, f32), alert: &Alert, font: &FontArc) -> Layou
         y += message_h + gap;
         m
     });
-    let field = [l, y, r, y + field_h];
-    y += field_h + 20.0 * s;
-    let all: Vec<(String, i32)> = alert.cancel.iter().chain(&alert.buttons).cloned().collect();
-    let bgap = 8.0 * s;
-    let bw = (inner - bgap * (all.len().max(1) - 1) as f32) / all.len().max(1) as f32;
+    let field = alert.field.map(|_| [l, y, r, y + 36.0 * s]);
+    y += field_h;
+    let bw = if stacked { inner } else { (inner - bgap * (all.len().max(1) - 1) as f32) / all.len().max(1) as f32 };
     let buttons = all
         .into_iter()
         .enumerate()
         .map(|(i, (caption, index))| {
-            let bx = l + i as f32 * (bw + bgap);
-            (caption, index, [bx, y, bx + bw, y + button_h])
+            let (bx, by) =
+                if stacked { (l, y + i as f32 * (button_h + bgap)) } else { (l + i as f32 * (bw + bgap), y) };
+            (caption, index, [bx, by, bx + bw, by + button_h])
         })
         .collect();
     Layout { scale: s, panel: [x0, y0, x0 + width, y0 + height], title, message, field, buttons }
@@ -141,8 +152,30 @@ pub(super) fn items(d: &Dialog, l: &Layout, screen: (f32, f32), text: &str) -> V
     if let Some(m) = l.message {
         out.push(label(m, all, &d.alert.message, regular, message_style(s)));
     }
-    // The field: white, underlined, the text scrolled so that the caret stays in view.
-    let f = l.field;
+    if let Some(f) = l.field {
+        field_items(&mut out, d, f, s, all, text);
+    }
+    for (caption, index, r) in &l.buttons {
+        let color = if d.pressed == Some(*index) {
+            ACCENT
+        } else if d.focus == Some(*index) {
+            FOCUS
+        } else {
+            BUTTON
+        };
+        out.push(fill(*r, all, color));
+        if d.focus == Some(*index) {
+            out.push(fill([r[0], r[3] - 2.0 * s, r[2], r[3]], all, ACCENT));
+        }
+        out.push(label(*r, *r, caption, regular, style(16.0 * s, WHITE, 1, 1)));
+    }
+    out
+}
+
+/// The input line at `f`: white, underlined, the text scrolled so that the caret stays in view.
+fn field_items(out: &mut Vec<Item>, d: &Dialog, f: Rect, s: f32, all: Rect, text: &str) {
+    let regular = &fonts()[0];
+    let fill = |rect: Rect, clip: Rect, argb: u32| Item::Fill { rect, clip, argb, alpha: 1.0 };
     out.push(fill(f, all, WHITE));
     out.push(fill([f[0], f[3] - 2.0 * s, f[2], f[3]], all, ACCENT));
     let (fx0, fx1) = (f[0] + 8.0 * s, f[2] - 8.0 * s);
@@ -155,38 +188,78 @@ pub(super) fn items(d: &Dialog, l: &Layout, screen: (f32, f32), text: &str) -> V
     let clip = [fx0 - 1.0, f[1], fx1 + 2.0 * s, f[3]];
     if !text.is_empty() {
         let x = fx0 - scroll;
-        out.push(label([x, f[1], x + measure(&sf, text) + 4.0 * s, f[3]], clip, text, regular, st));
+        out.push(Item::Text {
+            rect: [x, f[1], x + measure(&sf, text) + 4.0 * s, f[3]],
+            clip,
+            alpha: 1.0,
+            text: text.to_string(),
+            font: regular.clone(),
+            style: st,
+        });
     }
     if caret.is_some() {
         let x = (fx0 - scroll + before).round();
         out.push(fill([x, f[1] + 7.0 * s, x + (2.0 * s).round(), f[3] - 7.0 * s], clip, BLACK));
     }
-    for (caption, index, r) in &l.buttons {
-        out.push(fill(*r, all, if d.pressed == Some(*index) { ACCENT } else { BUTTON }));
-        out.push(label(*r, *r, caption, regular, style(16.0 * s, WHITE, 1, 1)));
-    }
-    out
+}
+
+/// A key or controller button for the shown dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogNav {
+    /// The focus moves to the next button (right, down, Tab).
+    Next,
+    /// The focus moves to the previous button (left, up, Shift+Tab).
+    Prev,
+    /// Press the focused button (Enter, controller A).
+    Accept,
+    /// Press the cancel (negative) button, if the alert has one (Escape, controller B).
+    Cancel,
+}
+
+/// The button Enter presses at first: the first of the alert's buttons, else its cancel button.
+fn default_button(alert: &Alert) -> Option<i32> {
+    alert.buttons.first().or(alert.cancel.as_ref()).map(|b| b.1)
+}
+
+fn new_dialog(alert: Alert) -> Dialog {
+    let focus = default_button(&alert);
+    Dialog { alert, caret: None, pressed: None, focus, pick: None }
 }
 
 impl Vm {
-    /// Show the dialog of an alert with an input line (`AlertView.show`).
+    /// Show the dialog of an alert (`AlertView.show`); while another one is shown it waits for its turn.
     pub(crate) fn open_dialog(&self, alert: Alert) {
-        self.st().dialog = Some(Dialog { alert, caret: None, pressed: None, pick: None });
+        let mut st = self.st();
+        if st.dialog.as_ref().is_some_and(|d| d.alert.view == alert.view) {
+            return;
+        }
+        if st.dialog.is_some() {
+            st.dialog_queue.push(alert);
+            return;
+        }
+        st.dialog = Some(new_dialog(alert));
+        drop(st);
         self.ui_changed();
     }
 
-    /// The alert `view` was answered: its dialog goes away.
+    /// The alert `view` was answered or dismissed: its dialog goes away and the next waiting one is shown.
     pub(crate) fn close_dialog(&self, view: crate::value::Obj) {
         let mut st = self.st();
+        st.dialog_queue.retain(|a| a.view != view);
         if st.dialog.as_ref().is_some_and(|d| d.alert.view == view) {
-            st.dialog = None;
+            st.dialog = (!st.dialog_queue.is_empty()).then(|| new_dialog(st.dialog_queue.remove(0)));
             st.ui.generation += 1;
         }
     }
 
-    /// Whether an alert's input dialog is shown.
+    /// Whether an alert's dialog is shown.
     pub fn dialog_shown(&self) -> bool {
         self.st().dialog.is_some()
+    }
+
+    /// The alert whose dialog is shown.
+    pub fn dialog_alert(&self) -> Option<Alert> {
+        self.st().dialog.as_ref().map(|d| d.alert.clone())
     }
 
     /// Where the dialog draws the caret (the host's caret of the focused field, UTF-16 units).
@@ -198,9 +271,72 @@ impl Vm {
         }
     }
 
-    /// The index of the dialog button the user clicked since the last call.
-    pub fn take_dialog_pick(&self) -> Option<i32> {
-        self.st().dialog.as_mut().and_then(|d| d.pick.take())
+    /// A key or controller button for the dialog: moves its focus or picks a button (for
+    /// [`Vm::take_dialog_pick`]). False without a dialog.
+    pub fn dialog_nav(&self, nav: DialogNav) -> bool {
+        let mut st = self.st();
+        let Some(d) = st.dialog.as_mut() else { return false };
+        // The buttons in the order they are laid out: the cancel button first.
+        let order: Vec<i32> = d.alert.cancel.iter().chain(&d.alert.buttons).map(|b| b.1).collect();
+        let before = d.focus;
+        match nav {
+            // The focus stops at the ends (Right on the rightmost button keeps it).
+            DialogNav::Next | DialogNav::Prev if !order.is_empty() => {
+                let at = d.focus.and_then(|f| order.iter().position(|i| *i == f));
+                let to = match (at, nav) {
+                    (None, DialogNav::Next) => 0,
+                    (None, _) => order.len() - 1,
+                    (Some(i), DialogNav::Next) => (i + 1).min(order.len() - 1),
+                    (Some(i), _) => i.saturating_sub(1),
+                };
+                d.focus = Some(order[to]);
+            }
+            DialogNav::Next | DialogNav::Prev => {}
+            DialogNav::Accept => d.pick = d.focus.or_else(|| default_button(&d.alert)),
+            DialogNav::Cancel => {
+                if let Some(c) = &d.alert.cancel {
+                    d.pick = Some(c.1);
+                }
+            }
+        }
+        if d.focus != before {
+            st.ui.generation += 1;
+        }
+        true
+    }
+
+    /// The alert of the shown dialog and the index of the button the user picked since the last call.
+    pub fn take_dialog_pick(&self) -> Option<(Alert, i32)> {
+        let mut st = self.st();
+        let d = st.dialog.as_mut()?;
+        d.pick.take().map(|p| (d.alert.clone(), p))
+    }
+
+    /// Whether the shown dialog displays `needle` (ignoring case) in its title, message or a button.
+    pub(crate) fn dialog_has_text(&self, needle: &str) -> bool {
+        let needle = needle.to_lowercase();
+        let st = self.st();
+        st.dialog.as_ref().is_some_and(|d| {
+            let a = &d.alert;
+            [&a.title, &a.message]
+                .into_iter()
+                .chain(a.cancel.iter().chain(&a.buttons).map(|b| &b.0))
+                .any(|t| !t.is_empty() && t.to_lowercase().contains(&needle))
+        })
+    }
+
+    /// Screen position of the centre of the dialog button showing `needle` (ignoring case; a button that shows
+    /// exactly it wins: "Allow" is not "Don't Allow").
+    pub(crate) fn dialog_button_pos(&self, needle: &str) -> Option<(f32, f32)> {
+        let needle = needle.to_lowercase();
+        let (_, l) = self.dialog_layout()?;
+        let caption = |b: &&(String, i32, Rect)| b.0.to_lowercase();
+        let (_, _, r) = l
+            .buttons
+            .iter()
+            .find(|b| caption(b) == needle)
+            .or_else(|| l.buttons.iter().find(|b| caption(b).contains(&needle)))?;
+        Some(((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0))
     }
 
     /// The shown dialog and its layout on the current window.
@@ -210,7 +346,6 @@ impl Vm {
         let l = layout((w.max(1) as f32, h.max(1) as f32), &d.alert, &fonts()[0].font);
         Some((d, l))
     }
-
     /// What the dialog draws (nothing when none is shown).
     pub(super) fn dialog_items(&self) -> Vec<Item> {
         let Some((d, l)) = self.dialog_layout() else { return Vec::new() };

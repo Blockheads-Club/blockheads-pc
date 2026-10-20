@@ -9,7 +9,7 @@ SDL_VIDEODRIVER=offscreen target/release/bhpc-run --apk "$HOME/Downloads/The Blo
 ```
 
 Options: `--window WxH`, `--shot FILE` (+ `-first.png`), `--shot-at N` (swap number), `--exit-after-shot`, `--seconds N`,
-`--click X,Y@MS`, `--alert-choice N`, `--check-gl`, `--trace-objc` (every Objective-C method-cache miss, a cheap
+`--click X,Y@MS`, `--auto-alerts`, `--alert-choice N` (implies `--auto-alerts`), `--check-gl`, `--trace-objc` (every Objective-C method-cache miss, a cheap
 message trace), `--trace-jni --trace-jni-calls`, `--trace-fs` (also logs `dlopen`/`dlsym`), `--jni-report FILE`,
 `--symbolize A,B`, `--data-dir D`. At the end the run prints where every guest thread last blocked (`[blocked]`), the
 Java members that are still stubs and were called, GL calls that hit ignored stubs and the hottest host functions.
@@ -42,8 +42,8 @@ World..." opens the world dialog).
 * LMDB needs `pread`/`pwrite` and coherent `mmap(MAP_SHARED)` (`mmapio.rs`);
 * `dlopen`/`dlsym` over a snapshot of the module table plus the GL/EGL/OpenSL ES host libraries (`dl.rs`), including
   `RTLD_NEXT` (libgles wraps `eglSwapBuffers`);
-* first launch shows a consent alert ("Enable multiplayer and free crystals?"); play mode presses the first button
-  (`--alert-choice` overrides).
+* first launch shows a consent alert ("Enable multiplayer and free crystals?"); it is drawn as a host dialog
+  (`render/dialog.rs`) like every alert; `--auto-alerts` presses the first button (`--alert-choice N` another one).
 
 ## Open issues / next blockers
 

@@ -311,12 +311,15 @@ impl Vm {
 
     /// True if a shown view displays text containing `needle` (ignoring case).
     pub fn has_text(&self, needle: &str) -> bool {
-        !self.shown_with_text(needle).is_empty()
+        self.dialog_has_text(needle) || !self.shown_with_text(needle).is_empty()
     }
 
     /// Screen position of the centre of the control (the button or field itself, or the one that contains the label)
-    /// that shows `needle`: where a user would click.
+    /// that shows `needle`: where a user would click. A shown dialog is modal: only its buttons count.
     pub fn control_screen_pos(&self, needle: &str) -> Option<(f32, f32)> {
+        if self.dialog_shown() {
+            return self.dialog_button_pos(needle);
+        }
         let found = *self.shown_with_text(needle).last()?;
         let target = {
             let st = self.st();

@@ -197,8 +197,10 @@ pub(crate) struct State {
     pub ui: crate::ui::UiState,
     /// Fonts and the last frame of the view renderer.
     pub render: crate::render::RenderCache,
-    /// The shown input dialog of an alert with a text field (see `render::dialog`).
+    /// The shown dialog of an alert (see `render::dialog`).
     pub dialog: Option<crate::render::dialog::Dialog>,
+    /// Alerts shown while a dialog was up, in order: each gets the dialog when the one before is answered.
+    pub dialog_queue: Vec<Alert>,
 }
 
 /// Resolver for exported native symbols: name -> guest address.
@@ -333,6 +335,12 @@ impl Vm {
 
     pub fn platform(&self) -> &Platform {
         &self.0.platform
+    }
+
+    /// Present a frame the way the game does (`VerdeActivity.swapBuffers`), for a host frame while the game draws
+    /// none.
+    pub fn swap_buffers(&self) -> bool {
+        self.0.gfx.swap_buffers()
     }
 
     /// The display size in pixels the game sees (starts as `Platform::screen_*`).

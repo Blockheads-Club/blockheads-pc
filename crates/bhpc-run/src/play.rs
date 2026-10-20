@@ -64,7 +64,10 @@ pub struct PlayConfig {
     pub trace_objc: bool,
     /// Exported ARM functions whose calls are logged (`--trace-fn`).
     pub trace_fn: Vec<String>,
-    /// Button index to press when the game shows an alert (default: the first button, else the cancel button).
+    /// Answer the alerts with buttons only at once instead of showing them (`--auto-alerts`; headless runs).
+    pub auto_alerts: bool,
+    /// Button index to press when alerts are answered automatically (default: the first button, else the cancel
+    /// button).
     pub alert_choice: Option<i32>,
     /// Scripted input, screenshots and frame-time marks (see `script`).
     pub script: Vec<Step>,
@@ -119,6 +122,7 @@ impl PlayConfig {
             jni_report: None,
             trace_objc: false,
             trace_fn: Vec::new(),
+            auto_alerts: false,
             alert_choice: None,
             script: Vec::new(),
             shot_dir: PathBuf::from("."),
@@ -1033,6 +1037,7 @@ fn boot(
     kick_main_queue(&mut sess, &main_q);
     let ui = UiThread {
         main: Some(main_q),
+        gles: gles.clone(),
         game,
         screen_modes,
         vm: vm.clone(),
@@ -1092,6 +1097,8 @@ fn boot(
 /// What the Android UI thread needs (moved into its start routine).
 struct UiThread {
     main: Option<Arc<crate::mainq::MainQueue>>,
+    /// Presents host frames while a dialog waits and the game draws nothing.
+    gles: Gles,
     /// The game's on-screen controls (hide, walk, zoom, pause), when the hooks went in.
     game: Option<Arc<GameHooks>>,
     /// Gives the game a screen mode of the new window size (see `follow_window_aspect`).
@@ -1348,12 +1355,65 @@ impl UiThread {
         }
     }
 
+    /// One turn of the UI thread without input: a short sleep, the main looper, the thread's run loop, layout.
+    fn turn(&self, c: &mut Cpu) -> Result<(), String> {
+        let vm = &self.vm;
+        sched::sleep(c, &self.st, 4_000_000);
+        // Runnables other threads posted to the Android main looper (`performSelectorOnMainThread` and friends).
+        c.set_ticks(FOREVER);
+        match vm.pump(c, vm.main_looper(), vm.now_ms()) {
+            Ok(_) => {}
+            Err(Throw::Stop(s)) => return Err(format!("main looper: guest stopped: {s}")),
+            Err(Throw::Exc(e)) => {
+                eprintln!("[play] main looper: Java exception {}", vm.exception_message(e).unwrap_or_default());
+            }
+        }
+        if let Some((run, mode)) = self.runloop {
+            // `CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true)`: the double sits in r2:r3, the flag on the stack.
+            c.set_ticks(FOREVER);
+            if let Err(e) = c.call(run, &[mode, 0, 0, 0, 1]) {
+                return Err(format!("UI run loop: guest stopped: {e:?}"));
+            }
+        }
+        match vm.run_layout(c) {
+            Ok(_) => {}
+            Err(Throw::Stop(s)) => return Err(format!("layout: guest stopped: {s}")),
+            Err(Throw::Exc(e)) => {
+                eprintln!("[play] layout: Java exception {}", vm.exception_message(e).unwrap_or_default());
+            }
+        }
+        Ok(())
+    }
+
+    /// A dialog shown while the game presents no frames (the consent alert comes before its first frame) would never
+    /// reach the screen: the main thread presents one for it every [`HOST_FRAME`].
+    fn present_dialog(&self, c: &mut Cpu, frames: &mut (u64, Instant)) {
+        let n = self.flags.swaps.load(Ordering::SeqCst);
+        if n != frames.0 {
+            *frames = (n, Instant::now());
+        }
+        let Some(main) = self.main.as_ref().filter(|_| frames.1.elapsed() >= HOST_FRAME && self.vm.dialog_shown())
+        else {
+            return;
+        };
+        let (gles, vm) = (self.gles.clone(), self.vm.clone());
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        // The frame goes the way of the game's own (`VerdeActivity.swapBuffers`): overlay, counters, screenshots.
+        let shown = main.call(c, move |_| gles.context_current() && vm.swap_buffers());
+        if !shown && !WARNED.swap(true, Ordering::SeqCst) {
+            eprintln!("[play] no GL context on the main thread yet: the dialog cannot be shown");
+        }
+        *frames = (self.flags.swaps.load(Ordering::SeqCst), Instant::now());
+    }
+
     fn ui_loop(&self, c: &mut Cpu, mapper: &mut InputMapper, rx: Option<&Receiver<Event>>) -> String {
         let (vm, flags, cfg, st) = (&self.vm, &self.flags, &self.cfg, &self.st);
         let begun = Instant::now();
         let mut tracker = InputTracker::default();
-        let mut text_alert: Option<bhpc_jni::Alert> = None;
         let mut focused: Option<bhpc_jni::Obj> = None;
+        let mut dialog_keys = crate::input::DialogInput::default();
+        // The game's frame count and when it last changed: a dialog with no game frames is presented by the host.
+        let mut frames = (flags.swaps.load(Ordering::SeqCst), Instant::now());
         // The wheel step in progress (the game's own pinch, a few frames long).
         let mut wheel: Option<crate::gameui::WheelAnim> = None;
         loop {
@@ -1372,49 +1432,34 @@ impl UiThread {
             if let Some(f) = lock(st).sched.failure() {
                 return format!("a guest thread failed: {f}");
             }
-            sched::sleep(c, st, 4_000_000);
             // Touch times are `SystemClock.uptimeMillis`; UIKit compares them with `systemUptime`, the guest's
             // monotonic clock, to expire taps.
             let now = {
                 let (secs, nanos) = lock(st).clock.monotonic();
                 secs * 1000 + i64::from(nanos / 1_000_000)
             };
-            // Runnables other threads posted to the Android main looper (`performSelectorOnMainThread` and friends).
-            c.set_ticks(FOREVER);
-            match vm.pump(c, vm.main_looper(), vm.now_ms()) {
-                Ok(_) => {}
-                Err(Throw::Stop(s)) => return format!("main looper: guest stopped: {s}"),
-                Err(Throw::Exc(e)) => {
-                    eprintln!("[play] main looper: Java exception {}", vm.exception_message(e).unwrap_or_default());
-                }
-            }
-            if let Some((run, mode)) = self.runloop {
-                // `CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true)`: the double sits in r2:r3, the flag on the stack.
-                c.set_ticks(FOREVER);
-                if let Err(e) = c.call(run, &[mode, 0, 0, 0, 1]) {
-                    return format!("UI run loop: guest stopped: {e:?}");
-                }
-            }
-            match vm.run_layout(c) {
-                Ok(_) => {}
-                Err(Throw::Stop(s)) => return format!("layout: guest stopped: {s}"),
-                Err(Throw::Exc(e)) => {
-                    eprintln!("[play] layout: Java exception {}", vm.exception_message(e).unwrap_or_default());
-                }
+            if let Err(why) = self.turn(c) {
+                return why;
             }
             for alert in vm.take_alerts() {
                 if alert.field.is_some() {
                     // An alert with an input line waits for the typed text; Return answers it with the first button,
                     // Escape with the cancel button.
                     eprintln!("[play] alert {:?} with a text field: waiting for text input", alert.title);
-                    text_alert = Some(alert);
-                    continue;
-                }
-                self.answer(c, &alert, None);
-                if flags.fail.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
-                    return "alert: guest stopped".into();
+                } else if cfg.auto_alerts {
+                    self.answer(c, &alert, None);
+                    if flags.fail.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
+                        return "alert: guest stopped".into();
+                    }
+                } else {
+                    // Its dialog is up (`render::dialog`); the user's pick answers it below.
+                    eprintln!(
+                        "[play] alert {:?}: {:?}; buttons {:?} cancel {:?}: shown",
+                        alert.title, alert.message, alert.buttons, alert.cancel
+                    );
                 }
             }
+            self.present_dialog(c, &mut frames);
             if flags.dump_views.swap(false, Ordering::SeqCst) {
                 eprintln!("[views]\n{}", vm.dump_views());
             }
@@ -1464,9 +1509,18 @@ impl UiThread {
             }
             let pending: Vec<Event> = std::iter::from_fn(|| rx.and_then(|r| r.try_recv().ok())).collect();
             for ev in crate::input::coalesce_moves(pending) {
+                let mut back = false;
                 if let Event::Key { key, pressed: true, mods, .. } = &ev {
                     let held = bhpc_input::Mods { ctrl: mods.ctrl, shift: mods.shift, alt: mods.alt };
-                    escape |= cfg.bindings.back.fires(Input::Key(host_key(*key)), held);
+                    back = cfg.bindings.back.fires(Input::Key(host_key(*key)), held);
+                    escape |= back;
+                }
+                // A shown dialog is modal: its keys and controller buttons do not reach the game.
+                if let Some(nav) = dialog_keys.filter(&ev, vm.dialog_alert().map(|d| d.field.is_some()), back) {
+                    if let Some(nav) = nav {
+                        vm.dialog_nav(nav);
+                    }
+                    continue;
                 }
                 if let Event::Resized(m) = &ev {
                     // The display of the game follows the window; `SurfaceChanged` below tells the game.
@@ -1510,12 +1564,28 @@ impl UiThread {
                 v.content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
             }
             vm.set_dialog_caret(mapper.text_caret());
-            // A click on a button of the input dialog, Return (the first button) or Escape (the cancel button).
-            let clicked = vm.take_dialog_pick();
-            if let Some(alert) = text_alert.take_if(|_| clicked.is_some() || returned || escape) {
-                let pick = clicked.or_else(|| (!returned).then(|| alert.cancel.as_ref().map_or(0, |b| b.1)));
-                eprintln!("[play] text alert answered with {:?}: {:?}", pick, alert.field.map(|f| vm.text_of(f)));
-                self.answer(c, &alert, pick);
+            // An input dialog: Return in its field presses the focused (first) button, Escape the cancel button.
+            if vm.dialog_alert().is_some_and(|d| d.field.is_some()) {
+                if returned {
+                    vm.dialog_nav(bhpc_jni::DialogNav::Accept);
+                } else if escape {
+                    vm.dialog_nav(bhpc_jni::DialogNav::Cancel);
+                }
+            }
+            // A click on a dialog button, or a key or controller button that pressed one.
+            if let Some((alert, pick)) = vm.take_dialog_pick() {
+                eprintln!(
+                    "[play] alert {:?} answered with {pick}: {:?}",
+                    alert.title,
+                    alert.field.map(|f| vm.text_of(f))
+                );
+                self.answer(c, &alert, Some(pick));
+                if flags.fail.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
+                    return "alert: guest stopped".into();
+                }
+                if alert.field.is_none() {
+                    continue;
+                }
                 let mut sink = JniSink {
                     vm,
                     cpu: c,
@@ -1532,6 +1602,8 @@ impl UiThread {
     }
 }
 
+/// How often a dialog is presented while the game draws no frames.
+const HOST_FRAME: Duration = Duration::from_millis(100);
 /// While the main thread presents no frames (start-up), a job waiting in `queue` for 20 ms asks libdispatch to run
 /// the queue from the main run loop: `dispatch_async_f(&_dispatch_main_q, 0, drain)`. Without libdispatch the poster
 /// keeps waiting and finally runs the job itself, as before.

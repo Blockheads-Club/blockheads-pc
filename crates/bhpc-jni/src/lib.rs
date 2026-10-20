@@ -29,6 +29,7 @@ pub use platform::{
     Assets, AudioHooks, GfxHooks, MemAssets, MusicOp, NoAssets, NoAudio, NoGfx, NoSystem, Platform, SystemHooks,
     TrackOp,
 };
+pub use render::dialog::DialogNav;
 pub use render::UiFrame;
 pub use startup::{native_env, Stage};
 pub use ui::{Hit, TouchPhase};

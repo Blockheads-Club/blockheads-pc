@@ -257,6 +257,64 @@ fn control_touches_and_clicks_cross_the_content_surface() {
 }
 
 #[test]
+fn keys_and_controller_buttons_steer_a_dialog() {
+    use crate::input::dialog_input;
+    use bhpc_jni::DialogNav as N;
+    let key = |code: u32, pressed: bool, shift: bool| Event::Key {
+        key: Key(code),
+        pressed,
+        repeat: false,
+        mods: AppMods { shift, ..AppMods::default() },
+    };
+    let pad = |button: u8, pressed: bool| Event::PadButton { id: 0, button, pressed };
+    // Buttons only: Enter/keypad Enter/Space press the focused button, Escape and Back cancel, arrows and Tab move.
+    for (code, shift, want) in [
+        (40, false, Some(N::Accept)),
+        (88, false, Some(N::Accept)),
+        (44, false, Some(N::Accept)),
+        (41, false, Some(N::Cancel)),
+        (80, false, Some(N::Prev)),
+        (82, false, Some(N::Prev)),
+        (79, false, Some(N::Next)),
+        (81, false, Some(N::Next)),
+        (43, false, Some(N::Next)),
+        (43, true, Some(N::Prev)),
+        (4, false, None),
+    ] {
+        assert_eq!(dialog_input(&key(code, true, shift), false, false), Some(want), "key {code}");
+    }
+    assert_eq!(dialog_input(&key(42, true, false), false, true), Some(Some(N::Cancel)), "the Back binding");
+    assert_eq!(dialog_input(&key(40, false, false), false, false), None, "releases go on");
+    assert_eq!(dialog_input(&Event::Text("a".into()), false, false), Some(None));
+    // With an input line the keys belong to the field.
+    assert_eq!(dialog_input(&key(80, true, false), true, false), None);
+    assert_eq!(dialog_input(&Event::Text("a".into()), true, false), None);
+    // The controller steers both kinds.
+    for (button, want) in
+        [(0, Some(N::Accept)), (1, Some(N::Cancel)), (11, Some(N::Prev)), (13, Some(N::Prev)), (12, Some(N::Next))]
+            .into_iter()
+            .chain([(14, Some(N::Next)), (6, None)])
+    {
+        assert_eq!(dialog_input(&pad(button, true), true, false), Some(want), "button {button}");
+    }
+    assert_eq!(dialog_input(&pad(0, false), false, false), None);
+    assert_eq!(dialog_input(&Event::MouseMove { x: 1.0, y: 1.0 }, false, false), None);
+
+    // The releases of what the dialog took stay with it, also after it closed; other releases go on.
+    let mut f = crate::input::DialogInput::default();
+    assert_eq!(f.filter(&key(41, true, false), None, false), None, "no dialog");
+    assert_eq!(f.filter(&key(41, false, false), None, false), None);
+    assert_eq!(f.filter(&key(41, true, false), Some(false), false), Some(Some(N::Cancel)));
+    assert_eq!(f.filter(&pad(1, true), Some(false), false), Some(Some(N::Cancel)));
+    assert_eq!(f.filter(&Event::MouseMove { x: 1.0, y: 1.0 }, Some(false), false), None);
+    assert_eq!(f.filter(&Event::Text("a".into()), Some(false), false), Some(None));
+    assert_eq!(f.filter(&key(41, false, false), None, false), Some(None), "swallowed");
+    assert_eq!(f.filter(&key(41, false, false), None, false), None, "once");
+    assert_eq!(f.filter(&pad(1, false), Some(false), false), Some(None));
+    assert_eq!(f.filter(&key(4, false, false), Some(false), false), None, "pressed before the dialog");
+}
+
+#[test]
 fn coalesce_keeps_the_newest_move_of_each_burst() {
     let mv = |x: f32| Event::MouseMove { x, y: 0.0 };
     let btn = |pressed| Event::MouseButton { button: AB::Left, pressed, x: 0.0, y: 0.0 };

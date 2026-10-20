@@ -955,7 +955,7 @@ fn an_alert_with_an_input_line_is_drawn_as_a_dialog() {
     let f = e.vm.render_ui().unwrap();
     // A scrim over the whole window, the panel, the white field with its text, no caret yet.
     assert_ne!(px(&f, 5, 5)[3], 0);
-    let fl = l.field.map(|v| v as u32);
+    let fl = l.field.unwrap().map(|v| v as u32);
     assert_eq!(px(&f, fl[2] - 3, fl[1] + 3), [255; 4]);
     let dark = |f: &UiFrame, x0: u32, x1: u32| {
         (x0..x1).filter(|&x| (fl[1] + 8..fl[3] - 8).any(|y| px(f, x, y)[0] < 100)).count()
@@ -997,7 +997,7 @@ fn an_alert_with_an_input_line_is_drawn_as_a_dialog() {
     assert_eq!(e.vm.take_dialog_pick(), None, "cancelled");
     assert!(touch(&mut e, TouchPhase::Begin, dx, dy));
     assert!(touch(&mut e, TouchPhase::End, dx, dy));
-    assert_eq!(e.vm.take_dialog_pick(), Some(1));
+    assert_eq!(e.vm.take_dialog_pick().map(|(a, p)| (a.view, p)), Some((alert, 1)));
     assert_eq!(e.vm.take_dialog_pick(), None, "taken once");
 
     // Answering another alert leaves it; answering this one closes it.
@@ -1017,7 +1017,7 @@ fn the_dialog_lays_out_messages_and_any_number_of_buttons() {
     text_alert(&mut e, "", "Give your blockhead a name. It can be changed later.", "", &[], false);
     let l = dialog_layout(&e);
     let m = l.message.unwrap();
-    assert!(m[1] > l.title[3] && l.field[1] > m[3], "title, message, field from the top");
+    assert!(m[1] > l.title[3] && l.field.unwrap()[1] > m[3], "title, message, field from the top");
     assert!(l.buttons.is_empty());
     assert!(e.vm.render_ui().is_some());
     // A big window scales the dialog up; a narrow one keeps a margin.
@@ -1028,4 +1028,125 @@ fn the_dialog_lays_out_messages_and_any_number_of_buttons() {
     assert_eq!(big.scale, 2.0);
     let narrow = crate::render::dialog::layout((300.0, 600.0), &alert, &font);
     assert_eq!(narrow.panel[0], 16.0);
+}
+
+/// An `AlertView` without an input line: `buttons` get indices 1.., `cancel` is index 0.
+fn button_alert(e: &mut Env, title: &str, message: &str, buttons: &[&str], cancel: Option<&str>) -> Obj {
+    let ctx = Value::Ref(Some(e.activity()));
+    let r = e.scall(
+        &format!("{UI}/AlertView"),
+        "create",
+        "(Landroid/content/Context;I)Lcom/apportable/ui/AlertView;",
+        &[ctx, Value::Int(70)],
+    );
+    let alert = e.obj(r);
+    for (name, s) in [("setTitle", title), ("setMessage", message)] {
+        let v = e.string(s);
+        set(e, alert, name, "(Ljava/lang/String;)V", &[v]);
+    }
+    for (i, b) in buttons.iter().enumerate() {
+        let v = e.string(b);
+        set(e, alert, "addButtonWithTitle", "(Ljava/lang/String;I)V", &[v, Value::Int(i as i32 + 1)]);
+    }
+    if let Some(c) = cancel {
+        let v = e.string(c);
+        set(e, alert, "setCancelButtonTitle", "(Ljava/lang/String;)V", &[v]);
+    }
+    set(e, alert, "show", "()V", &[]);
+    alert
+}
+
+#[test]
+fn a_system_alert_is_drawn_as_a_dialog_that_keys_steer() {
+    use crate::DialogNav as N;
+    let mut e = Env::new();
+    assert!(!e.vm.dialog_nav(N::Accept), "no dialog");
+    assert_eq!(e.vm.dialog_alert(), None);
+    let alert = button_alert(&mut e, "Exit?", "Are you sure you want to exit The Blockheads?", &["Yes"], Some("No"));
+    assert_eq!(e.vm.dialog_alert().map(|a| a.view), Some(alert));
+    assert!(e.vm.dialog_shown());
+    let l = dialog_layout(&e);
+    assert_eq!(l.field, None, "no input line");
+    assert_eq!(l.buttons.iter().map(|b| (b.0.as_str(), b.1)).collect::<Vec<_>>(), [("No", 0), ("Yes", 1)]);
+    // The default (positive) button has the focus: lighter, underlined.
+    let f = e.vm.render_ui().unwrap();
+    let (no, yes) = (l.buttons[0].2.map(|v| v as u32), l.buttons[1].2.map(|v| v as u32));
+    assert_eq!(px(&f, yes[0] + 3, yes[1] + 3), [0x5A, 0x5A, 0x5A, 0xFF]);
+    assert_eq!(px(&f, yes[0] + 3, yes[3] - 1), [0x33, 0xB5, 0xE5, 0xFF]);
+    assert_eq!(px(&f, no[0] + 3, no[1] + 3), [0x3D, 0x3D, 0x3D, 0xFF]);
+    // Arrows move the focus and stop at the ends; Enter presses the focused button, Escape the cancel button.
+    assert!(e.vm.dialog_nav(N::Next));
+    assert_eq!(e.vm.st().dialog.as_ref().unwrap().focus, Some(1), "already the last one");
+    e.vm.dialog_nav(N::Prev);
+    e.vm.dialog_nav(N::Prev);
+    assert_eq!(e.vm.st().dialog.as_ref().unwrap().focus, Some(0));
+    let moved = e.vm.render_ui().unwrap();
+    assert_eq!(px(&moved, no[0] + 3, no[1] + 3), [0x5A, 0x5A, 0x5A, 0xFF]);
+    e.vm.dialog_nav(N::Accept);
+    assert_eq!(e.vm.take_dialog_pick().map(|(_, p)| p), Some(0));
+    e.vm.dialog_nav(N::Next);
+    e.vm.dialog_nav(N::Accept);
+    assert_eq!(e.vm.take_dialog_pick().map(|(_, p)| p), Some(1));
+    e.vm.dialog_nav(N::Cancel);
+    assert_eq!(e.vm.take_dialog_pick().map(|(_, p)| p), Some(0));
+    // A script finds the dialog's texts and clicks its buttons; exact captions win over parts of others.
+    assert!(e.vm.has_text("sure you want") && e.vm.has_text("exit?") && e.vm.has_text("yes"));
+    assert!(!e.vm.has_text("maybe"));
+    let centre = |r: [f32; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    assert_eq!(e.vm.control_screen_pos("YES"), Some(centre(l.buttons[1].2)));
+    assert_eq!(e.vm.control_screen_pos("es"), Some(centre(l.buttons[1].2)), "a part of a caption");
+    assert_eq!(e.vm.control_screen_pos("Exit?"), None, "only buttons are clicked");
+    // Answering it closes the dialog.
+    let shown = e.vm.take_alerts();
+    e.vm.alert_click(&mut e.cpu, &shown[0], 1).unwrap();
+    assert!(!e.vm.dialog_shown());
+    assert!(!e.vm.has_text("exit?"));
+}
+
+#[test]
+fn alerts_wait_for_their_turn_and_can_be_dismissed() {
+    use crate::DialogNav as N;
+    let mut e = Env::new();
+    let first = button_alert(&mut e, "Restore Double-Time", "", &["Restore"], Some("Cancel"));
+    // Shown again while up: still one dialog.
+    set(&mut e, first, "show", "()V", &[]);
+    let second = button_alert(&mut e, "Allow", "Allow?", &["Allow"], Some("Don't Allow"));
+    let third = button_alert(&mut e, "Note", "", &["A", "B", "C", "D"], None);
+    assert_eq!(e.vm.dialog_alert().map(|a| a.view), Some(first));
+    assert!(!e.vm.has_text("don't"), "a waiting alert is not shown");
+    // Closing a waiting alert drops it; closing the shown one shows the next.
+    e.vm.close_dialog(second);
+    set(&mut e, first, "dismiss", "()V", &[]);
+    assert_eq!(e.vm.dialog_alert().map(|a| a.view), Some(third));
+    // Four buttons are stacked, the first of them focused; there is no cancel button for Escape.
+    let l = dialog_layout(&e);
+    assert!(l.buttons.windows(2).all(|w| w[1].2[1] > w[0].2[3] && w[1].2[0] == w[0].2[0]), "stacked");
+    assert_eq!(l.buttons.iter().map(|b| b.1).collect::<Vec<_>>(), [1, 2, 3, 4]);
+    assert_eq!(e.vm.st().dialog.as_ref().unwrap().focus, Some(1));
+    e.vm.dialog_nav(N::Cancel);
+    assert_eq!(e.vm.take_dialog_pick(), None);
+    e.vm.dialog_nav(N::Next);
+    e.vm.dialog_nav(N::Next);
+    e.vm.dialog_nav(N::Accept);
+    assert_eq!(e.vm.take_dialog_pick().map(|(_, p)| p), Some(3));
+    // A focus that matches no button (no buttons at all) goes to the ends; Accept then has nothing to press.
+    e.vm.st().dialog.as_mut().unwrap().focus = None;
+    e.vm.dialog_nav(N::Prev);
+    assert_eq!(e.vm.st().dialog.as_ref().unwrap().focus, Some(4));
+    e.vm.st().dialog.as_mut().unwrap().focus = None;
+    e.vm.dialog_nav(N::Next);
+    assert_eq!(e.vm.st().dialog.as_ref().unwrap().focus, Some(1));
+    e.vm.st().dialog.as_mut().unwrap().focus = None;
+    e.vm.dialog_nav(N::Accept);
+    assert_eq!(e.vm.take_dialog_pick().map(|(_, p)| p), Some(1), "the default button");
+    e.vm.close_dialog(third);
+    let empty = button_alert(&mut e, "Busy", "", &[], None);
+    for nav in [N::Next, N::Prev, N::Accept] {
+        assert!(e.vm.dialog_nav(nav));
+    }
+    assert_eq!(e.vm.take_dialog_pick(), None);
+    assert_eq!(e.vm.control_screen_pos("Busy"), None);
+    e.vm.close_dialog(empty);
+    assert!(!e.vm.dialog_shown());
+    assert!(e.vm.swap_buffers(), "the default graphics hooks present nothing");
 }
