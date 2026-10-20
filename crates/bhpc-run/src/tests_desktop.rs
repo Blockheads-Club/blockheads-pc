@@ -102,7 +102,7 @@ fn desktop_hooks() {
     desk.notify("HELLO");
     desk.picture_saved("/sdcard/Pictures/The Blockheads/9.png");
     desk.picture_saved("/sdcard/elsewhere.png");
-    let pics = d.join("Pictures/The Blockheads/9.png").display().to_string();
+    let pics = d.join("Pictures").join("The Blockheads").join("9.png").display().to_string();
     assert_eq!(
         *said.lock().unwrap(),
         [

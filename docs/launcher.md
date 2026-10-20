@@ -54,13 +54,16 @@ The first build after a clean checkout compiles static SDL2 and dynarmic and tak
 `scripts/build-sidecar.sh [triple]` builds `bhpc-run` (play build, static SDL2) into
 `app/src-tauri/binaries/bhpc-run-<triple>`; Tauri's `externalBin` ships it next to the launcher executable. Then
 `cd app && bun run tauri build` makes the bundles of the host OS: Linux AppImage, deb and rpm; Windows NSIS and MSI;
-macOS `.app` and dmg. `.github/workflows/launcher-bundles.yml` does this on all three. Bundles contain the launcher,
+macOS `.app` and dmg. `.github/workflows/launcher-bundles.yml` does this for all six targets (Linux, Windows and
+macOS, each x86_64 and arm64) and `scripts/check-bundle.sh` checks every bundle for the sidecar and for game files;
+run by hand with `release_tag`, it replaces that release's assets. Bundles contain the launcher,
 the sidecar and icons only: no APK, game libraries or assets. Product name "Blockheads PC", identifier
 `club.blockheads.pc`, licence GPL-3.0-only. `scripts/gen-notices.mjs` regenerates
 `app/static/third-party-notices.txt` (shown under Settings > Updates & about).
 
 macOS: the sidecar needs the JIT entitlements (`app/src-tauri/entitlements.plist`); signing and notarisation are not
-configured. Windows and macOS bundles have never been built (no runners yet).
+configured. Windows: the game always runs in a window of its own (the in-window view is GTK, Linux only); the
+Playing screen says so ("The game runs in its own window").
 
 ## Playing in the launcher window
 

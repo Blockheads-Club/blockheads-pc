@@ -97,7 +97,8 @@ const EXTERNAL: [&str; 4] = ["/sdcard/", "/mnt/sdcard/", "/storage/emulated/0/",
 pub fn host_picture(pictures: &Path, guest: &str) -> Option<PathBuf> {
     let rest = EXTERNAL.iter().find_map(|e| guest.strip_prefix(e))?;
     let rel = PICTURE_ROOTS.iter().find_map(|r| rest.strip_prefix(r))?;
-    Some(pictures.join(rel))
+    // Component by component: the guest's `/` must become the host's separator (Windows shows `\`).
+    Some(rel.split('/').filter(|c| !c.is_empty()).fold(pictures.to_path_buf(), |p, c| p.join(c)))
 }
 
 /// Where a notice or copied text goes in this run.
