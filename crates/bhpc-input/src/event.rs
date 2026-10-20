@@ -102,6 +102,12 @@ pub enum HostAction {
     ZoomIn,
     ZoomOut,
     ZoomCycle,
+    /// The wheel in a world (see [`crate::InputMapper::set_world_zoom`]): zoom `steps` whole notches (positive = closer)
+    /// around `at`, in content pixels (rounded).
+    WheelZoom {
+        steps: i32,
+        at: (i32, i32),
+    },
     /// Open (or close) the game's pause menu.
     Pause,
 }

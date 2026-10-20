@@ -587,3 +587,96 @@ fn fullscreen_and_back_follow_their_bindings() {
         ]
     );
 }
+
+fn wheel(dy: f32, x: f32, y: f32) -> HostEvent {
+    HostEvent::Wheel { dy, x, y, mods: Mods::default() }
+}
+
+#[test]
+fn wheel_in_a_world_zooms_one_step_per_notch_from_the_first() {
+    let mut m = InputMapper::new(cfg());
+    m.set_world_zoom(true);
+    let r = run(
+        &mut m,
+        vec![
+            (wheel(1.0, 300.4, 200.6), 0),     // the first notch zooms at once
+            (wheel(-1.0, 300.0, 200.0), 1000), // also after a pause, in the other direction
+            (wheel(3.0, 10.0, 20.0), 1001),    // a fast flick: three steps
+            (wheel(f32::NAN, 0.0, 0.0), 1002), // nonsense is ignored
+        ],
+    );
+    assert!(r.events.is_empty(), "no synthesized touches");
+    assert!(!m.gesture_active());
+    assert_eq!(
+        r.actions,
+        vec![
+            HostAction::WheelZoom { steps: 1, at: (300, 201) },
+            HostAction::WheelZoom { steps: -1, at: (300, 200) },
+            HostAction::WheelZoom { steps: 3, at: (10, 20) },
+        ]
+    );
+}
+
+#[test]
+fn wheel_fractions_add_up_and_a_reversal_starts_afresh() {
+    let mut m = InputMapper::new(cfg());
+    m.set_world_zoom(true);
+    let r = run(
+        &mut m,
+        vec![
+            (wheel(0.4, 1.0, 1.0), 0),
+            (wheel(0.4, 1.0, 1.0), 1),
+            (wheel(0.4, 1.0, 1.0), 2),   // 1.2: one step, 0.2 left
+            (wheel(-0.5, 1.0, 1.0), 3),  // reversal drops the 0.2
+            (wheel(-0.6, 1.0, 1.0), 4),  // -1.1: one step out
+            (wheel(250.0, 1.0, 1.0), 5), // clamped
+        ],
+    );
+    assert_eq!(
+        r.actions,
+        vec![
+            HostAction::WheelZoom { steps: 1, at: (1, 1) },
+            HostAction::WheelZoom { steps: -1, at: (1, 1) },
+            HostAction::WheelZoom { steps: 100, at: (1, 1) },
+        ]
+    );
+    // Leaving the world drops the rest and brings the pinch back.
+    let mut r = Recorder::new();
+    m.handle(wheel(0.5, 1.0, 1.0), 6, &mut r);
+    m.set_world_zoom(false);
+    m.set_world_zoom(true);
+    m.handle(wheel(0.5, 1.0, 1.0), 7, &mut r);
+    assert!(r.actions.is_empty());
+    m.set_world_zoom(false);
+    m.handle(wheel(1.0, 1.0, 1.0), 8, &mut r);
+    assert!(r.actions.is_empty());
+    assert!(m.gesture_active(), "outside a world the wheel pinches");
+}
+
+#[test]
+fn wheel_zoom_ends_an_old_wheel_pinch_and_waits_for_other_gestures_and_the_binding() {
+    let mut m = InputMapper::new(cfg());
+    let mut r = Recorder::new();
+    m.handle(wheel(1.0, 100.0, 100.0), 0, &mut r); // menu: a wheel pinch begins
+    m.set_world_zoom(true); // the world shows
+    m.handle(wheel(1.0, 100.0, 100.0), 1, &mut r);
+    assert!(!m.gesture_active(), "the pinch ended");
+    assert_eq!(r.actions, vec![HostAction::WheelZoom { steps: 1, at: (100, 100) }]);
+    assert!(matches!(r.events.last(), Some(GuestEvent::TouchEnd { id: 1, .. })));
+    // A held button owns the cursor.
+    let mut r = run(&mut m, vec![(down(MouseButton::Left, 5.0, 5.0), 2), (wheel(1.0, 5.0, 5.0), 3)]);
+    assert!(r.actions.is_empty());
+    m.handle(up(MouseButton::Left, 5.0, 5.0), 4, &mut r);
+    // A zoom binding with Ctrl leaves the plain wheel alone.
+    let b = Bindings {
+        zoom: Trigger { mods: Mods { ctrl: true, ..Mods::default() }, input: Input::Wheel },
+        ..Bindings::default()
+    };
+    let mut m = InputMapper::new(Config { bindings: b, ..cfg() });
+    m.set_world_zoom(true);
+    let mut r = run(&mut m, vec![(wheel(1.0, 0.0, 0.0), 0)]);
+    assert!(r.actions.is_empty());
+    let ctrl = Mods { ctrl: true, ..Mods::default() };
+    m.handle(HostEvent::Wheel { dy: 1.0, x: 0.0, y: 0.0, mods: ctrl }, 1, &mut r);
+    assert_eq!(r.actions, vec![HostAction::WheelZoom { steps: 1, at: (0, 0) }]);
+}

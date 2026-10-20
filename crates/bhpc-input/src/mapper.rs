@@ -121,13 +121,26 @@ pub struct InputMapper {
     pos: Pt,
     text: Option<TextFocus>,
     pad: PadState,
+    /// In a world the wheel zooms the game's camera directly ([`HostAction::WheelZoom`]) instead of pinching.
+    world_zoom: bool,
+    /// Wheel amount not yet turned into a whole zoom step (touchpads scroll in fractions of a notch).
+    wheel_rest: f32,
 }
 
 impl InputMapper {
     pub fn new(cfg: Config) -> InputMapper {
         let bounds = cfg.content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
         let pad = PadState::new(cfg.pad, bounds);
-        InputMapper { cfg, gesture: Gesture::None, owner: None, pos: (0.0, 0.0), text: None, pad }
+        InputMapper {
+            cfg,
+            gesture: Gesture::None,
+            owner: None,
+            pos: (0.0, 0.0),
+            text: None,
+            pad,
+            world_zoom: false,
+            wheel_rest: 0.0,
+        }
     }
 
     /// The controller state (cursor, game knowledge for walking and snapping).
@@ -138,6 +151,16 @@ impl InputMapper {
     /// The controller state, to tell it where the game's D-pad and tiles are.
     pub fn pad_mut(&mut self) -> &mut PadState {
         &mut self.pad
+    }
+
+    /// Whether the wheel zooms the camera of a world in play (`true`, [`HostAction::WheelZoom`]) or pinches with two
+    /// synthesized fingers (menus and everything else). The game's pinch recogniser only starts after the fingers
+    /// moved, so the first notch of a wheel pinch was lost; the direct zoom has no such threshold.
+    pub fn set_world_zoom(&mut self, on: bool) {
+        if !on {
+            self.wheel_rest = 0.0;
+        }
+        self.world_zoom = on;
     }
 
     /// True while a touch, pan or pinch is in progress.
@@ -345,6 +368,9 @@ impl InputMapper {
         if !self.cfg.bindings.zoom.fires(Input::Wheel, mods) {
             return;
         }
+        if self.world_zoom {
+            return self.wheel_zoom(dy, p, now_ms, sink);
+        }
         if matches!(self.gesture, Gesture::None) {
             self.pos = p;
             let g =
@@ -359,6 +385,28 @@ impl InputMapper {
             }
         }
         // Any other gesture owns the cursor: the wheel is ignored.
+    }
+
+    /// The wheel in a world: whole notches become zoom steps at once, fractions add up (a reversal starts afresh).
+    fn wheel_zoom(&mut self, dy: f32, p: Pt, now_ms: i64, sink: &mut dyn EventSink) {
+        // A wheel pinch still open from before the world showed ends; any other gesture owns the cursor.
+        if matches!(self.gesture, Gesture::Pinch { anchor: None, .. }) {
+            self.end_gesture(now_ms, sink);
+        }
+        if self.gesture != Gesture::None || !dy.is_finite() {
+            return;
+        }
+        if self.wheel_rest * dy < 0.0 {
+            self.wheel_rest = 0.0;
+        }
+        self.wheel_rest += dy;
+        let steps = self.wheel_rest.trunc();
+        if steps == 0.0 {
+            return;
+        }
+        self.wheel_rest -= steps;
+        let steps = steps.clamp(-100.0, 100.0) as i32;
+        sink.host_action(HostAction::WheelZoom { steps, at: (p.0.round() as i32, p.1.round() as i32) });
     }
 
     // ---------- keyboard and text ----------

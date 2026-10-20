@@ -28,9 +28,10 @@ use bhpc_mem::GuestMemory;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// The instance variables used, by their `OBJC_IVAR_$_` export names.
-pub const IVAR_NAMES: [&str; 12] = [
+pub const IVAR_NAMES: [&str; 13] = [
     "GameView.world",
     "GameView.pinchScale",
+    "GameView.windowInfo",
     "World.uiManager",
     "World.tapModelviewMatrix",
     "World.tapProjectionMatrix",
@@ -48,6 +49,8 @@ pub const IVAR_NAMES: [&str; 12] = [
 pub struct Ivars {
     pub gv_world: u32,
     pub gv_pinch: u32,
+    /// `GameView.windowInfo`, held in the view: width and height of the view in points first.
+    pub gv_window: u32,
     pub world_ui: u32,
     pub tap_mv: u32,
     pub tap_pj: u32,
@@ -63,16 +66,17 @@ pub struct Ivars {
 impl Ivars {
     /// Read every offset: `export` gives the address of an `OBJC_IVAR_$_<name>` symbol, which holds the offset.
     pub fn read(mem: &GuestMemory, export: &dyn Fn(&str) -> Option<u32>) -> Result<Ivars, String> {
-        let mut v = [0u32; 12];
+        let mut v = [0u32; 13];
         for (slot, name) in v.iter_mut().zip(IVAR_NAMES) {
             let at = export(&format!("OBJC_IVAR_$_{name}")).ok_or(format!("no ivar {name}"))?;
             *slot = mem.read_u32(at).map_err(|e| format!("ivar {name}: {e}"))?;
         }
-        let [gv_world, gv_pinch, world_ui, tap_mv, tap_pj, tap_vp, ui_pause, ui_dpad, view_displayed, dpad_displayed, dpad_window, dpad_right] =
+        let [gv_world, gv_pinch, gv_window, world_ui, tap_mv, tap_pj, tap_vp, ui_pause, ui_dpad, view_displayed, dpad_displayed, dpad_window, dpad_right] =
             v;
         Ok(Ivars {
             gv_world,
             gv_pinch,
+            gv_window,
             world_ui,
             tap_mv,
             tap_pj,
@@ -100,6 +104,87 @@ pub const ZOOM_LEVELS: [f64; 4] = [1.0, 2.0, 4.0, 0.5];
 pub fn zoom_step(z: f64, closer: bool) -> f64 {
     let z = if z.is_finite() && z > 0.0 { z } else { 1.0 };
     (if closer { z / ZOOM_STEP } else { z * ZOOM_STEP }).clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
+/// The zoom levels the game itself settles on (`-[GameView update:accurateDT:]`): when no pinch is in progress it
+/// eases `pinchScale` to the nearest of these, with the switch points in [`SNAP_BETWEEN`]. A pinch that ends short of
+/// a switch point therefore springs back; this is why one small wheel pinch per notch did nothing.
+pub const SNAP_LEVELS: [f64; 6] = [0.5, 1.0, 1.5, 2.0, 3.0, 8.0];
+/// Where the game switches from one of [`SNAP_LEVELS`] to the next.
+pub const SNAP_BETWEEN: [f64; 5] = [0.6, 1.25, 1.75, 2.5, 5.0];
+/// How long one wheel step takes on screen.
+pub const WHEEL_ZOOM_MS: i64 = 140;
+
+/// Index in [`SNAP_LEVELS`] of the level the game settles `z` on (a broken zoom counts as normal).
+pub fn snap_level(z: f64) -> usize {
+    if z.is_nan() {
+        return 1;
+    }
+    SNAP_BETWEEN.iter().filter(|b| z >= **b).count()
+}
+
+/// The level `steps` wheel notches (positive = closer) from the level `z` settles on, within the game's levels.
+pub fn wheel_target(z: f64, steps: i32) -> f64 {
+    let i = (snap_level(z) as i64 - i64::from(steps)).clamp(0, SNAP_LEVELS.len() as i64 - 1);
+    SNAP_LEVELS[i as usize]
+}
+
+/// One wheel step played as a short pinch of the game's own (see [`pinch_args`]): from zoom `from` to `to` around
+/// `centre` (view points), started at `start_ms`. `base` is the zoom the pinch began at (the game's `pinchStartScale`);
+/// a notch during a step keeps the pinch going and only moves `from`, `to` and `start_ms`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WheelAnim {
+    pub base: f64,
+    pub from: f64,
+    pub to: f64,
+    pub start_ms: i64,
+    pub centre: (f32, f32),
+}
+
+impl WheelAnim {
+    /// The zoom to show at `now_ms` (eased out, even in ratio) and whether the step is complete.
+    pub fn at(&self, now_ms: i64) -> (f64, bool) {
+        let t = ((now_ms - self.start_ms) as f64 / WHEEL_ZOOM_MS as f64).clamp(0.0, 1.0);
+        let e = 1.0 - (1.0 - t) * (1.0 - t);
+        (self.from * (self.to / self.from).powf(e), t >= 1.0)
+    }
+
+    /// The pinch factor that makes the game show `zoom`: it sets `pinchScale = pinchStartScale / factor`.
+    pub fn factor(&self, zoom: f64) -> f32 {
+        (self.base / zoom) as f32
+    }
+
+    /// The game ignored the pinch (a button under the cursor, a world still loading): it was asked for a zoom
+    /// clearly away from the start but still shows the start.
+    pub fn refused(&self, want: f64, shown: f64) -> bool {
+        (want / self.base - 1.0).abs() > 1e-3 && (shown / self.base - 1.0).abs() < 1e-6
+    }
+}
+
+/// A point in content pixels (`content`-sized touch space) in the view's points (`view`, `GameView.windowInfo`),
+/// the space the game's pinch centre is in.
+pub fn view_point(p: (i32, i32), content: (f32, f32), view: (f32, f32)) -> Option<(f32, f32)> {
+    let ok = |v: f32| v.is_finite() && v > 0.0;
+    if !(ok(content.0) && ok(content.1) && ok(view.0) && ok(view.1)) {
+        return None;
+    }
+    Some((p.0 as f32 * view.0 / content.0, p.1 as f32 * view.1 / content.1))
+}
+
+/// Selector of the game's pinch handler on `GameView` (fed by the `UIPinchGestureRecognizer` of its `EAGLView`).
+pub const PINCH_SELECTOR: &str = "pinchGesture:velocity:state:center:numberOfTouches:";
+
+/// Pinch states of UIKit's gesture recognisers as the game's handler tests them.
+pub const PINCH_BEGAN: u32 = 1;
+pub const PINCH_CHANGED: u32 = 2;
+pub const PINCH_ENDED: u32 = 3;
+
+/// The arguments of `-[GameView pinchGesture:velocity:state:center:numberOfTouches:]` on `view` (`sel` its selector):
+/// began (factor 1: takes the start zoom and centre), changed (the game sets the zoom and moves the camera so the
+/// centre stays put; no spring-back while a pinch is in progress) or ended. The velocity is NaN, so the game stores
+/// no pinch momentum.
+pub fn pinch_args(view: u32, sel: u32, state: u32, factor: f32, centre: (f32, f32)) -> [u32; 8] {
+    [view, sel, factor.to_bits(), f32::NAN.to_bits(), state, centre.0.to_bits(), centre.1.to_bits(), 2]
 }
 
 /// The next level of [`ZOOM_LEVELS`] after `z` (from a zoom between levels: the one after the nearest).
@@ -240,6 +325,13 @@ impl GameUi {
     pub fn zoom(&self, mem: &GuestMemory) -> Option<f64> {
         self.world(mem)?;
         f64_at(mem, self.game_view()?.wrapping_add(self.ivars.gv_pinch)).filter(|z| z.is_finite())
+    }
+
+    /// Size of the game view in points (`GameView.windowInfo`), in a world.
+    pub fn view_size(&self, mem: &GuestMemory) -> Option<(f32, f32)> {
+        self.world(mem)?;
+        let at = self.game_view()?.wrapping_add(self.ivars.gv_window);
+        Some((f32_at(mem, at)?, f32_at(mem, at.wrapping_add(4))?)).filter(|(w, h)| *w > 0.0 && *h > 0.0)
     }
 
     /// Set the zoom; false outside a world.

@@ -9,7 +9,8 @@
 //! |---|---|
 //! | left button down / drag / up | `Window.nativeTouchesBegin` / `Move` / `End`, pointer 0 |
 //! | right button drag | two-finger pan (pointers 0 and 1 move together) |
-//! | wheel | two-finger pinch around the cursor; ends after an idle timeout ([`InputMapper::tick`]) |
+//! | wheel in a world | [`HostAction::WheelZoom`]: one camera zoom step per notch at the cursor ([`InputMapper::set_world_zoom`]) |
+//! | wheel elsewhere | two-finger pinch around the cursor; ends after an idle timeout ([`InputMapper::tick`]) |
 //! | Ctrl + left drag | pinch around the press point (right/up = spread) |
 //! | Esc | `Window.nativeKeyDown/Up` with `KEYCODE_BACK` |
 //! | other keys | `Window.nativeKeyDown/Up` with Android key codes, unless a text field has focus |

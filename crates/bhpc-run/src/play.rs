@@ -1121,8 +1121,15 @@ impl UiThread {
     }
 
     /// The host actions that steer the game's own controls: hide its buttons, zoom, pause.
-    fn game_actions(&self, c: &mut Cpu, actions: &[HostAction]) {
-        use crate::gameui::{message, zoom_cycle, zoom_step};
+    fn game_actions(
+        &self,
+        c: &mut Cpu,
+        actions: &[HostAction],
+        content: (f32, f32),
+        now_ms: i64,
+        wheel: &mut Option<crate::gameui::WheelAnim>,
+    ) {
+        use crate::gameui::{message, view_point, wheel_target, zoom_cycle, zoom_step, WheelAnim, PINCH_BEGAN};
         for a in actions {
             let Some(g) = &self.game else {
                 if *a == HostAction::ToggleGameButtons {
@@ -1146,6 +1153,26 @@ impl UiThread {
                     };
                     g.ui.set_zoom(&mem, to);
                 }
+                HostAction::WheelZoom { steps, at } => {
+                    let Some(z) = g.ui.zoom(&mem) else { continue };
+                    // A running step counts from where it is heading, so quick notches add up.
+                    let to = wheel_target(wheel.as_ref().map_or(z, |a| a.to), *steps);
+                    let centre = g.ui.view_size(&mem).and_then(|v| view_point(*at, content, v));
+                    if let Some(a) = wheel.as_mut() {
+                        // The pinch is still on: aim it at the new level from where it is now.
+                        (a.from, a.to, a.start_ms) = (z, to, now_ms);
+                    } else if let Some(centre) = centre.filter(|_| g.pinch.is_some() && to != z) {
+                        self.pinch(c, g, PINCH_BEGAN, 1.0, centre);
+                        // The pinch starts from whatever the game shows once it began.
+                        let base = g.ui.zoom(&mem).unwrap_or(z);
+                        *wheel = Some(WheelAnim { base, from: base, to, start_ms: now_ms, centre });
+                    } else {
+                        g.ui.set_zoom(&mem, to);
+                    }
+                    if std::env::var_os("BHPC_TRACE_ZOOM").is_some() {
+                        eprintln!("[zoom] wheel {steps:+} at {at:?} {centre:?}: {z:.4} -> {to}");
+                    }
+                }
                 HostAction::Pause => {
                     let Some(world) = g.ui.world(&mem) else { continue };
                     let (imp, sel) = if g.ui.pause_shown(&mem) { g.resume } else { g.pause };
@@ -1163,6 +1190,55 @@ impl UiThread {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// One call of the game's pinch handler, on the main thread like the game's own touches.
+    fn pinch(&self, c: &mut Cpu, g: &GameHooks, state: u32, factor: f32, centre: (f32, f32)) {
+        let (Some((imp, sel)), Some(view)) = (g.pinch, g.ui.game_view()) else { return };
+        let args = crate::gameui::pinch_args(view, sel, state, factor, centre);
+        let run = move |c: &mut Cpu| {
+            c.set_ticks(FOREVER);
+            if let Err(e) = c.call(imp, &args) {
+                eprintln!("[play] wheel zoom: guest stopped: {e:?}");
+            }
+        };
+        match self.main.clone() {
+            Some(q) => q.call(c, run),
+            None => run(c),
+        }
+    }
+
+    /// Advance a running wheel step by one frame (see `gameui::WheelAnim`).
+    fn wheel_frame(&self, c: &mut Cpu, now_ms: i64, wheel: &mut Option<crate::gameui::WheelAnim>) {
+        use crate::gameui::{PINCH_CHANGED, PINCH_ENDED};
+        let (Some(g), Some(a)) = (&self.game, *wheel) else { return };
+        let mem = c.mem().clone();
+        if g.ui.zoom(&mem).is_none() {
+            // The world is gone: end the pinch so the view does not stay in one.
+            self.pinch(c, g, PINCH_ENDED, 1.0, a.centre);
+            *wheel = None;
+            return;
+        }
+        let (want, done) = a.at(now_ms);
+        self.pinch(c, g, PINCH_CHANGED, a.factor(want), a.centre);
+        let shown = g.ui.zoom(&mem).unwrap_or(want);
+        if a.refused(want, shown) {
+            // The game did not take the pinch: zoom around the centre instead.
+            self.pinch(c, g, PINCH_ENDED, 1.0, a.centre);
+            g.ui.set_zoom(&mem, a.to);
+            *wheel = None;
+        } else if done {
+            self.pinch(c, g, PINCH_ENDED, a.factor(want), a.centre);
+            *wheel = None;
+        }
+        if std::env::var_os("BHPC_TRACE_ZOOM").is_some() {
+            eprintln!(
+                "[zoom] step {:.4} -> {:.4}: want {want:.4}, shows {shown:.4}{}",
+                a.from,
+                a.to,
+                if done { " (done)" } else { "" }
+            );
         }
     }
 
@@ -1202,6 +1278,8 @@ impl UiThread {
         let mut tracker = InputTracker::default();
         let mut text_alert: Option<bhpc_jni::Alert> = None;
         let mut focused: Option<bhpc_jni::Obj> = None;
+        // The wheel step in progress (the game's own pinch, a few frames long).
+        let mut wheel: Option<crate::gameui::WheelAnim> = None;
         loop {
             if flags.done.load(Ordering::SeqCst) {
                 return "window closed".into();
@@ -1305,6 +1383,7 @@ impl UiThread {
                     crate::gameui::dpad_centre(size, content, right, crate::gameui::DPAD_INSET)
                 });
                 mapper.pad_mut().set_grid(g.ui.grid(&mem, content));
+                mapper.set_world_zoom(g.ui.zoom(&mem).is_some());
                 mapper.pad_mut().set_dpad(dpad);
             }
             let pending: Vec<Event> = std::iter::from_fn(|| rx.and_then(|r| r.try_recv().ok())).collect();
@@ -1334,7 +1413,9 @@ impl UiThread {
             if actions.contains(&HostAction::ToggleFullscreen) && cfg.embed.is_none() {
                 flags.toggle_fullscreen.store(true, Ordering::SeqCst);
             }
-            self.game_actions(c, &actions);
+            let content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
+            self.game_actions(c, &actions, content, now, &mut wheel);
+            self.wheel_frame(c, now, &mut wheel);
             {
                 let mut v = flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner);
                 v.cursor = mapper.pad().cursor();
@@ -1580,6 +1661,9 @@ struct GameHooks {
     ui: Arc<crate::gameui::GameUi>,
     pause: (u32, u32),
     resume: (u32, u32),
+    /// `-[GameView pinchGesture:velocity:state:center:numberOfTouches:]` (implementation, selector name): the wheel
+    /// zooms through it so the game keeps the point under the cursor in place.
+    pinch: Option<(u32, u32)>,
 }
 
 /// The methods "Hide game buttons" stops while the buttons are hidden: class, selector, whether it is the D-pad's
@@ -1622,6 +1706,9 @@ fn install_game_ui(sess: &mut Session) -> Result<Arc<GameHooks>, String> {
         .map(|(cls, sel, dpad)| method(cls, sel).map(|(imp, _)| (imp, *cls, *sel, *dpad)))
         .collect::<Result<_, _>>()?;
     let (pause, resume) = (method("World", "pauseButtonTapped")?, method("World", "pauseResumeButtonTapped")?);
+    let pinch = method("GameView", crate::gameui::PINCH_SELECTOR)
+        .inspect_err(|e| eprintln!("[play] the wheel zooms around the centre: {e}"))
+        .ok();
     let ui = Arc::new(crate::gameui::GameUi::new(ivars));
     let g = ui.clone();
     hook_at(sess, render, "-[GameView render:]", move |c| g.saw_game_view(c.reg(0)))?;
@@ -1634,7 +1721,7 @@ fn install_game_ui(sess: &mut Session) -> Result<Arc<GameHooks>, String> {
         })?;
     }
     sess.cpu.clear_cache();
-    Ok(Arc::new(GameHooks { ui, pause, resume }))
+    Ok(Arc::new(GameHooks { ui, pause, resume, pinch }))
 }
 
 /// The "Game speed" option (see `gamespeed`): scale the steps `-[World update:accurateDT:pinchScale:dragInProgress:]`

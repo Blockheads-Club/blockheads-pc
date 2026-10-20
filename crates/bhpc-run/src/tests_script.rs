@@ -100,6 +100,7 @@ fn errors_name_the_line() {
         ("0 dance\n", "unknown command"),
         ("+x click 1 2\n", "bad time"),
         ("0 drag 1 2 3 4\n", "missing or bad ms"),
+        ("0 wheel 1 2\n", "missing or bad y"),
     ] {
         let e = parse(text).unwrap_err();
         assert!(e.contains(want), "{text:?} -> {e}");
@@ -161,4 +162,12 @@ fn controller_commands() {
     ] {
         assert!(parse(bad).unwrap_err().contains(why), "{bad}: {}", parse(bad).unwrap_err());
     }
+}
+
+#[test]
+fn wheel_moves_then_scrolls() {
+    let s = parse("100 wheel -0.5 30 40\n+10 shot a\n").unwrap();
+    assert_eq!(s[0], (100, Action::Event(Event::MouseMove { x: 30.0, y: 40.0 })));
+    assert_eq!(s[1], (160, Action::Event(Event::Wheel { dx: 0.0, dy: -0.5 })));
+    assert_eq!(at(&s, 2), 170);
 }

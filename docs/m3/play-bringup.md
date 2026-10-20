@@ -83,3 +83,18 @@ World..." opens the world dialog).
   `bhpc-jni/src/render.rs` rasterises the view tree (backgrounds, `ImageView`/`Button` bitmaps, label text) into a
   window-sized RGBA frame, `play.rs` passes it to the window (`GlWindow::set_overlay`) and `vsurface.rs` blends it in
   `compose`. See the gotchas section of `CLAUDE.md`.
+
+## Wheel zoom in a world
+
+* **Why the wheel pinch often did nothing.** The game eases `GameView.pinchScale` to one of its own levels
+  (0.5, 1, 1.5, 2, 3, 8; switch points 0.6, 1.25, 1.75, 2.5, 5) whenever no pinch is in progress
+  (`-[GameView update:accurateDT:]`). One wheel notch was a two-finger pinch of factor 1.2 that ended 150 ms later,
+  short of the next switch point, so the zoom sprang back; only fast scrolling got past it.
+* **Now.** In a world (`GameUi::zoom` readable) the mapper sends `HostAction::WheelZoom` (whole notches; touchpad
+  fractions add up, a reversal starts afresh) instead of touches. `play.rs` steps one level per notch through the
+  game's own `-[GameView pinchGesture:velocity:state:center:numberOfTouches:]` (began, changed for ~140 ms eased,
+  ended; centre = cursor in view points from `GameView.windowInfo`, velocity NaN so no momentum), which sets the zoom
+  and moves the camera around the centre like a finger pinch. Notches during a step re-aim the running pinch. If the
+  game ignores the pinch (a button under the cursor), the zoom is written directly. Menus keep the touch pinch.
+  `BHPC_TRACE_ZOOM=1` logs each step; scripts have `wheel DY X Y`.
+* Before a blockhead is warped in, the camera stays on the portal, so the zoom happens around the screen centre there.

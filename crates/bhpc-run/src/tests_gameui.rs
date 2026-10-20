@@ -16,6 +16,7 @@ fn ivars() -> Ivars {
     Ivars {
         gv_world: 0x18,
         gv_pinch: 0x98,
+        gv_window: 0x1c0,
         world_ui: 0xf0,
         tap_mv: 0x140,
         tap_pj: 0x100,
@@ -72,7 +73,7 @@ fn ivar_offsets_come_from_the_exports() {
         m.write_u32(BASE + 4 * i, 0x10 + i).unwrap();
     }
     let iv = Ivars::read(&m, &export).unwrap();
-    assert_eq!((iv.gv_world, iv.gv_pinch, iv.dpad_window, iv.dpad_right), (0x10, 0x11, 0x1a, 0x1b));
+    assert_eq!((iv.gv_world, iv.gv_pinch, iv.gv_window, iv.dpad_window, iv.dpad_right), (0x10, 0x11, 0x12, 0x1b, 0x1c));
     assert_eq!(Ivars::read(&m, &|_| None).unwrap_err(), "no ivar GameView.world");
     let e = Ivars::read(&m, &|_| Some(0x10)).unwrap_err();
     assert!(e.starts_with("ivar GameView.world:"), "{e}");
@@ -136,6 +137,13 @@ fn objects_grid_pause_and_dpad_of_a_world() {
     assert_eq!(g.zoom(&m), Some(2.0));
     m.write_u64(VIEW + ivars().gv_pinch, f64::NAN.to_bits()).unwrap();
     assert_eq!(g.zoom(&m), None);
+    // View size: only a positive one counts.
+    assert_eq!(none.view_size(&m), None);
+    assert_eq!(g.view_size(&m), None);
+    m.write_u32(VIEW + ivars().gv_window, 512f32.to_bits()).unwrap();
+    assert_eq!(g.view_size(&m), None);
+    m.write_u32(VIEW + ivars().gv_window + 4, 384f32.to_bits()).unwrap();
+    assert_eq!(g.view_size(&m), Some((512.0, 384.0)));
     // A view outside mapped memory: every read fails softly.
     g.saw_game_view(0x10);
     assert_eq!(g.world(&m), None);
@@ -188,4 +196,54 @@ fn the_dpad_centre_in_content_pixels() {
     assert_eq!(dpad_centre((1024.0, 768.0), (1024.0, 768.0), false, 120.0), Some((120.0, 648.0)));
     assert_eq!(dpad_centre((1024.0, 768.0), (2048.0, 1536.0), true, 120.0), Some((1808.0, 1296.0)));
     assert_eq!(dpad_centre((0.0, 768.0), (1024.0, 768.0), false, 120.0), None);
+}
+
+#[test]
+fn wheel_steps_go_through_the_games_own_levels() {
+    // Where the game settles.
+    let settles =
+        [(0.3, 0), (0.59, 0), (0.6, 1), (0.8, 1), (1.24, 1), (1.25, 2), (1.8, 3), (2.6, 4), (5.0, 5), (20.0, 5)];
+    for (z, i) in settles {
+        assert_eq!(snap_level(z), i, "{z}");
+    }
+    assert_eq!(snap_level(f64::NAN), 1);
+    // One level per notch, from the level a zoom settles on, within the levels.
+    assert_eq!(wheel_target(1.0, 1), 0.5);
+    assert_eq!(wheel_target(1.0, -1), 1.5);
+    assert_eq!(wheel_target(1.4, -1), 2.0, "from the level a running step heads to");
+    assert_eq!(wheel_target(1.0, -3), 3.0);
+    assert_eq!(wheel_target(0.5, 1), 0.5);
+    assert_eq!(wheel_target(8.0, -100), 8.0);
+    assert_eq!(wheel_target(8.0, 100), 0.5);
+    // The pinch centre in view points.
+    assert_eq!(view_point((512, 384), (1024.0, 768.0), (512.0, 384.0)), Some((256.0, 192.0)));
+    assert_eq!(view_point((10, 20), (100.0, 100.0), (100.0, 50.0)), Some((10.0, 10.0)));
+    assert_eq!(view_point((1, 1), (0.0, 1.0), (1.0, 1.0)), None);
+    assert_eq!(view_point((1, 1), (1.0, f32::NAN), (1.0, 1.0)), None);
+    assert_eq!(view_point((1, 1), (1.0, 1.0), (-1.0, 1.0)), None);
+    assert_eq!(view_point((1, 1), (1.0, 1.0), (1.0, 0.0)), None);
+}
+
+#[test]
+fn a_wheel_step_is_a_short_eased_pinch() {
+    let a = WheelAnim { base: 1.0, from: 1.0, to: 2.0, start_ms: 100, centre: (5.0, 6.0) };
+    assert_eq!(a.at(50), (1.0, false));
+    assert_eq!(a.at(100), (1.0, false));
+    let (mid, done) = a.at(100 + WHEEL_ZOOM_MS / 2);
+    assert!(!done && (mid - 2f64.powf(0.75)).abs() < 1e-9, "{mid}");
+    assert_eq!(a.at(100 + WHEEL_ZOOM_MS), (2.0, true));
+    assert_eq!(a.at(10_000), (2.0, true));
+    assert_eq!(a.factor(2.0), 0.5);
+    assert_eq!(a.factor(0.5), 2.0);
+    let later = WheelAnim { from: 1.5, to: 3.0, ..a };
+    assert_eq!(later.at(100), (1.5, false));
+    assert_eq!(later.factor(3.0), 1.0 / 3.0, "the factor stays relative to where the pinch began");
+    assert!(a.refused(1.5, 1.0));
+    assert!(!a.refused(1.5, 1.4));
+    assert!(!a.refused(1.000_01, 1.0), "nothing asked yet");
+    let (x, y, nan) = (5f32.to_bits(), 6f32.to_bits(), f32::NAN.to_bits());
+    assert_eq!(pinch_args(7, 9, PINCH_BEGAN, 1.0, a.centre), [7, 9, 1f32.to_bits(), nan, 1, x, y, 2]);
+    assert_eq!(pinch_args(7, 9, PINCH_CHANGED, 0.5, a.centre), [7, 9, 0.5f32.to_bits(), nan, 2, x, y, 2]);
+    assert_eq!(PINCH_ENDED, 3);
+    assert_eq!(PINCH_SELECTOR.matches(':').count(), 5);
 }

@@ -150,6 +150,12 @@ fn command(t: u64, words: &[&str], rest: &str) -> Result<(Vec<Step>, u64), Strin
             out.push((begin + ms + CLICK_GAP, Action::Event(mouse(p[2], p[3], Some(false)))));
             begin + ms + CLICK_GAP
         }
+        "wheel" => {
+            let (dy, x, y): (f32, f32, f32) = (num(words, 1, "dy")?, num(words, 2, "x")?, num(words, 3, "y")?);
+            out.push((t, Action::Event(mouse(x, y, None))));
+            out.push((t + CLICK_GAP, Action::Event(Event::Wheel { dx: 0.0, dy })));
+            t + CLICK_GAP
+        }
         "key" | "keydown" | "keyup" => {
             let name = words.get(1).copied().unwrap_or("");
             let k = key_code(name).ok_or_else(|| format!("unknown key {name:?}"))?;
