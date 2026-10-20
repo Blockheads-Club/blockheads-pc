@@ -14,7 +14,7 @@ pub fn supported() -> bool {
     imp::SUPPORTED && std::env::var("BHPC_EMBED").map_or(true, |v| v != "0")
 }
 
-pub use imp::{close, layout, open, prepare, reveal, set_fullscreen, Opts};
+pub use imp::{close, copy_text, layout, open, prepare, reveal, set_fullscreen, Opts};
 
 /// How close (logical pixels) to the window's side or bottom edge a press on the game view resizes the window.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -635,6 +635,11 @@ mod imp {
         }
     }
 
+    /// Put text the game copied on the desktop clipboard (GTK main thread).
+    pub fn copy_text(text: &str) {
+        gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD).set_text(text);
+    }
+
     /// Switch the window to or from fullscreen and tell the page.
     pub fn set_fullscreen(win: &WebviewWindow, app: &AppHandle, on: bool) -> Result<(), String> {
         let app = app.clone();
@@ -753,6 +758,9 @@ mod imp {
         pub fullscreen_key: Trigger,
         pub app: AppHandle,
     }
+
+    /// The game runs in a window of its own here and copies through SDL.
+    pub fn copy_text(_: &str) {}
 
     pub fn open(_: &WebviewWindow, _: Opts) -> Result<(), String> {
         Err("the game view is not available on this platform yet".into())

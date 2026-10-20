@@ -71,6 +71,8 @@ struct App {
     /// The running game is shown inside the main window (see `embed`).
     embedded: AtomicBool,
     frames: AtomicU32,
+    /// A link the launcher was started with, handed to the next game start (`--open-uri`).
+    open_uri: Mutex<Option<String>>,
 }
 
 impl Default for App {
@@ -84,6 +86,7 @@ impl Default for App {
             revealed: AtomicBool::new(false),
             embedded: AtomicBool::new(false),
             frames: AtomicU32::new(0),
+            open_uri: Mutex::new(ops::open_uri_arg(&std::env::args().skip(1).collect::<Vec<_>>())),
         }
     }
 }
@@ -290,7 +293,8 @@ fn start_game(app: &App, window: &WebviewWindow, handle: &AppHandle, allow_embed
     let exe = std::env::current_exe().map_err(text)?;
     let dir = exe.parent().unwrap_or(Path::new("."));
     let paths = ops::paths().map_err(text)?;
-    let plan = ops::launch_plan(&paths, dir).map_err(text)?;
+    let mut plan = ops::launch_plan(&paths, dir).map_err(text)?;
+    plan.open_uri = app.open_uri.lock().unwrap_or_else(|e| e.into_inner()).take();
     app.session().set_history(bhpc_launcher::progress::history_path(&paths.dir));
     let program = sidecar(plan.program.clone());
     // The frame file must exist before the game starts: it opens it at once.
@@ -440,6 +444,11 @@ pub fn run() {
             // (GTK warns when the frameless window gets its title bar after it was realized and shown early).
             // Only the splash is on screen until then. Should the splash fail to open, show the main window.
             tray::create(app.handle());
+            // Text the in-window game copies arrives as `@copy` lines; the clipboard lives on the GTK main thread.
+            let h = app.handle().clone();
+            app.state::<App>().session().set_copy_handler(move |t| {
+                let _ = h.run_on_main_thread(move || embed::copy_text(&t));
+            });
             if let Err(e) = open_splash(app) {
                 eprintln!("splash window failed: {e}");
                 if let Some(w) = app.get_webview_window("main") {
