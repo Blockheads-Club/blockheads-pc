@@ -275,10 +275,17 @@ mod imp {
             let began = Instant::now();
             let mut p = p.borrow_mut();
             let Paint { first, reader, gl, stats, .. } = &mut *p;
-            let (Some(painter), Some(first)) = (gl.as_mut(), *first) else { return Propagation::Stop };
-            let fresh = reader.as_mut().and_then(|r| r.read_with(|info, px| painter.upload(info, px)).ok().flatten());
+            let Some(painter) = gl.as_mut() else { return Propagation::Stop };
             let s = g.scale_factor();
-            painter.draw((g.allocated_width() * s, g.allocated_height() * s), fade_alpha(first) as f32);
+            let view = (g.allocated_width() * s, g.allocated_height() * s);
+            // Before the first frame the area is cleared to transparent: an undrawn GL area shows black over the
+            // page's loading screen (Play again showed a black window instead of the loader).
+            let Some(first) = *first else {
+                painter.draw(view, 0.0);
+                return Propagation::Stop;
+            };
+            let fresh = reader.as_mut().and_then(|r| r.read_with(|info, px| painter.upload(info, px)).ok().flatten());
+            painter.draw(view, fade_alpha(first) as f32);
             if fresh.is_some() {
                 Stats::add(stats, began, "GL texture");
             }
