@@ -147,8 +147,9 @@ impl Default for Session {
 }
 
 /// Reads lines into the log. With `track`, progress lines (see [`progress`]) go to the tracker instead of the log.
+/// (Not generic, so that stdout and stderr share one instantiation.)
 fn pump(
-    source: impl Read + Send + 'static,
+    source: Box<dyn Read + Send>,
     log: Arc<Mutex<LogBuffer>>,
     track: Option<(Arc<Mutex<Tracker>>, Instant)>,
 ) -> JoinHandle<()> {
@@ -171,7 +172,7 @@ fn pump(
 
 /// Writes every line sent to the returned handle to `sink`, until the handle (and its clones) are dropped or the
 /// sink fails. Closing the sink is how the game learns that the launcher is gone.
-fn feed(mut sink: impl Write + Send + 'static) -> Sender<String> {
+fn feed(mut sink: Box<dyn Write + Send>) -> Sender<String> {
     let (tx, rx) = channel::<String>();
     std::thread::spawn(move || {
         for line in rx {
@@ -246,9 +247,11 @@ impl Session {
         *self.tracker.lock().expect("tracker lock") = Tracker::with_stall(model, self.stall);
         let started = Instant::now();
         let mut readers = Vec::new();
-        readers.extend(child.stdout.take().map(|s| pump(s, self.log.clone(), Some((self.tracker.clone(), started)))));
-        readers.extend(child.stderr.take().map(|s| pump(s, self.log.clone(), None)));
-        let input = child.stdin.take().map(feed);
+        readers.extend(
+            child.stdout.take().map(|s| pump(Box::new(s), self.log.clone(), Some((self.tracker.clone(), started)))),
+        );
+        readers.extend(child.stderr.take().map(|s| pump(Box::new(s), self.log.clone(), None)));
+        let input = child.stdin.take().map(|s| feed(Box::new(s)));
         self.run = Some(Running { child, started, readers, input, stopping: false, learned: false });
         Ok(())
     }
