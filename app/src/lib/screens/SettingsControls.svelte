@@ -20,6 +20,7 @@
   <h1>{t('ctl.title')}</h1>
   <Button size="sm" icon="reset" onclick={() => (confirm = true)}>{t('ctl.resetAllConfirm')}</Button>
 </div>
+<OnScreenPanel />
 {#if first}
   <Alert tone="bad" title={t('ctl.dupTitle', { key: dupKey })}>
     {t('ctl.dupBody', { a: name(first[0]), b: name(first[1]) })}
@@ -30,7 +31,6 @@
   </Alert>
 {/if}
 <ControlsEditor marks />
-<OnScreenPanel />
 <GamepadPanel />
 
 {#if confirm}
