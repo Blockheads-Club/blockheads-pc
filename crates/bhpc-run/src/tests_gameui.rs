@@ -244,3 +244,39 @@ fn a_wheel_step_is_a_short_eased_pinch() {
     assert_eq!(PINCH_ENDED, 3);
     assert_eq!(PINCH_SELECTOR.matches(':').count(), 5);
 }
+
+#[test]
+fn a_reversal_during_or_right_after_a_step_counts_from_the_latest_target() {
+    let c = Some((5.0, 6.0));
+    // Out from 1: no step yet, so a pinch begins.
+    let mut anim = None;
+    let to = wheel_target(zoom_base(anim.as_ref(), 1.0), -1);
+    assert_eq!(to, 1.5);
+    assert_eq!(plan_zoom(&mut anim, 1.0, to, 0, c, true), ZoomPlan::Begin((5.0, 6.0)));
+    anim = Some(WheelAnim { base: 1.0, from: 1.0, to, start_ms: 0, centre: (5.0, 6.0) });
+    // In 50 ms later, mid-step at 1.26: back to 1, from the step's target, re-aiming the running pinch.
+    let to = wheel_target(zoom_base(anim.as_ref(), 1.26), 1);
+    assert_eq!(to, 1.0);
+    assert_eq!(plan_zoom(&mut anim, 1.26, to, 50, c, true), ZoomPlan::Retarget);
+    let a = anim.unwrap();
+    assert_eq!((a.from, a.to, a.start_ms, a.base), (1.26, 1.0, 50, 1.0));
+    assert_eq!(a.at(50 + WHEEL_ZOOM_MS), (1.0, true));
+    // Out, out, in within one step: 1 -> 1.5 -> 2 -> 1.5.
+    let mut anim = Some(WheelAnim { base: 1.0, from: 1.0, to: 1.5, start_ms: 0, centre: (5.0, 6.0) });
+    for (z, steps, want) in [(1.1, -1, 2.0), (1.3, 1, 1.5)] {
+        let to = wheel_target(zoom_base(anim.as_ref(), z), steps);
+        assert_eq!(to, want);
+        assert_eq!(plan_zoom(&mut anim, z, to, 10, c, true), ZoomPlan::Retarget);
+    }
+    assert_eq!(anim.unwrap().to, 1.5);
+    // Right after a step: it starts from the level shown; no handler or no centre writes; nothing to do writes.
+    let mut none = None;
+    assert_eq!(plan_zoom(&mut none, 1.5, 1.0, 0, c, true), ZoomPlan::Begin((5.0, 6.0)));
+    assert_eq!(plan_zoom(&mut none, 1.5, 1.0, 0, c, false), ZoomPlan::Write);
+    assert_eq!(plan_zoom(&mut none, 1.5, 1.0, 0, None, true), ZoomPlan::Write);
+    assert_eq!(plan_zoom(&mut none, 1.5, 1.5, 0, c, true), ZoomPlan::Write);
+    // A step the game dropped still lands.
+    let a = WheelAnim { base: 1.0, from: 1.0, to: 1.5, start_ms: 0, centre: (5.0, 6.0) };
+    assert!(a.missed(1.0));
+    assert!(!a.missed(1.4999));
+}

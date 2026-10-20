@@ -396,15 +396,25 @@ impl InputMapper {
         if self.gesture != Gesture::None || !dy.is_finite() {
             return;
         }
+        // A reversal starts afresh: the rest of the other direction must not eat the first notch back.
         if self.wheel_rest * dy < 0.0 {
             self.wheel_rest = 0.0;
         }
-        self.wheel_rest += dy;
-        let steps = self.wheel_rest.trunc();
+        // A whole notch or more in one event (a wheel; GTK on Wayland reports 1.5 per notch) is that many steps and
+        // leaves no rest, so every notch is one step. Smaller amounts (touchpads, high-resolution wheels) add up;
+        // the tolerance keeps three thirds from summing to 0.9999999.
+        let steps = if dy.abs() >= 1.0 {
+            self.wheel_rest = 0.0;
+            dy.trunc()
+        } else {
+            self.wheel_rest += dy;
+            let steps = (self.wheel_rest + self.wheel_rest.signum() * 1e-4).trunc();
+            self.wheel_rest -= steps;
+            steps
+        };
         if steps == 0.0 {
             return;
         }
-        self.wheel_rest -= steps;
         let steps = steps.clamp(-100.0, 100.0) as i32;
         sink.host_action(HostAction::WheelZoom { steps, at: (p.0.round() as i32, p.1.round() as i32) });
     }

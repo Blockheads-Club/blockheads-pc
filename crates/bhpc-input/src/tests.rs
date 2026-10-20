@@ -680,3 +680,20 @@ fn wheel_zoom_ends_an_old_wheel_pinch_and_waits_for_other_gestures_and_the_bindi
     m.handle(HostEvent::Wheel { dy: 1.0, x: 0.0, y: 0.0, mods: ctrl }, 1, &mut r);
     assert_eq!(r.actions, vec![HostAction::WheelZoom { steps: 1, at: (0, 0) }]);
 }
+
+#[test]
+fn every_notch_counts_in_either_direction_whatever_the_wheel_reports() {
+    let z = |steps| HostAction::WheelZoom { steps, at: (1, 1) };
+    // GTK on Wayland: 1.5 per notch. Out, out, in, out, in in quick succession: one step each, no rest piling up.
+    let mut m = InputMapper::new(cfg());
+    m.set_world_zoom(true);
+    let r = run(&mut m, [-1.5, -1.5, 1.5, -1.5, 1.5, 1.5].iter().map(|d| (wheel(*d, 1.0, 1.0), 0)).collect());
+    assert_eq!(r.actions, vec![z(-1), z(-1), z(1), z(-1), z(1), z(1)]);
+    // A high-resolution wheel in thirds: three thirds are a notch, also right after a reversal.
+    let t = 1.0f32 / 3.0;
+    let r = run(&mut m, [-t, -t, -t, t, t, t, -t, -t, -t].iter().map(|d| (wheel(*d, 1.0, 1.0), 0)).collect());
+    assert_eq!(r.actions, vec![z(-1), z(1), z(-1)]);
+    // A plain notch after a partial one the other way.
+    let r = run(&mut m, vec![(wheel(-0.6, 1.0, 1.0), 0), (wheel(1.0, 1.0, 1.0), 1), (wheel(-1.0, 1.0, 1.0), 2)]);
+    assert_eq!(r.actions, vec![z(1), z(-1)]);
+}

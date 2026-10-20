@@ -1130,7 +1130,9 @@ impl UiThread {
         now_ms: i64,
         wheel: &mut Option<crate::gameui::WheelAnim>,
     ) {
-        use crate::gameui::{message, view_point, wheel_target, zoom_cycle, WheelAnim, PINCH_BEGAN};
+        use crate::gameui::{
+            message, plan_zoom, view_point, wheel_target, zoom_base, zoom_cycle, WheelAnim, ZoomPlan, PINCH_BEGAN,
+        };
         // The controller zooms around its cursor (the middle of the picture while the cursor is hidden).
         let pad_at = pad_cursor.unwrap_or((content.0 / 2.0, content.1 / 2.0));
         let pad_at = (pad_at.0.round() as i32, pad_at.1.round() as i32);
@@ -1151,7 +1153,7 @@ impl UiThread {
                 HostAction::ZoomIn | HostAction::ZoomOut | HostAction::ZoomCycle | HostAction::WheelZoom { .. } => {
                     let Some(z) = g.ui.zoom(&mem) else { continue };
                     // A running step counts from where it is heading, so quick presses and notches add up.
-                    let from = wheel.as_ref().map_or(z, |a| a.to);
+                    let from = zoom_base(wheel.as_ref(), z);
                     let (to, at) = match *a {
                         HostAction::ZoomIn => (wheel_target(from, 1), pad_at),
                         HostAction::ZoomOut => (wheel_target(from, -1), pad_at),
@@ -1159,16 +1161,17 @@ impl UiThread {
                         _ => (zoom_cycle(from), pad_at),
                     };
                     let centre = g.ui.view_size(&mem).and_then(|v| view_point(at, content, v));
-                    if let Some(a) = wheel.as_mut() {
-                        // The pinch is still on: aim it at the new level from where it is now.
-                        (a.from, a.to, a.start_ms) = (z, to, now_ms);
-                    } else if let Some(centre) = centre.filter(|_| g.pinch.is_some() && to != z) {
-                        self.pinch(c, g, PINCH_BEGAN, 1.0, centre);
-                        // The pinch starts from whatever the game shows once it began.
-                        let base = g.ui.zoom(&mem).unwrap_or(z);
-                        *wheel = Some(WheelAnim { base, from: base, to, start_ms: now_ms, centre });
-                    } else {
-                        g.ui.set_zoom(&mem, to);
+                    match plan_zoom(wheel, z, to, now_ms, centre, g.pinch.is_some()) {
+                        ZoomPlan::Retarget => {}
+                        ZoomPlan::Begin(centre) => {
+                            self.pinch(c, g, PINCH_BEGAN, 1.0, centre);
+                            // The pinch starts from whatever the game shows once it began.
+                            let base = g.ui.zoom(&mem).unwrap_or(z);
+                            *wheel = Some(WheelAnim { base, from: base, to, start_ms: now_ms, centre });
+                        }
+                        ZoomPlan::Write => {
+                            g.ui.set_zoom(&mem, to);
+                        }
                     }
                     if std::env::var_os("BHPC_TRACE_ZOOM").is_some() {
                         eprintln!("[zoom] {a:?} at {at:?} {centre:?}: {z:.4} -> {to}");
@@ -1231,6 +1234,10 @@ impl UiThread {
             *wheel = None;
         } else if done {
             self.pinch(c, g, PINCH_ENDED, a.factor(want), a.centre);
+            if a.missed(g.ui.zoom(&mem).unwrap_or(a.to)) {
+                // The game dropped or bent the pinch: the step still lands.
+                g.ui.set_zoom(&mem, a.to);
+            }
             *wheel = None;
         }
         if std::env::var_os("BHPC_TRACE_ZOOM").is_some() {
@@ -1397,6 +1404,11 @@ impl UiThread {
                     // The display of the game follows the window; `SurfaceChanged` below tells the game.
                     vm.set_screen_size(m.drawable.0 as i32, m.drawable.1 as i32);
                     eprintln!("[play] window {:?}, drawable {:?}", m.logical, m.drawable);
+                }
+                if let Event::Wheel { dx, dy } = &ev {
+                    if std::env::var_os("BHPC_TRACE_ZOOM").is_some() {
+                        eprintln!("[zoom] host wheel dx {dx} dy {dy} at {now} ms");
+                    }
                 }
                 if let Some(h) = tracker.map(&ev) {
                     mapper.handle(h, now, &mut sink);

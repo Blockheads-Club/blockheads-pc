@@ -145,6 +145,47 @@ impl WheelAnim {
     pub fn refused(&self, want: f64, shown: f64) -> bool {
         (want / self.base - 1.0).abs() > 1e-3 && (shown / self.base - 1.0).abs() < 1e-6
     }
+
+    /// At the end of the step the game shows something else than the target (it dropped or bent the pinch).
+    pub fn missed(&self, shown: f64) -> bool {
+        (shown / self.to - 1.0).abs() > 0.01
+    }
+}
+
+/// What a new zoom request (a wheel notch, a controller press) does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ZoomPlan {
+    /// The running step now heads for the new level (from where it is), the pinch stays on.
+    Retarget,
+    /// Begin a pinch of the game's around this centre (view points), then start a step.
+    Begin((f32, f32)),
+    /// Write the zoom directly (no pinch handler, no centre, or nothing to do).
+    Write,
+}
+
+/// The level a request starts from: a running step's target, else the zoom `z` shown. Every request in either
+/// direction therefore counts from the latest target, also a reversal in the middle of a step.
+pub fn zoom_base(anim: Option<&WheelAnim>, z: f64) -> f64 {
+    anim.map_or(z, |a| a.to)
+}
+
+/// Decide a request for level `to` at `now_ms` while the game shows `z`; a running step (`anim`) is re-aimed here.
+pub fn plan_zoom(
+    anim: &mut Option<WheelAnim>,
+    z: f64,
+    to: f64,
+    now_ms: i64,
+    centre: Option<(f32, f32)>,
+    pinch: bool,
+) -> ZoomPlan {
+    if let Some(a) = anim.as_mut() {
+        (a.from, a.to, a.start_ms) = (z, to, now_ms);
+        return ZoomPlan::Retarget;
+    }
+    match centre.filter(|_| pinch && to != z) {
+        Some(c) => ZoomPlan::Begin(c),
+        None => ZoomPlan::Write,
+    }
 }
 
 /// A point in content pixels (`content`-sized touch space) in the view's points (`view`, `GameView.windowInfo`),
