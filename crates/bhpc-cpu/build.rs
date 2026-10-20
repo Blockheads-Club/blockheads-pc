@@ -27,6 +27,12 @@ fn target_var(name: &str) -> String {
 }
 
 fn main() {
+    // `BHPC_SKIP_NATIVE=1`: type-check only (`cargo check --target <foreign triple>` without that target's C++
+    // toolchain). Nothing is built or linked, so a link of the result fails.
+    println!("cargo:rerun-if-env-changed=BHPC_SKIP_NATIVE");
+    if std::env::var_os("BHPC_SKIP_NATIVE").is_some_and(|v| v == "1") {
+        return;
+    }
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let dynarmic = manifest.join("../../third_party/dynarmic").canonicalize().expect("third_party/dynarmic missing");
     // Windows canonicalizes to a verbatim `\\?\D:\...` path, which MSBuild cannot open sources from.

@@ -11,7 +11,6 @@ use bhpc_loader::apk::{sha256_hex, ApkError, Release};
 use bhpc_vfs::DataDirs;
 use std::io::Write;
 use std::path::Path;
-use std::time::Duration;
 
 fn make_zip(path: &Path, files: &[(&str, &[u8])]) {
     let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
@@ -258,6 +257,7 @@ fn session_error_text() {
 mod unix {
     use super::*;
     use crate::session::Snapshot;
+    use std::time::Duration;
 
     fn sh(script: &str) -> (std::path::PathBuf, Vec<String>) {
         ("/bin/sh".into(), vec!["-c".into(), script.into()])
@@ -724,6 +724,7 @@ mod embed_tests {
         });
         assert_eq!(late.unwrap(), None);
         assert_eq!(Layout::default(), Layout::Bgra);
+        #[cfg(unix)]
         assert!(crate::embed::Map::new(&std::fs::File::open(&path).unwrap(), 0).is_err(), "an empty mapping");
     }
 
@@ -734,7 +735,7 @@ mod embed_tests {
         let mut r = FrameReader::create(&path).unwrap();
         FrameWriter::open(&path).unwrap().publish(1, 1, &[0; 4]).unwrap();
         let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        std::os::unix::fs::FileExt::write_all_at(&f, &7u32.to_le_bytes(), 36).unwrap();
+        crate::embed::write_at(&f, &7u32.to_le_bytes(), 36).unwrap();
         assert_eq!(r.read_with(|_, _| {}).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
     }
 
@@ -761,22 +762,12 @@ mod embed_tests {
         raw[24..28].copy_from_slice(&60000u32.to_le_bytes());
         raw[28..32].copy_from_slice(&60000u32.to_le_bytes());
         std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        std::os::unix::fs::FileExt::write_all_at(
-            &std::fs::OpenOptions::new().write(true).open(&path).unwrap(),
-            &raw,
-            0,
-        )
-        .unwrap();
+        crate::embed::write_at(&std::fs::OpenOptions::new().write(true).open(&path).unwrap(), &raw, 0).unwrap();
         assert_eq!(r.read(&mut Vec::new()).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
         raw[24..28].copy_from_slice(&2u32.to_le_bytes());
         raw[28..32].copy_from_slice(&2u32.to_le_bytes());
         raw[32..36].copy_from_slice(&9u32.to_le_bytes());
-        std::os::unix::fs::FileExt::write_all_at(
-            &std::fs::OpenOptions::new().write(true).open(&path).unwrap(),
-            &raw,
-            0,
-        )
-        .unwrap();
+        crate::embed::write_at(&std::fs::OpenOptions::new().write(true).open(&path).unwrap(), &raw, 0).unwrap();
         assert!(r.read(&mut Vec::new()).is_err(), "slot out of range");
         assert!(frame_dir().is_dir());
     }

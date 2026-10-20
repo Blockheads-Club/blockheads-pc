@@ -867,13 +867,18 @@ fn bench_popup() {
         v.sort_by(f64::total_cmp);
         v[v.len() / 2]
     };
-    // CPU time of this thread: what the work costs, also on a busy machine.
+    // CPU time of this thread: what the work costs, also on a busy machine (wall time where there is no such clock).
+    #[cfg(unix)]
     let cpu = || {
         let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
         // SAFETY: valid out pointer.
         unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
         t.tv_sec as f64 * 1e6 + t.tv_nsec as f64 / 1e3
     };
+    #[cfg(not(unix))]
+    let start = std::time::Instant::now();
+    #[cfg(not(unix))]
+    let cpu = || start.elapsed().as_secs_f64() * 1e6;
     let time = |f: &mut dyn FnMut()| {
         let t = cpu();
         f();

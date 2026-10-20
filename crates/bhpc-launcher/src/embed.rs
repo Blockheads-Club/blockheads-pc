@@ -30,7 +30,7 @@ fn read_at(f: &File, buf: &mut [u8], at: u64) -> io::Result<()> {
     std::os::unix::fs::FileExt::read_exact_at(f, buf, at)
 }
 #[cfg(unix)]
-fn write_at(f: &File, buf: &[u8], at: u64) -> io::Result<()> {
+pub(crate) fn write_at(f: &File, buf: &[u8], at: u64) -> io::Result<()> {
     std::os::unix::fs::FileExt::write_all_at(f, buf, at)
 }
 #[cfg(windows)]
@@ -46,7 +46,7 @@ fn read_at(f: &File, mut buf: &mut [u8], mut at: u64) -> io::Result<()> {
     Ok(())
 }
 #[cfg(windows)]
-fn write_at(f: &File, mut buf: &[u8], mut at: u64) -> io::Result<()> {
+pub(crate) fn write_at(f: &File, mut buf: &[u8], mut at: u64) -> io::Result<()> {
     while !buf.is_empty() {
         let n = std::os::windows::fs::FileExt::seek_write(f, buf, at)?;
         buf = &buf[n..];

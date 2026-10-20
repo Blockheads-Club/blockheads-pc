@@ -1,33 +1,54 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# Builds and tests the host-facing crates (bhpc-mem, bhpc-cpu) on Windows and macOS.
-# Linux is covered by the main CI. These jobs have never run before this file was added: treat the
-# first failures as expected and fix forward (see crates/bhpc-cpu/README.md, "Unverified").
+# Builds the whole workspace and runs its tests on every shipped target except Linux x86_64 (the main CI, with the
+# coverage gate): Linux arm64, macOS x86_64 + arm64, Windows x86_64 + arm64. Nothing here needs the game: tests that
+# read an APK are `#[ignore]`d behind BHPC_APK, the guest code in the tests is our own synthetic ELF fixtures.
 name: ci-crossplat
 
 on:
   push:
-    branches: [dev, main, "m2/**"]
+    branches: [dev, main, "m*/**", "port/**"]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-crossplat-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
 
 jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: windows-x64-msvc, os: windows-latest }
+          - { name: linux-arm64, os: ubuntu-24.04-arm }
+          - { name: windows-x86_64, os: windows-latest }
+          - { name: windows-arm64, os: windows-11-arm }
           - { name: macos-x86_64, os: macos-15-intel }
           - { name: macos-arm64, os: macos-14 }
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Boost (macOS)
+
+      # The dynarmic archives (build.rs' shared build cache), kept between runs by the cache step below.
+      - name: Build cache location
+        shell: bash
+        run: echo "BHPC_DYNARMIC_CACHE=$(cd .. && pwd -W 2>/dev/null || pwd)/bhpc-dynarmic-cache" >> "$GITHUB_ENV"
+      - name: Build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ libboost-dev
+      - name: Build dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install boost cmake
@@ -44,7 +65,26 @@ jobs:
             | tar -xz -C "$root/include" --strip-components=1 boost_1_86_0/boost
           test -f "$root/include/boost/variant.hpp"
           echo "BHPC_BOOST_ROOT=$root" >> "$GITHUB_ENV"
-      - name: Build and test
-        run: cargo test -p bhpc-mem -p bhpc-cpu --locked
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      - name: Cache the dynarmic build
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BHPC_DYNARMIC_CACHE }}
+          key: dynarmic-${{ matrix.name }}-${{ hashFiles('third_party/dynarmic/**', 'crates/bhpc-cpu/build.rs', 'crates/bhpc-cpu/cmake/**', 'crates/bhpc-cpu/shim/**', 'crates/bhpc-cpu/src/buildc*.rs') }}
+          restore-keys: dynarmic-${{ matrix.name }}-
+
+      - name: Build
+        run: cargo build --workspace --all-targets --locked
+      # One test at a time with names printed first: a crash inside the JIT names the test that caused it.
+      - name: Test the JIT (serial)
+        run: cargo test -p bhpc-cpu --locked -- --test-threads=1
+      - name: Test
+        run: cargo test --workspace --locked --no-fail-fast
       - name: Clippy
-        run: cargo clippy -p bhpc-mem -p bhpc-cpu --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
