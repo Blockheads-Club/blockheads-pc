@@ -21,7 +21,8 @@ endif()
 
 if (APPLE)
     # dynarmic's macOS fastmem handler runs `mig` and writes generated files into the (vendored,
-    # read-only) source tree. Force the generic handler; bhpc-cpu then defaults fastmem off on macOS.
+    # read-only) source tree. Keep it out (dynarmic then picks its generic no-op handler) and swap in the
+    # POSIX signal handler below, which handles macOS (SIGSEGV + SIGBUS, Darwin ucontext) on both archs.
     set(MACH_EXC_DEFS_DIR "MACH_EXC_DEFS_DIR-NOTFOUND" CACHE PATH "" FORCE)
 endif()
 
@@ -44,6 +45,15 @@ if (WIN32)
     list(FILTER BHPC_DYNARMIC_SOURCES EXCLUDE REGEX "backend/exception_handler_windows\\.cpp$")
     set_property(TARGET dynarmic PROPERTY SOURCES ${BHPC_DYNARMIC_SOURCES})
     target_sources(dynarmic PRIVATE ${BHPC_SHIM_DIR}/exception_handler_windows.cpp)
+endif()
+
+if (APPLE)
+    # Fastmem faults must reach dynarmic: the generic handler does nothing, and the arm64 backend emits fastmem
+    # accesses even then, so a fault would kill the process.
+    get_target_property(BHPC_DYNARMIC_SOURCES dynarmic SOURCES)
+    list(FILTER BHPC_DYNARMIC_SOURCES EXCLUDE REGEX "exception_handler_generic\\.cpp$")
+    list(APPEND BHPC_DYNARMIC_SOURCES ${BHPC_DYNARMIC_DIR}/src/dynarmic/backend/exception_handler_posix.cpp)
+    set_property(TARGET dynarmic PROPERTY SOURCES ${BHPC_DYNARMIC_SOURCES})
 endif()
 
 add_library(bhpc_shim STATIC ${BHPC_SHIM_DIR}/bhpc_shim.cpp)

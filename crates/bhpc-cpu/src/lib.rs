@@ -175,7 +175,7 @@ pub struct CpuOptions {
     pub fastmem_exclusive: bool,
     /// dynarmic's NaN/FPSCR shortcuts: NaN payloads may differ from ARM's and NEON honours the guest FPSCR's
     /// flush-to-zero/default-NaN bits instead of forcing them. Results of ordinary (non-NaN) arithmetic are
-    /// unchanged.
+    /// unchanged. Only the x86_64 backend implements them; on arm64 hosts the flag changes nothing.
     pub fast_fp: bool,
 }
 
@@ -188,10 +188,9 @@ fn tuning_enabled(safe: Option<&std::ffi::OsStr>) -> bool {
     safe.is_none_or(|v| v == "0")
 }
 
-/// Whether fastmem is on by default. On macOS the vendored dynarmic is built with its generic (no-op)
-/// exception handler (the Mach handler needs `mig` and writes into the source tree), so a fastmem
-/// fault would crash instead of reaching the callbacks; callbacks it is.
-const FASTMEM_DEFAULT: bool = !cfg!(target_os = "macos");
+/// Whether fastmem is on by default: everywhere, since every host links a real fault handler (macOS uses
+/// dynarmic's POSIX signal handler, see `cmake/CMakeLists.txt`).
+const FASTMEM_DEFAULT: bool = true;
 
 impl Default for CpuOptions {
     fn default() -> Self {

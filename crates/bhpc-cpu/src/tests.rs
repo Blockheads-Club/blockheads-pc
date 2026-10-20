@@ -598,10 +598,12 @@ fn fast_fp_keeps_ordinary_float_results() {
         assert_eq!(f(&mut cpu, CODE, -3.0e7, 0.125), (-3.0e7f32 + 0.125) * 0.125);
         assert!(f(&mut cpu, CODE, f32::NAN, 1.0).is_nan(), "NaN stays NaN (payload may differ)");
         assert_eq!(f(&mut cpu, CODE + 0x100, 1.5, 2.25), 3.75);
-        let tiny = f32::from_bits(0x0000_1000); // subnormal
-                                                // ARM's "standard FPSCR value" flushes NEON subnormals; fast_fp honours the guest FPSCR (FZ clear) instead.
+        let tiny = f32::from_bits(0x0000_1000);
+        // `tiny` is subnormal. ARM's "standard FPSCR value" flushes NEON subnormals; fast_fp on x86_64 honours the guest FPSCR (FZ clear)
+        // instead. dynarmic's arm64 backend has no unsafe float optimisations and stays exact.
         let neon_tiny = f(&mut cpu, CODE + 0x100, tiny, 0.0);
-        assert_eq!(neon_tiny, if fast_fp { tiny } else { 0.0 }, "fast_fp={fast_fp}");
+        let relaxed = fast_fp && cfg!(target_arch = "x86_64");
+        assert_eq!(neon_tiny, if relaxed { tiny } else { 0.0 }, "fast_fp={fast_fp}");
     }
 }
 
@@ -728,8 +730,10 @@ fn failures_in_nested_calls_propagate() {
     let mut cpu = setup();
     let q = register_qsort(&cpu);
     put(&cpu, CODE + 0x100, &[0xE590_0000, 0xE591_1000, 0xE040_0001, BX_LR]);
-    // Element pointers run off the mapped data page: the comparator's load faults in the child.
-    let r = cpu.call(q, &[0x0FFC, 3, 4, CODE + 0x100]);
+    // Element pointers run into unmapped memory: the comparator's load faults in the child. 0xFFFC.. is far from
+    // every mapping, so it faults through fastmem on 16 KiB host pages too (a guest page sharing a host page
+    // with a mapped one stays host-accessible there).
+    let r = cpu.call(q, &[0xFFFC, 3, 4, CODE + 0x100]);
     assert!(matches!(r, Err(Stop::Fault(_))), "{r:?}");
     // An undefined comparator reports the instruction.
     put(&cpu, CODE + 0x200, &[0xE7F0_00F0]);
@@ -1093,7 +1097,7 @@ fn cycle_counting_reflects_options() {
 
 #[test]
 fn default_fastmem_matches_platform() {
-    assert_eq!(CpuOptions::default().fastmem, !cfg!(target_os = "macos"));
+    assert!(CpuOptions::default().fastmem);
 }
 
 /// A host gate for one thread that records what the CPU does with it.
