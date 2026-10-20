@@ -271,18 +271,18 @@ fn every_protection_bit_maps_and_errors_surface() {
     let mut seen = vec![];
     l.apply_protections_with(&mut |start, len, prot| {
         seen.push((start, len, prot));
-        0
+        Ok(())
     })
     .unwrap();
     assert_eq!(
         seen,
         [
-            (0x1000, 0x1000, 0),
-            (0x2000, 0x1000, libc::PROT_READ),
-            (0x3000, 0x1000, libc::PROT_WRITE),
-            (0x4000, 0x1000, libc::PROT_EXEC)
+            (0x1000, 0x1000, Prot::NONE),
+            (0x2000, 0x1000, Prot::READ),
+            (0x3000, 0x1000, Prot::WRITE),
+            (0x4000, 0x1000, Prot::EXEC)
         ]
     );
-    let err = l.apply_protections_with(&mut |_, _, _| -1).unwrap_err();
+    let err = l.apply_protections_with(&mut |_, _, _| Err(MemError::Os(1))).unwrap_err();
     assert!(matches!(err, LoadError::Mem(MemError::Os(_))));
 }

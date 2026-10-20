@@ -18,6 +18,7 @@ const PAGE_READWRITE: u32 = 0x04;
 extern "system" {
     fn VirtualAlloc(addr: *mut c_void, size: usize, kind: u32, protect: u32) -> *mut c_void;
     fn VirtualFree(addr: *mut c_void, size: usize, kind: u32) -> i32;
+    fn VirtualProtect(addr: *mut c_void, size: usize, protect: u32, old: *mut u32) -> i32;
 }
 
 fn last_error() -> i32 {
@@ -40,6 +41,18 @@ pub unsafe fn make_accessible(p: *mut u8, len: usize) -> Result<(), i32> {
     // SAFETY: forwarded from the caller.
     let r = unsafe { VirtualAlloc(p.cast(), len, MEM_COMMIT, PAGE_READWRITE) };
     if r.is_null() {
+        Err(last_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// # Safety
+/// The range must be committed pages inside a reservation made by [`reserve`].
+pub unsafe fn protect(p: *mut u8, len: usize, prot: crate::Prot) -> Result<(), i32> {
+    let mut old = 0u32;
+    // SAFETY: forwarded from the caller; `old` is a valid out pointer.
+    if unsafe { VirtualProtect(p.cast(), len, crate::windows_page_protection(prot), &mut old) } == 0 {
         Err(last_error())
     } else {
         Ok(())

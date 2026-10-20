@@ -26,7 +26,7 @@ mod tests_multi;
 mod tests_unwind;
 pub mod unwind;
 
-use bhpc_mem::{GuestMemory, MemError};
+use bhpc_mem::{GuestMemory, MemError, Prot};
 use elf::{Dynamic, Elf, Sym};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -284,38 +284,30 @@ impl Linker {
         self.module_at(pc).and_then(|m| m.exidx)
     }
 
-    /// Apply the `PT_LOAD` protections of every module with `mprotect`.
+    /// Apply the `PT_LOAD` protections of every module ([`GuestMemory::protect`]).
     ///
     /// Mappings are read/write while loading and relocating; call this once relocations and constructors
     /// are done (code pages become read/execute, so later guest writes to code fault). Pages shared by
     /// several segments get the union of their protections.
     pub fn apply_protections(&self) -> Result<(), LoadError> {
-        let base = self.mem.base();
-        // SAFETY: the range lies inside the guest window reservation owned by `self.mem`.
-        self.apply_protections_with(&mut |start, len, prot| unsafe {
-            libc::mprotect(base.add(start as usize).cast(), len as usize, prot)
-        })
+        let mem = self.mem.clone();
+        self.apply_protections_with(&mut |start, len, prot| mem.protect(start, len, prot))
     }
 
-    /// [`Linker::apply_protections`] with the `mprotect(start, len, prot)` call injected.
-    fn apply_protections_with(&self, protect: &mut dyn FnMut(u32, u32, i32) -> i32) -> Result<(), LoadError> {
+    /// [`Linker::apply_protections`] with the protect call injected.
+    fn apply_protections_with(
+        &self,
+        protect: &mut dyn FnMut(u32, u32, Prot) -> Result<(), MemError>,
+    ) -> Result<(), LoadError> {
         for m in &self.modules {
             for (start, len, prot) in coalesce_pages(&m.segments) {
-                let mut p = 0;
-                if prot & PF_R != 0 {
-                    p |= libc::PROT_READ;
+                let mut p = Prot::NONE;
+                for (flag, bit) in [(PF_R, Prot::READ), (PF_W, Prot::WRITE), (PF_X, Prot::EXEC)] {
+                    if prot & flag != 0 {
+                        p |= bit;
+                    }
                 }
-                if prot & PF_W != 0 {
-                    p |= libc::PROT_WRITE;
-                }
-                if prot & PF_X != 0 {
-                    p |= libc::PROT_EXEC;
-                }
-                if protect(start, len, p) != 0 {
-                    return Err(LoadError::Mem(MemError::Os(
-                        std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
-                    )));
-                }
+                protect(start, len, p).map_err(LoadError::Mem)?;
             }
         }
         Ok(())

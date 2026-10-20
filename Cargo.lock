@@ -126,7 +126,6 @@ name = "bhpc-loader"
 version = "0.1.0"
 dependencies = [
  "bhpc-mem",
- "libc",
  "miniz_oxide 0.8.9",
  "sha2",
 ]

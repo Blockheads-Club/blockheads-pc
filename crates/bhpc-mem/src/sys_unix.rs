@@ -62,6 +62,24 @@ pub unsafe fn make_accessible(p: *mut u8, len: usize) -> Result<(), i32> {
 }
 
 /// # Safety
+/// The range must lie inside a reservation made by [`reserve`].
+pub unsafe fn protect(p: *mut u8, len: usize, prot: crate::Prot) -> Result<(), i32> {
+    use crate::Prot;
+    let mut bits = libc::PROT_NONE;
+    for (flag, bit) in [(Prot::READ, libc::PROT_READ), (Prot::WRITE, libc::PROT_WRITE), (Prot::EXEC, libc::PROT_EXEC)] {
+        if prot.contains(flag) {
+            bits |= bit;
+        }
+    }
+    // SAFETY: forwarded from the caller.
+    if unsafe { libc::mprotect(p.cast(), len, bits) } != 0 {
+        Err(errno())
+    } else {
+        Ok(())
+    }
+}
+
+/// # Safety
 /// Exactly a reservation from [`reserve`], released once.
 pub unsafe fn release(p: *mut u8, len: usize) {
     // SAFETY: forwarded from the caller.

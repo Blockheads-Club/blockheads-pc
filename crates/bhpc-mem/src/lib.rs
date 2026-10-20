@@ -61,6 +61,62 @@ impl fmt::Display for MemError {
 
 impl std::error::Error for MemError {}
 
+/// Host page protection of a guest range (the `PF_R`/`PF_W`/`PF_X` bits of an ELF `PT_LOAD`).
+///
+/// Guest code is never executed by the host (the JIT reads it), so `EXEC` only matters for keeping the host's
+/// view identical to the guest's mapping flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Prot(u8);
+
+impl Prot {
+    /// No access: any touch faults.
+    pub const NONE: Prot = Prot(0);
+    /// Readable.
+    pub const READ: Prot = Prot(1);
+    /// Writable.
+    pub const WRITE: Prot = Prot(2);
+    /// Executable.
+    pub const EXEC: Prot = Prot(4);
+
+    /// True if every bit of `other` is set in `self`.
+    pub fn contains(self, other: Prot) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+impl std::ops::BitOr for Prot {
+    type Output = Prot;
+    fn bitor(self, rhs: Prot) -> Prot {
+        Prot(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for Prot {
+    fn bitor_assign(&mut self, rhs: Prot) {
+        self.0 |= rhs.0;
+    }
+}
+
+/// The `PAGE_*` constant `VirtualProtect` takes for `p`. Windows has no write-only pages: write implies read.
+/// Lives here (not in `sys_windows.rs`) so its logic is tested on every host.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_page_protection(p: Prot) -> u32 {
+    const PAGE_NOACCESS: u32 = 0x01;
+    const PAGE_READONLY: u32 = 0x02;
+    const PAGE_READWRITE: u32 = 0x04;
+    const PAGE_EXECUTE: u32 = 0x10;
+    const PAGE_EXECUTE_READ: u32 = 0x20;
+    const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+    match (p.contains(Prot::READ), p.contains(Prot::WRITE), p.contains(Prot::EXEC)) {
+        (_, true, true) => PAGE_EXECUTE_READWRITE,
+        (true, false, true) => PAGE_EXECUTE_READ,
+        (false, false, true) => PAGE_EXECUTE,
+        (_, true, false) => PAGE_READWRITE,
+        (true, false, false) => PAGE_READONLY,
+        (false, false, false) => PAGE_NOACCESS,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Region {
     start: u64,
@@ -139,6 +195,19 @@ impl GuestMemory {
         self.map(start as u32, size as u32)?;
         *cur = start + size;
         Ok(start as u32)
+    }
+
+    /// Change the host protection of the mapped range `[addr, addr+len)` (page aligned).
+    ///
+    /// The range stays mapped for [`GuestMemory::is_mapped`]: the Rust-side accessors keep working, only direct
+    /// host accesses (the JIT's fastmem path) see the protection.
+    pub fn protect(&self, addr: u32, len: u32, prot: Prot) -> Result<(), MemError> {
+        let (start, _) = Self::check_range(addr, len)?;
+        if !self.is_mapped(addr, len) {
+            return Err(MemError::Unmapped { addr, len });
+        }
+        // SAFETY: the range is mapped inside our own reservation.
+        unsafe { sys::protect(self.base.add(start as usize), len as usize, prot) }.map_err(MemError::Os)
     }
 
     /// True if every byte of `[addr, addr+len)` is mapped.
@@ -322,6 +391,19 @@ mod sys {
         unsafe { os::make_accessible(p, len) }
     }
 
+    /// Set the protection of committed pages.
+    ///
+    /// # Safety
+    /// The range must lie inside a reservation made by [`reserve`] and be accessible already.
+    pub unsafe fn protect(p: *mut u8, len: usize, prot: crate::Prot) -> Result<(), i32> {
+        #[cfg(test)]
+        if injected(&FAIL_PROTECT) {
+            return Err(ERR_NOMEM);
+        }
+        // SAFETY: forwarded from the caller.
+        unsafe { os::protect(p, len, prot) }
+    }
+
     /// Give a whole reservation back.
     ///
     /// # Safety
@@ -447,6 +529,48 @@ mod tests {
         assert_eq!(m.cas_u32(0x1101, 5, 7), Ok(false));
         assert_eq!(m.read_u32(0x1101).unwrap(), 6);
         assert_eq!(m.cas_u32(0x9000, 0, 1), Err(MemError::Unmapped { addr: 0x9000, len: 4 }));
+    }
+
+    #[test]
+    fn protect_changes_host_access_but_keeps_the_mapping() {
+        let m = GuestMemory::new().unwrap();
+        m.map(0x1000, 0x2000).unwrap();
+        m.write_u32(0x1000, 7).unwrap();
+        m.protect(0x1000, 0x1000, Prot::READ | Prot::EXEC).unwrap();
+        // SAFETY: the page is mapped and readable.
+        assert_eq!(unsafe { std::ptr::read_volatile(m.base().add(0x1000).cast::<u32>()) }, 7);
+        m.protect(0x1000, 0x1000, Prot::READ | Prot::WRITE).unwrap();
+        m.write_u32(0x1000, 8).unwrap();
+        m.protect(0x2000, 0x1000, Prot::NONE).unwrap();
+        assert!(m.is_mapped(0x2000, 0x1000));
+        assert_eq!(m.protect(0x8000, 0x1000, Prot::READ), Err(MemError::Unmapped { addr: 0x8000, len: 0x1000 }));
+        assert_eq!(m.protect(0x1000, 0, Prot::READ), Err(MemError::BadRange { addr: 0x1000, len: 0 }));
+        sys::FAIL_PROTECT.with(|f| f.set(1));
+        assert_eq!(m.protect(0x1000, 0x1000, Prot::READ), Err(MemError::Os(sys::ERR_NOMEM)));
+        // POSIX rejects an unaligned start (Windows rounds it down to the page instead).
+        #[cfg(unix)]
+        assert!(m.protect(0x1001, 0x10, Prot::READ).is_err());
+        let mut p = Prot::NONE;
+        p |= Prot::WRITE;
+        assert!(p.contains(Prot::WRITE) && !p.contains(Prot::READ) && Prot::default() == Prot::NONE);
+    }
+
+    #[test]
+    fn windows_protections() {
+        let (r, w, x) = (Prot::READ, Prot::WRITE, Prot::EXEC);
+        let table = [
+            (Prot::NONE, 0x01),
+            (r, 0x02),
+            (w, 0x04),
+            (r | w, 0x04),
+            (x, 0x10),
+            (r | x, 0x20),
+            (w | x, 0x40),
+            (r | w | x, 0x40),
+        ];
+        for (p, want) in table {
+            assert_eq!(windows_page_protection(p), want, "{p:?}");
+        }
     }
 
     #[test]
