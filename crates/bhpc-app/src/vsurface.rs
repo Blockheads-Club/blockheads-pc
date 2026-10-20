@@ -546,7 +546,7 @@ unsafe fn realloc(g: &Gl, sh: &mut Shared, size: (u32, u32)) {
 
 /// Compile and link vertex shader `vs` with `fs`; returns the program and its sampler uniform.
 unsafe fn link(g: &Gl, vs: &str, fs: &str) -> Option<(u32, i32)> {
-    let compile = |kind: u32, src: &str| -> Option<u32> {
+    let compile_one = |kind: u32, src: &str| -> Option<u32> {
         let s = (g.glCreateShader)(kind);
         let c = cstr(src);
         let p = c.as_ptr();
@@ -554,8 +554,14 @@ unsafe fn link(g: &Gl, vs: &str, fs: &str) -> Option<(u32, i32)> {
         (g.glCompileShader)(s);
         let mut ok = 0;
         (g.glGetShaderiv)(s, COMPILE_STATUS, &mut ok);
+        if ok == 0 {
+            (g.glDeleteShader)(s);
+        }
         (ok != 0).then_some(s)
     };
+    // GLSL ES first; a desktop GL context (no ES on the host, see sdl.rs) takes the desktop translation.
+    let compile =
+        |kind: u32, src: &str| compile_one(kind, src).or_else(|| compile_one(kind, &bhpc_gles::glsl::to_desktop(src)));
     let (vs, fs) = (compile(VERTEX_SHADER, vs)?, compile(FRAGMENT_SHADER, fs)?);
     let p = (g.glCreateProgram)();
     (g.glAttachShader)(p, vs);

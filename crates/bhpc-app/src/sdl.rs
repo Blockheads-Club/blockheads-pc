@@ -136,6 +136,8 @@ impl sdl2::audio::AudioCallback for AudioOut {
 /// The GL half of the window, usable from guest threads.
 pub struct SdlGl {
     window: *mut sys::SDL_Window,
+    /// The contexts are desktop OpenGL (no ES on this host): shaders are translated, point sizes enabled.
+    desktop: bool,
     alive: Arc<AtomicBool>,
     /// False: every swap interval the game asks for becomes 0 (the vsync setting is off).
     vsync: AtomicBool,
@@ -152,8 +154,6 @@ impl SdlBackend {
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
         let attr = video.gl_attr();
-        attr.set_context_profile(sdl2::video::GLProfile::GLES);
-        attr.set_context_version(2, 0);
         attr.set_red_size(8);
         attr.set_green_size(8);
         attr.set_blue_size(8);
@@ -161,15 +161,57 @@ impl SdlBackend {
         attr.set_depth_size(24);
         attr.set_stencil_size(8);
         attr.set_double_buffer(true);
-        let mut b = video.window(&cfg.title, cfg.size.0, cfg.size.1);
-        b.opengl();
-        if cfg.resizable {
-            b.resizable();
+        // OpenGL ES 2.0 where the host has it; otherwise a desktop compatibility context, whose GLSL the shaders
+        // are translated to (macOS has no ES at all, some Windows drivers lack WGL_EXT_create_context_es2_profile).
+        // BHPC_GL=es or BHPC_GL=desktop forces one.
+        let modes: &[bool] = match std::env::var("BHPC_GL").as_deref() {
+            Ok("desktop") => &[true],
+            Ok("es") => &[false],
+            _ => &[false, true],
+        };
+        let mut chosen = None;
+        let mut why = String::from("no OpenGL mode tried");
+        for &desktop in modes {
+            if desktop {
+                attr.set_context_profile(sdl2::video::GLProfile::Compatibility);
+                attr.set_context_version(2, 1);
+            } else {
+                attr.set_context_profile(sdl2::video::GLProfile::GLES);
+                attr.set_context_version(2, 0);
+            }
+            let mut b = video.window(&cfg.title, cfg.size.0, cfg.size.1);
+            b.opengl();
+            if cfg.resizable {
+                b.resizable();
+            }
+            if cfg.high_dpi {
+                b.allow_highdpi();
+            }
+            let window = match b.build() {
+                Ok(w) => w,
+                Err(e) => {
+                    why = format!("{} window: {e}", if desktop { "OpenGL" } else { "OpenGL ES 2.0" });
+                    continue;
+                }
+            };
+            // SAFETY: a probe context on the live window, released and deleted at once.
+            let probe = unsafe { sys::SDL_GL_CreateContext(window.raw()) };
+            if probe.is_null() {
+                why = format!("{} context: {}", if desktop { "OpenGL" } else { "OpenGL ES 2.0" }, sdl2::get_error());
+                continue;
+            }
+            // SAFETY: as above.
+            unsafe {
+                sys::SDL_GL_MakeCurrent(window.raw(), std::ptr::null_mut());
+                sys::SDL_GL_DeleteContext(probe);
+            }
+            if desktop {
+                eprintln!("[sdl] no OpenGL ES 2.0 context on this host; using desktop OpenGL (translated shaders)");
+            }
+            chosen = Some((window, desktop));
+            break;
         }
-        if cfg.high_dpi {
-            b.allow_highdpi();
-        }
-        let window = b.build().map_err(|e| e.to_string())?;
+        let (window, desktop) = chosen.ok_or(why)?;
         let pump = sdl.event_pump()?;
         video.text_input().start();
         // Every controller already plugged in is announced as an added device once the pump runs.
@@ -181,6 +223,7 @@ impl SdlBackend {
         let alive = Arc::new(AtomicBool::new(true));
         let gl = Arc::new(SdlGl {
             window: window.raw(),
+            desktop,
             alive: alive.clone(),
             vsync: AtomicBool::new(true),
             surface: crate::vsurface::VirtualSurface::new(),
@@ -378,6 +421,16 @@ impl GlWindow for SdlGl {
             }
             let ctx = sys::SDL_GL_CreateContext(self.window);
             sys::SDL_GL_SetAttribute(sys::SDL_GLattr::SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 0);
+            if self.desktop && !ctx.is_null() {
+                // ES always honours gl_PointSize and gives gl_PointCoord; a desktop compatibility context only with
+                // these two enabled (GL_VERTEX_PROGRAM_POINT_SIZE, GL_POINT_SPRITE). The new context is current here.
+                let enable = self.proc_address("glEnable");
+                if !enable.is_null() {
+                    let enable: unsafe extern "C" fn(u32) = std::mem::transmute(enable);
+                    enable(0x8642);
+                    enable(0x8861);
+                }
+            }
             if share.is_some() || !previous.is_null() {
                 // CreateContext made the new context current; put the old state back.
                 sys::SDL_GL_MakeCurrent(self.window, previous);
@@ -468,6 +521,10 @@ impl GlWindow for SdlGl {
         let Ok(c) = CString::new(name) else { return std::ptr::null() };
         // SAFETY: valid NUL-terminated string; needs a current context on some platforms.
         unsafe { sys::SDL_GL_GetProcAddress(c.as_ptr()) as *const c_void }
+    }
+
+    fn desktop_gl(&self) -> bool {
+        self.desktop
     }
 }
 

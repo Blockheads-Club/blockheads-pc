@@ -19,6 +19,7 @@ pub mod api;
 pub mod consts;
 pub mod egl;
 pub mod ext;
+pub mod glsl;
 pub mod imgsize;
 pub mod marshal;
 pub mod state;

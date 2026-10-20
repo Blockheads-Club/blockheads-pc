@@ -48,6 +48,11 @@ pub trait GlWindow: Send + Sync {
     fn drawable_size(&self) -> (u32, u32);
     /// Address of a GL function of the current context (null if unknown).
     fn proc_address(&self, name: &str) -> *const c_void;
+    /// The contexts are desktop OpenGL (compatibility profile), not OpenGL ES: shader sources are translated
+    /// ([`crate::glsl::to_desktop`]).
+    fn desktop_gl(&self) -> bool {
+        false
+    }
 
     // The game renders into a surface of its own size (`VerdeActivity.setContentSize`), like an Android
     // `SurfaceHolder.setFixedSize`; the window scales it to the drawable. A window that supports this keeps an

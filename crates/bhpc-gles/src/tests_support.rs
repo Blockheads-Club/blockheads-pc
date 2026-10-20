@@ -66,6 +66,7 @@ pub struct FakeWindow {
     pub surface: Mutex<Option<(u32, u32)>>,
     pub default_fb: AtomicU32,
     pub composed: AtomicU32,
+    pub desktop: AtomicBool,
 }
 
 impl FakeWindow {
@@ -84,6 +85,7 @@ impl FakeWindow {
             surface: Mutex::new(None),
             default_fb: AtomicU32::new(0),
             composed: AtomicU32::new(0),
+            desktop: AtomicBool::new(false),
         })
     }
 }
@@ -130,6 +132,9 @@ impl GlWindow for FakeWindow {
     }
     fn compose(&self) {
         self.composed.fetch_add(1, Ordering::SeqCst);
+    }
+    fn desktop_gl(&self) -> bool {
+        self.desktop.load(Ordering::SeqCst)
     }
 }
 

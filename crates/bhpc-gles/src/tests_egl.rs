@@ -439,4 +439,5 @@ fn a_window_without_an_offscreen_surface_renders_straight_into_itself() {
     assert_eq!(w.default_framebuffer(), 0);
     w.set_overlay(None);
     w.compose();
+    assert!(!w.desktop_gl(), "OpenGL ES unless the window says otherwise");
 }

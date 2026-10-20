@@ -323,6 +323,11 @@ fn shader_source(c: &mut Cpu, g: &Gles) {
         };
         sources.push(bytes);
     }
+    if g.window.desktop_gl() {
+        // One source: the translated `#version` line must come first.
+        sources = vec![crate::glsl::to_desktop(&String::from_utf8_lossy(&sources.concat())).into_bytes()];
+    }
+    let count = sources.len() as u32;
     let ptrs: Vec<*const u8> = sources.iter().map(|b| b.as_ptr()).collect();
     let lens: Vec<i32> = sources.iter().map(|b| b.len() as i32).collect();
     s.api.glShaderSource(shader, count as i32, ptrs.as_ptr().cast(), lens.as_ptr().cast());
