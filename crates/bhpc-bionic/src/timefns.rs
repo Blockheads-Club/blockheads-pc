@@ -99,10 +99,34 @@ fn host_zone(t: i64) -> ZoneInfo {
     }
 }
 
-/// Hosts without a C `localtime_r` (Windows) keep UTC until a native zone lookup is added.
-#[cfg(not(unix))]
-fn host_zone(_t: i64) -> ZoneInfo {
-    ZoneInfo::utc()
+/// Windows: the CRT's `localtime_s` (the system time zone, daylight saving included). Its `tm` has no offset or
+/// zone name, so both come from the broken-down local time ([`zone_of_local`]).
+#[cfg(windows)]
+fn host_zone(t: i64) -> ZoneInfo {
+    // SAFETY: `localtime_s` only writes into the zeroed `tm` we pass.
+    unsafe {
+        let secs = t as libc::time_t;
+        let mut out: libc::tm = std::mem::zeroed();
+        if libc::localtime_s(&mut out, &secs) != 0 {
+            return ZoneInfo::utc();
+        }
+        let local = (out.tm_year, out.tm_mon, out.tm_mday, out.tm_hour, out.tm_min, out.tm_sec);
+        zone_of_local(t, local, out.tm_isdst > 0)
+    }
+}
+
+/// The zone in effect when the UTC instant `t` reads as `local` (`tm` fields: years since 1900, month 0..=11, day,
+/// hour, minute, second): its offset, and a name made from it (`UTC`, `UTC+03:00`, `UTC-09:30`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn zone_of_local(t: i64, local: (i32, i32, i32, i32, i32, i32), dst: bool) -> ZoneInfo {
+    let (y, mon, d, h, m, s) = local;
+    let days = days_from_civil(i64::from(y) + 1900, i64::from(mon) + 1, i64::from(d));
+    let offset = (days * 86_400 + i64::from(h) * 3600 + i64::from(m) * 60 + i64::from(s) - t) as i32;
+    let name = match offset {
+        0 => "UTC".to_string(),
+        o => format!("UTC{}{:02}:{:02}", if o < 0 { '-' } else { '+' }, o.abs() / 3600, o.abs() % 3600 / 60),
+    };
+    ZoneInfo { offset, dst, name }
 }
 
 /// Days since 1970-01-01 of a proleptic Gregorian date (month 1..=12).
@@ -687,6 +711,17 @@ mod tests {
         e.mem().write_u32(SCRATCH, 1_625_000_000).unwrap();
         let r = e.call("localtime", &[SCRATCH]).r0;
         assert_eq!(e.mem().read_u32(r + tm::GMTOFF).unwrap() as i32, -14_400);
+    }
+
+    #[test]
+    fn zones_from_broken_down_local_times() {
+        // 2021-06-29 20:40:00 UTC.
+        let t = 1_624_999_200;
+        assert_eq!(zone_of_local(t, (121, 5, 29, 20, 40, 0), false), ZoneInfo::utc());
+        let z = zone_of_local(t, (121, 5, 29, 23, 40, 0), true);
+        assert_eq!((z.offset, z.dst, z.name.as_str()), (3 * 3600, true, "UTC+03:00"));
+        let z = zone_of_local(t, (121, 5, 29, 11, 10, 0), false);
+        assert_eq!((z.offset, z.name.as_str()), (-(9 * 3600 + 30 * 60), "UTC-09:30"));
     }
 
     #[test]

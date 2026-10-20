@@ -11,8 +11,7 @@ bhpc-mem.workspace = true
 bhpc-cpu.workspace = true
 bhpc-loader.workspace = true
 bhpc-vfs.workspace = true
-
-[target.'cfg(unix)'.dependencies]
+# localtime_r on unix, the CRT's localtime_s on Windows.
 libc.workspace = true
 
 [dev-dependencies]
