@@ -62,6 +62,19 @@ pub fn translate(ev: Sdl, metrics: Metrics) -> Option<Event> {
     })
 }
 
+/// Ctrl+V or Shift+Insert: the clipboard text is typed (into a focused text field; the mapper ignores text
+/// otherwise).
+pub fn is_paste(ev: &Sdl) -> bool {
+    use sdl2::keyboard::Scancode;
+    let Sdl::KeyDown { scancode: Some(sc), keymod, .. } = ev else { return false };
+    let (ctrl, shift, alt) = (
+        keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD),
+        keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD),
+        keymod.intersects(Mod::LALTMOD | Mod::RALTMOD),
+    );
+    (*sc == Scancode::V && ctrl && !alt) || (*sc == Scancode::Insert && shift && !ctrl && !alt)
+}
+
 fn touch(id: i64, phase: TouchPhase, x: f32, y: f32, m: Metrics) -> Event {
     Event::Touch { id, phase, x: x * m.logical.0 as f32, y: y * m.logical.1 as f32 }
 }
@@ -97,6 +110,8 @@ pub struct SdlBackend {
     /// The game controller subsystem (when controllers are enabled) and the controllers opened so far.
     controller: Option<sdl2::GameControllerSubsystem>,
     pads: Vec<sdl2::controller::GameController>,
+    /// The clipboard text of a paste key, handed out after the key event itself.
+    pending: Option<Event>,
 }
 
 impl Drop for SdlBackend {
@@ -170,7 +185,20 @@ impl SdlBackend {
             vsync: AtomicBool::new(true),
             surface: crate::vsurface::VirtualSurface::new(),
         });
-        Ok((SdlBackend { _sdl: sdl, audio: None, video, window, pump, alive, controller, pads: Vec::new() }, gl))
+        Ok((
+            SdlBackend {
+                _sdl: sdl,
+                audio: None,
+                video,
+                window,
+                pump,
+                alive,
+                controller,
+                pads: Vec::new(),
+                pending: None,
+            },
+            gl,
+        ))
     }
 
     /// Open the default audio device (stereo `i16`, `rate` Hz) and start pulling samples from `fill`.
@@ -217,6 +245,9 @@ impl SdlBackend {
 
 impl Backend for SdlBackend {
     fn poll_event(&mut self, timeout: Duration) -> Option<Event> {
+        if let Some(e) = self.pending.take() {
+            return Some(e);
+        }
         let mut wait = timeout.as_millis() as u32;
         loop {
             let ev = if wait > 0 { self.pump.wait_event_timeout(wait) } else { self.pump.poll_event() }?;
@@ -229,6 +260,10 @@ impl Backend for SdlBackend {
             }
             if let Sdl::ControllerDeviceRemoved { which, .. } = ev {
                 self.pads.retain(|p| p.instance_id() != which);
+            }
+            if is_paste(&ev) {
+                let text = self.video.clipboard().clipboard_text().unwrap_or_default();
+                self.pending = (!text.is_empty()).then_some(Event::Text(text));
             }
             if let Some(e) = translate(ev, self.metrics()) {
                 return Some(e);
@@ -506,7 +541,24 @@ mod tests {
             keymod: Mod::NOMOD,
             repeat: false,
         };
-        assert_eq!(ev(up), Some(Event::Key { key: Key::ENTER, pressed: false, repeat: false, mods: Mods::default() }));
+        assert_eq!(
+            ev(up.clone()),
+            Some(Event::Key { key: Key::ENTER, pressed: false, repeat: false, mods: Mods::default() })
+        );
+        let key = |scancode, keymod| Sdl::KeyDown {
+            timestamp: 0,
+            window_id: 1,
+            keycode: None,
+            scancode: Some(scancode),
+            keymod,
+            repeat: false,
+        };
+        assert!(super::is_paste(&key(Scancode::V, Mod::LCTRLMOD)));
+        assert!(super::is_paste(&key(Scancode::Insert, Mod::RSHIFTMOD)));
+        assert!(!super::is_paste(&key(Scancode::V, Mod::NOMOD)));
+        assert!(!super::is_paste(&key(Scancode::V, Mod::LCTRLMOD | Mod::LALTMOD)));
+        assert!(!super::is_paste(&key(Scancode::Insert, Mod::LSHIFTMOD | Mod::LCTRLMOD)));
+        assert!(!super::is_paste(&up));
         assert_eq!(
             ev(Sdl::KeyDown {
                 timestamp: 0,

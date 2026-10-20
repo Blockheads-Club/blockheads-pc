@@ -28,7 +28,8 @@ pub fn host_key_from_hid(hid: u32) -> HostKey {
         n @ 4..=29 => HostKey::Char((b'a' + (n - 4) as u8) as char),
         n @ 30..=38 => HostKey::Char((b'1' + (n - 30) as u8) as char),
         39 => HostKey::Char('0'),
-        40 => HostKey::Enter,
+        // Return and the keypad's Enter.
+        40 | 88 => HostKey::Enter,
         41 => HostKey::Escape,
         42 => HostKey::Backspace,
         43 => HostKey::Tab,

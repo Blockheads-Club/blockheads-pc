@@ -420,6 +420,78 @@ fn rejected_edits_leave_the_model_alone() {
     assert_eq!(r.events.len(), 1);
 }
 
+/// A guest field like the game's name fields: it upper-cases and filters each edit, sets the result itself and
+/// answers NO; it takes only letters, digits and spaces.
+struct GameField {
+    text: String,
+    calls: Vec<GuestEvent>,
+}
+
+impl EventSink for GameField {
+    fn deliver(&mut self, ev: &GuestEvent) -> bool {
+        self.calls.push(ev.clone());
+        if let GuestEvent::TextShouldChange { location, length, replacement, .. } = ev {
+            if replacement.chars().any(|c| !c.is_alphanumeric() && c != ' ') {
+                return false;
+            }
+            let mut m = TextModel::new(&self.text);
+            m.replace(*location as usize, *length as usize, &replacement.to_uppercase());
+            self.text = m.text();
+        }
+        false
+    }
+    fn host_action(&mut self, _: HostAction) {}
+    fn field_text(&mut self) -> Option<String> {
+        Some(self.text.clone())
+    }
+}
+
+#[test]
+fn the_host_copy_follows_a_field_that_sets_its_own_text() {
+    let mut m = InputMapper::new(cfg());
+    let mut g = GameField { text: "MY WORLD".into(), calls: Vec::new() };
+    m.set_text_focus(Some((3, "MY WORLD")), &mut g);
+    // Typed and pasted text arrive one character at a time; refused ones and line breaks change nothing.
+    m.handle(HostEvent::TextInput(" ab-ç\nğ".into()), 0, &mut g);
+    assert_eq!(m.text().as_deref(), Some("MY WORLD ABÇĞ"));
+    assert_eq!(m.text_caret(), Some(13));
+    assert_eq!(g.calls.len(), 6, "one question per character, none for the line break");
+    // The caret stays where the host put it, so Backspace removes the last character and Left/typing edit inside.
+    m.handle(key(HostKey::Backspace, true), 0, &mut g);
+    assert_eq!(g.text, "MY WORLD ABÇ");
+    m.handle(key(HostKey::Left, true), 0, &mut g);
+    m.handle(HostEvent::TextInput("ı".into()), 0, &mut g);
+    assert_eq!(g.text, "MY WORLD ABIÇ");
+    assert_eq!(m.text().as_deref(), Some("MY WORLD ABIÇ"));
+    assert_eq!(m.text_caret(), Some(12));
+    m.set_text_focus(None, &mut g);
+    assert_eq!(m.text_caret(), None);
+    m.handle(HostEvent::TextInput("x".into()), 0, &mut g);
+    assert_eq!(g.text, "MY WORLD ABIÇ", "no field, no edit");
+}
+
+#[test]
+fn keypad_enter_is_enter() {
+    assert_eq!(keymap::host_key_from_hid(88), HostKey::Enter);
+    assert_eq!(keymap::host_key_from_hid(40), HostKey::Enter);
+}
+
+#[test]
+fn text_model_takes_over_the_guest_text() {
+    let mut t = TextModel::new("abc");
+    t.left();
+    t.sync("abc");
+    assert_eq!(t.caret(), 2, "the same text changes nothing");
+    t.sync("aXbc");
+    assert_eq!((t.text().as_str(), t.caret()), ("aXbc", 3));
+    t.sync("");
+    assert_eq!(t.caret(), 0, "clamped at the start");
+    t.sync("x");
+    t.home();
+    t.sync("a\u{1F600}");
+    assert_eq!(t.caret(), 3, "never between the halves of a pair");
+}
+
 #[test]
 fn text_model_handles_surrogate_pairs() {
     let mut t = TextModel::new("a\u{1F600}b");

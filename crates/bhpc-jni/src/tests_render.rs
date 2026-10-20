@@ -902,3 +902,130 @@ fn bench_popup() {
     );
     println!("[bench] welcome popup: first {first:.0} us, unchanged {steady:.1} us, button highlight {toggle:.0} us");
 }
+
+/// An `AlertView` with `title`, `message`, an input line holding `text` and the buttons, shown.
+fn text_alert(e: &mut Env, title: &str, message: &str, text: &str, buttons: &[&str], cancel: bool) -> (Obj, Obj) {
+    let ctx = Value::Ref(Some(e.activity()));
+    let r = e.scall(
+        &format!("{UI}/AlertView"),
+        "create",
+        "(Landroid/content/Context;I)Lcom/apportable/ui/AlertView;",
+        &[ctx, Value::Int(70)],
+    );
+    let alert = e.obj(r);
+    for (name, s) in [("setTitle", title), ("setMessage", message)] {
+        let v = e.string(s);
+        set(e, alert, name, "(Ljava/lang/String;)V", &[v]);
+    }
+    for (i, b) in buttons.iter().enumerate() {
+        let v = e.string(b);
+        set(e, alert, "addButtonWithTitle", "(Ljava/lang/String;I)V", &[v, Value::Int(i as i32 + 1)]);
+    }
+    if cancel {
+        let v = e.string("Cancel");
+        set(e, alert, "setCancelButtonTitle", "(Ljava/lang/String;)V", &[v]);
+    }
+    let field = view(e, "TextField", 71, [0.0; 4]);
+    let v = e.string(text);
+    set(e, field, "setText", "(Ljava/lang/String;)V", &[v]);
+    add(e, alert, field);
+    set(e, alert, "show", "()V", &[]);
+    (alert, field)
+}
+
+fn dialog_layout(e: &Env) -> crate::render::dialog::Layout {
+    let alert = e.vm.st().dialog.clone().unwrap().alert;
+    let font = ab_glyph::FontArc::try_from_vec(bhpc_vfs::fonts::bundled(bhpc_vfs::fonts::Style::Regular).to_vec());
+    crate::render::dialog::layout((800.0, 480.0), &alert, &font.unwrap())
+}
+
+#[test]
+fn an_alert_with_an_input_line_is_drawn_as_a_dialog() {
+    use crate::TouchPhase;
+    let mut e = Env::new();
+    assert!(!e.vm.dialog_shown());
+    assert_eq!(e.vm.take_dialog_pick(), None);
+    e.vm.set_dialog_caret(Some(1)); // nothing shown: ignored
+    assert_eq!(e.vm.render_ui(), None, "nothing to draw");
+    let (alert, field) = text_alert(&mut e, "World Name", "", "MY WORLD", &["Done"], true);
+    assert!(e.vm.dialog_shown());
+    let l = dialog_layout(&e);
+    assert_eq!(l.message, None);
+    assert_eq!(l.buttons.iter().map(|b| (b.0.as_str(), b.1)).collect::<Vec<_>>(), [("Cancel", 0), ("Done", 1)]);
+    let f = e.vm.render_ui().unwrap();
+    // A scrim over the whole window, the panel, the white field with its text, no caret yet.
+    assert_ne!(px(&f, 5, 5)[3], 0);
+    let fl = l.field.map(|v| v as u32);
+    assert_eq!(px(&f, fl[2] - 3, fl[1] + 3), [255; 4]);
+    let dark = |f: &UiFrame, x0: u32, x1: u32| {
+        (x0..x1).filter(|&x| (fl[1] + 8..fl[3] - 8).any(|y| px(f, x, y)[0] < 100)).count()
+    };
+    let text_cols = dark(&f, fl[0], fl[2]);
+    assert!(text_cols > 20, "the text is drawn");
+    e.vm.set_dialog_caret(Some(2));
+    e.vm.set_dialog_caret(Some(2)); // unchanged
+    let with_caret = e.vm.render_ui().unwrap();
+    assert!(dark(&with_caret, fl[0], fl[2]) > text_cols, "the caret is drawn");
+    // A long text scrolls so that the caret stays in view.
+    e.vm.set_text_of(field, &"W".repeat(80));
+    e.vm.set_dialog_caret(Some(80));
+    let long = e.vm.render_ui().unwrap();
+    assert!(dark(&long, fl[2] - 30, fl[2] - 6) > 0);
+    e.vm.set_text_of(field, "");
+    e.vm.set_dialog_caret(None);
+    let empty = e.vm.render_ui().unwrap();
+    assert_eq!(dark(&empty, fl[0], fl[2]), 0, "no text, no caret");
+
+    // The dialog is modal: every touch is its own; press and release on a button picks it.
+    let vm = e.vm.clone();
+    let touch = |e: &mut Env, p, x: f32, y: f32| vm.ui_touch(&mut e.cpu, p, x, y).unwrap();
+    let centre = |r: [f32; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (cx, cy) = centre(l.buttons[0].2);
+    let (dx, dy) = centre(l.buttons[1].2);
+    assert!(touch(&mut e, TouchPhase::Begin, 5.0, 5.0));
+    assert!(touch(&mut e, TouchPhase::End, 5.0, 5.0));
+    assert_eq!(e.vm.take_dialog_pick(), None, "outside the buttons");
+    assert!(touch(&mut e, TouchPhase::Begin, cx, cy));
+    let pressed = e.vm.render_ui().unwrap();
+    assert_eq!(px(&pressed, cx as u32, l.buttons[0].2[1] as u32 + 2), [0x33, 0xB5, 0xE5, 0xFF], "highlighted");
+    assert!(touch(&mut e, TouchPhase::Move, dx, dy));
+    assert!(touch(&mut e, TouchPhase::End, dx, dy));
+    assert_eq!(e.vm.take_dialog_pick(), None, "released on another button");
+    assert!(touch(&mut e, TouchPhase::Begin, dx, dy));
+    assert!(touch(&mut e, TouchPhase::Cancel, dx, dy));
+    assert!(touch(&mut e, TouchPhase::End, dx, dy));
+    assert_eq!(e.vm.take_dialog_pick(), None, "cancelled");
+    assert!(touch(&mut e, TouchPhase::Begin, dx, dy));
+    assert!(touch(&mut e, TouchPhase::End, dx, dy));
+    assert_eq!(e.vm.take_dialog_pick(), Some(1));
+    assert_eq!(e.vm.take_dialog_pick(), None, "taken once");
+
+    // Answering another alert leaves it; answering this one closes it.
+    e.vm.close_dialog(field);
+    assert!(e.vm.dialog_shown());
+    let shown = e.vm.take_alerts();
+    assert_eq!(shown[0].view, alert);
+    e.vm.alert_click(&mut e.cpu, &shown[0], 1).unwrap();
+    assert!(!e.vm.dialog_shown());
+    assert!(!touch(&mut e, TouchPhase::Begin, dx, dy), "touches reach the game again");
+    assert_eq!(e.vm.render_ui(), None);
+}
+
+#[test]
+fn the_dialog_lays_out_messages_and_any_number_of_buttons() {
+    let mut e = Env::new();
+    text_alert(&mut e, "", "Give your blockhead a name. It can be changed later.", "", &[], false);
+    let l = dialog_layout(&e);
+    let m = l.message.unwrap();
+    assert!(m[1] > l.title[3] && l.field[1] > m[3], "title, message, field from the top");
+    assert!(l.buttons.is_empty());
+    assert!(e.vm.render_ui().is_some());
+    // A big window scales the dialog up; a narrow one keeps a margin.
+    let alert = e.vm.st().dialog.clone().unwrap().alert;
+    let font =
+        ab_glyph::FontArc::try_from_vec(bhpc_vfs::fonts::bundled(bhpc_vfs::fonts::Style::Regular).to_vec()).unwrap();
+    let big = crate::render::dialog::layout((3072.0, 1536.0), &alert, &font);
+    assert_eq!(big.scale, 2.0);
+    let narrow = crate::render::dialog::layout((300.0, 600.0), &alert, &font);
+    assert_eq!(narrow.panel[0], 16.0);
+}

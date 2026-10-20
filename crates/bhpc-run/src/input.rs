@@ -263,4 +263,8 @@ impl EventSink for JniSink<'_> {
     fn host_action(&mut self, action: HostAction) {
         self.actions.push(action);
     }
+
+    fn field_text(&mut self) -> Option<String> {
+        self.vm.text_focus().map(|f| self.vm.text_of(f))
+    }
 }

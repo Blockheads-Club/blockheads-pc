@@ -293,6 +293,11 @@ pub trait EventSink {
     fn deliver(&mut self, ev: &GuestEvent) -> bool;
     /// Something for the host application itself.
     fn host_action(&mut self, action: HostAction);
+    /// The current text of the focused field as the guest holds it (`None`: unknown), read after each edit so the
+    /// host's copy follows what the game did with it.
+    fn field_text(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// A sink that records everything (tests, `--dump-input`, and a null-object for headless runs).

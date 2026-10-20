@@ -36,9 +36,28 @@ fn resize_edge(x: f64, y: f64, width: f64, height: f64, border: f64) -> Option<g
     }
 }
 
+/// Ctrl+V (by the letter the layout puts on the key) or Shift+Insert: the clipboard text is typed into the game (its
+/// focused text field; without one the runner ignores text).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn is_paste(letter: Option<char>, insert: bool, ctrl: bool, shift: bool, alt: bool) -> bool {
+    !alt && ((ctrl && letter.is_some_and(|c| c.eq_ignore_ascii_case(&'v'))) || (insert && shift && !ctrl))
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::resize_edge;
+    use super::{is_paste, resize_edge};
+
+    #[test]
+    fn paste_keys() {
+        assert!(is_paste(Some('v'), false, true, false, false));
+        assert!(is_paste(Some('V'), false, true, true, false));
+        assert!(is_paste(None, true, false, true, false));
+        assert!(!is_paste(Some('v'), false, false, false, false));
+        assert!(!is_paste(Some('v'), false, true, false, true), "AltGr/Alt combinations are not paste");
+        assert!(!is_paste(Some('c'), false, true, false, false));
+        assert!(!is_paste(None, true, true, true, false));
+        assert!(!is_paste(None, true, false, false, false));
+    }
     use gtk::gdk::WindowEdge as E;
 
     #[test]
@@ -533,6 +552,17 @@ mod imp {
                 return Propagation::Stop;
             }
             send(&t, Cmd::Key { hid, pressed: true, repeat, mods: mods_of(state) });
+            let letter = ev.keyval().to_lower().to_unicode();
+            let insert = matches!(ev.keyval(), gdk::keys::constants::Insert | gdk::keys::constants::KP_Insert);
+            if !repeat && super::is_paste(letter, insert, mods.ctrl, mods.shift, mods.alt) {
+                let t = t.clone();
+                gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD).request_text(move |_, text| {
+                    if let Some(text) = text.filter(|s| !s.is_empty()) {
+                        send(&t, Cmd::Text(text.to_string()));
+                    }
+                });
+                return Propagation::Stop;
+            }
             if imc.filter_keypress(ev) {
                 return Propagation::Stop;
             }

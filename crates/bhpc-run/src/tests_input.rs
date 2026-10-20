@@ -230,11 +230,13 @@ fn controls_take_touches_and_text_goes_to_the_focused_field() {
     // Text events need a focused field.
     let change = GuestEvent::TextShouldChange { field: 0, location: 0, length: 0, replacement: "hi".into() };
     assert!(!sink.deliver(&change), "no focus");
+    assert_eq!(sink.field_text(), None);
     vm.set_text_focus(Some(field));
     let t = change.targets()[0];
     vm.define(t.class).method(t.method, t.signature, |_| Ok(Value::Int(1)));
     assert!(sink.deliver(&change));
     assert_eq!(vm.text_of(field), "hi");
+    assert_eq!(sink.field_text().as_deref(), Some("hi"), "the mapper reads the guest's text back");
     assert!(!sink.returned);
     sink.deliver(&GuestEvent::TextShouldReturn { field: 0 });
     assert!(sink.returned);

@@ -458,6 +458,7 @@ impl Vm {
         if alert.field.is_some() && self.text_focus() == alert.field {
             self.set_text_focus(None);
         }
+        self.close_dialog(alert.view);
         Ok(())
     }
 
@@ -481,6 +482,8 @@ impl Vm {
     pub fn set_text_of(&self, field: Obj, text: &str) {
         let s = self.new_string(text);
         self.set_field(field, "mText", Value::Ref(Some(s)));
+        // The input dialog draws it.
+        self.ui_changed();
     }
 
     /// Replace `len` UTF-16 units at `location` of the field's text with `with` (clamped to the text).

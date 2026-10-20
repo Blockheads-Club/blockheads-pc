@@ -1450,8 +1450,11 @@ impl UiThread {
                 v.tile = mapper.pad().tile_size();
                 v.content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
             }
-            if let Some(alert) = text_alert.take_if(|_| returned || escape) {
-                let pick = if returned { None } else { Some(alert.cancel.as_ref().map_or(0, |b| b.1)) };
+            vm.set_dialog_caret(mapper.text_caret());
+            // A click on a button of the input dialog, Return (the first button) or Escape (the cancel button).
+            let clicked = vm.take_dialog_pick();
+            if let Some(alert) = text_alert.take_if(|_| clicked.is_some() || returned || escape) {
+                let pick = clicked.or_else(|| (!returned).then(|| alert.cancel.as_ref().map_or(0, |b| b.1)));
                 eprintln!("[play] text alert answered with {:?}: {:?}", pick, alert.field.map(|f| vm.text_of(f)));
                 self.answer(c, &alert, pick);
                 let mut sink = JniSink {

@@ -19,6 +19,8 @@ use ab_glyph::{point, Font, FontArc, PxScale, ScaleFont};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub(crate) mod dialog;
+
 /// The rendered overlay: premultiplied RGBA, top row first, one pixel per window pixel.
 #[derive(Debug, PartialEq)]
 pub struct UiFrame {
@@ -179,7 +181,8 @@ impl Vm {
             return frame;
         }
         (cache.seen, cache.skipped) = (key, 0);
-        let items = self.plan_ui(&mut cache);
+        let mut items = self.plan_ui(&mut cache);
+        items.extend(self.dialog_items());
         let frame = if items.is_empty() {
             None
         } else if let Some(l) = cache.last.as_ref().filter(|l| l.items == items && l.size == size) {
@@ -381,7 +384,9 @@ fn premultiply(argb: u32, alpha: f32) -> [u8; 4] {
 fn pixel_bounds(rect: Rect, clip: Rect, w: u32, h: u32) -> (i32, i32, i32, i32) {
     let r = intersect(rect, clip);
     let c = |v: f32, max: u32| (v.round().clamp(0.0, max as f32)) as i32;
-    (c(r[0], w), c(r[1], h), c(r[2], w), c(r[3], h))
+    let (x0, y0) = (c(r[0], w), c(r[1], h));
+    // An empty intersection is an empty area, not an inverted one.
+    (x0, y0, c(r[2], w).max(x0), c(r[3], h).max(y0))
 }
 
 impl Canvas {

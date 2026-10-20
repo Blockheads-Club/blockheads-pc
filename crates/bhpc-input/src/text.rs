@@ -51,6 +51,22 @@ impl TextModel {
         self.units.splice(start..end, new);
     }
 
+    /// Take over the field's text when the game changed it itself (it upper-cases and filters what is typed, sets
+    /// the result and answers NO). The caret moves by the change in length, so it stays behind what was typed.
+    pub fn sync(&mut self, text: &str) {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        if units == self.units {
+            return;
+        }
+        let grown = units.len() as isize - self.units.len() as isize;
+        let mut caret = (self.caret as isize + grown).clamp(0, units.len() as isize) as usize;
+        // Never between the halves of a surrogate pair.
+        if caret > 0 && caret < units.len() && is_low(units[caret]) && is_high(units[caret - 1]) {
+            caret += 1;
+        }
+        (self.units, self.caret) = (units, caret);
+    }
+
     pub fn left(&mut self) {
         if let Some((loc, _)) = self.back_range() {
             self.caret = loc;

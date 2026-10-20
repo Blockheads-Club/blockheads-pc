@@ -197,6 +197,8 @@ pub(crate) struct State {
     pub ui: crate::ui::UiState,
     /// Fonts and the last frame of the view renderer.
     pub render: crate::render::RenderCache,
+    /// The shown input dialog of an alert with a text field (see `render::dialog`).
+    pub dialog: Option<crate::render::dialog::Dialog>,
 }
 
 /// Resolver for exported native symbols: name -> guest address.

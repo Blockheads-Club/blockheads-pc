@@ -350,6 +350,7 @@ fn install_widgets(vm: &Vm) {
                     c.vm.log(&format!("alert shown: {} / {} buttons", a.title, a.buttons.len()));
                     if let Some(f) = a.field {
                         c.vm.set_text_focus(Some(f));
+                        c.vm.open_dialog(a.clone());
                     }
                     c.vm.st().shown_alerts.push(a);
                     void()

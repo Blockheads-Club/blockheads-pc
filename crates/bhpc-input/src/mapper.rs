@@ -189,6 +189,11 @@ impl InputMapper {
         self.text.as_ref().map(|t| t.model.text())
     }
 
+    /// Where the caret of the focused text field is (UTF-16 units), if one has focus.
+    pub fn text_caret(&self) -> Option<usize> {
+        self.text.as_ref().map(|t| t.model.caret())
+    }
+
     /// A guest text field gained (`Some((handle, current text))`) or lost (`None`) focus. Emits the
     /// matching start/stop-text-input host action when the focus state changes.
     pub fn set_text_focus(&mut self, focus: Option<(i32, &str)>, sink: &mut dyn EventSink) {
@@ -491,10 +496,13 @@ impl InputMapper {
         }
     }
 
+    /// Typed or pasted text goes in one character at a time, as from a keyboard: the game filters each one (it
+    /// refuses a whole string for one character it does not take). Line breaks and other controls are dropped.
     fn insert_text(&mut self, s: &str, sink: &mut dyn EventSink) {
-        if let Some(tf) = &self.text {
+        for c in s.chars().filter(|c| !c.is_control()) {
+            let Some(tf) = &self.text else { return };
             let at = tf.model.caret();
-            self.change(at, 0, s, sink);
+            self.change(at, 0, c.encode_utf8(&mut [0; 4]), sink);
         }
     }
 
@@ -510,6 +518,9 @@ impl InputMapper {
         if sink.deliver(&ev) {
             tf.model.replace(loc, len, with);
             sink.deliver(&GuestEvent::TextDidChange { field: tf.field });
+        }
+        if let Some(now) = sink.field_text() {
+            tf.model.sync(&now);
         }
     }
 }
