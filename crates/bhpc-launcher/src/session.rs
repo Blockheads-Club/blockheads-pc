@@ -11,8 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-/// How long a game that prints no progress lines (an older runner) counts as "starting".
-pub const LAUNCH_GRACE: Duration = Duration::from_millis(2500);
+/// How long a game that has printed no progress line yet counts as "starting" (as long as a start may go without
+/// one, [`progress::STALL`]). The runner prints its first line only once its video, audio and controllers are set up,
+/// which took 3.3 s on the dev machine: a shorter grace called the game running before that, so the loading screen
+/// gave way to the empty black stage until the first line came.
+pub const LAUNCH_GRACE: Duration = progress::STALL;
 /// Log lines kept in memory.
 pub const MAX_LINES: usize = 5000;
 
