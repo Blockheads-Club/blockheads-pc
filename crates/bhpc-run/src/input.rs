@@ -109,6 +109,44 @@ pub fn runs_on_main(ev: &GuestEvent) -> bool {
     !matches!(ev, GuestEvent::WindowFocus(_) | GuestEvent::SurfaceChanged { .. } | GuestEvent::Lifecycle(_))
 }
 
+/// Run `f` on the guest main thread through `main` (and wait for its result), or on the calling thread without a queue.
+pub fn on_main<R: Send + 'static>(
+    main: Option<&Arc<MainQueue>>,
+    cpu: &mut Cpu,
+    f: impl FnOnce(&mut Cpu) -> R + Send + 'static,
+) -> R {
+    match main {
+        Some(q) => q.call(cpu, f),
+        None => f(cpu),
+    }
+}
+
+/// Offer `touch` (screen pixels) to the Java controls (`Vm::ui_touch`) and, unless one takes it, call the natives of
+/// `ev`. The result is whether a control took the touch, the natives' answer (see `deliver_natives`) and the errors.
+///
+/// Runs where the natives run (the main thread): a control's `Control.event` sends the game's UIKit actions
+/// (`buttonClicked:`, `pauseResumeButtonTapped`, ...), which UIKit code expects on the main thread; on the UI thread
+/// they ran in the middle of the main thread's frame once guest threads ran in parallel.
+fn deliver_with_controls(
+    vm: &Vm,
+    cpu: &mut Cpu,
+    touch: Option<(TouchPhase, f32, f32)>,
+    ev: &GuestEvent,
+    focus: Option<Obj>,
+) -> (bool, bool, Vec<String>) {
+    let mut errors = Vec::new();
+    if let Some((phase, x, y)) = touch {
+        match vm.ui_touch(cpu, phase, x, y) {
+            Ok(true) => return (true, true, errors),
+            Ok(false) => {}
+            Err(e) => errors.push(format!("ui touch: {e:?}")),
+        }
+    }
+    let (result, more) = deliver_natives(vm, cpu, ev, focus);
+    errors.extend(more);
+    (false, result, errors)
+}
+
 /// Call the natives of `ev`; the result is the boolean answer (true unless a native answered 0) and the errors.
 fn deliver_natives(vm: &Vm, cpu: &mut Cpu, ev: &GuestEvent, focus: Option<Obj>) -> (bool, Vec<String>) {
     let (mut result, mut errors) = (true, Vec::new());
@@ -189,15 +227,11 @@ impl EventSink for JniSink<'_> {
         if let Some(g) = &self.game {
             g.track_walk(ev);
         }
-        if let Some((phase, x, y)) = control_touch(ev) {
-            // The touch is in content pixels, the Java views are laid out in screen pixels.
+        // The touch is in content pixels, the Java views are laid out in screen pixels.
+        let touch = control_touch(ev).map(|(phase, x, y)| {
             let (x, y) = content_to_screen(self.vm.content_scale(), x, y);
-            match self.vm.ui_touch(self.cpu, phase, x, y) {
-                Ok(true) => return true,
-                Ok(false) => {}
-                Err(e) => self.errors.push(format!("ui touch: {e:?}")),
-            }
-        }
+            (phase, x, y)
+        });
         // The game's own views take screen pixels, landscape like the window (the Java views, hit-tested by
         // `ui_touch`, are the ones laid out in a portrait space), so only the content-to-screen scale applies.
         let mapped = ev.map_points(&|x, y| content_to_screen(self.vm.content_scale(), x, y));
@@ -207,14 +241,14 @@ impl EventSink for JniSink<'_> {
         if text_target && focus.is_none() {
             return false;
         }
-        let (result, errors) = match &self.main {
-            Some(q) if runs_on_main(ev) => {
-                let (vm, ev) = (self.vm.clone(), ev.clone());
-                q.call(self.cpu, move |c| deliver_natives(&vm, c, &ev, focus))
-            }
-            _ => deliver_natives(self.vm, self.cpu, ev, focus),
-        };
+        let main = self.main.as_ref().filter(|_| runs_on_main(ev));
+        let (vm, owned) = (self.vm.clone(), ev.clone());
+        let (consumed, result, errors) =
+            on_main(main, self.cpu, move |c| deliver_with_controls(&vm, c, touch, &owned, focus));
         self.errors.extend(errors);
+        if consumed {
+            return true;
+        }
         if let (GuestEvent::TextShouldChange { location, length, replacement, .. }, true, Some(field)) =
             (ev, result, focus)
         {

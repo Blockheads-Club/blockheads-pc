@@ -303,3 +303,72 @@ fn touch_key_and_text_natives_run_on_the_main_thread_queue() {
     sink.deliver(&GuestEvent::TouchBegin { id: 2, x: 0.0, y: 0.0, time_ms: 2 });
     assert!(!game.suppress(true));
 }
+
+#[test]
+fn control_events_run_on_the_main_thread_queue() {
+    // A button's `Control.event` sends the game's UIKit actions (the tutorial popup's OK unpauses the world): with
+    // parallel guest threads they must not run on the UI thread in the middle of the main thread's frame.
+    use crate::mainq::MainQueue;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    let (mut cpu, jni) = rig();
+    let vm = jni.vm.clone();
+    let ctx = Value::Ref(Some(vm.activity()));
+    let rect = vm
+        .new_object(
+            &mut cpu,
+            "android/graphics/RectF",
+            "(FFFF)V",
+            &[Value::Float(0.0), Value::Float(0.0), Value::Float(5000.0), Value::Float(5000.0)],
+        )
+        .unwrap();
+    let make = |cpu: &mut bhpc_cpu::Cpu, kind: &str| {
+        let class = format!("com/apportable/ui/{kind}");
+        let sig = format!("(Landroid/content/Context;ILandroid/graphics/RectF;)L{class};");
+        vm.call_static(cpu, &class, "create", &sig, &[ctx, Value::Int(1), Value::Ref(Some(rect))])
+            .unwrap()
+            .as_ref()
+            .unwrap()
+    };
+    let window = make(&mut cpu, "Window");
+    let button = make(&mut cpu, "Button");
+    vm.call_method(&mut cpu, window, "addSubview", "(Lcom/apportable/ui/View;)V", &[Value::Ref(Some(button))]).unwrap();
+    // The queue's "main thread" drains while the poster waits; the button records where its events ran.
+    static DRAINING: AtomicBool = AtomicBool::new(false);
+    static RAN: Mutex<Vec<bool>> = Mutex::new(Vec::new());
+    vm.define("com/apportable/ui/Button").method("event", "(II)V", |_| {
+        RAN.lock().unwrap().push(DRAINING.load(Ordering::SeqCst));
+        Ok(Value::Void)
+    });
+    let cell: Arc<OnceLock<Arc<MainQueue>>> = Arc::new(OnceLock::new());
+    let c2 = cell.clone();
+    let q = MainQueue::new(
+        move |c| {
+            DRAINING.store(true, Ordering::SeqCst);
+            c2.get().unwrap().drain(c);
+            DRAINING.store(false, Ordering::SeqCst);
+        },
+        5,
+    );
+    cell.set(q.clone()).ok();
+    let mut sink = JniSink {
+        vm: &vm,
+        cpu: &mut cpu,
+        actions: Vec::new(),
+        errors: Vec::new(),
+        returned: false,
+        main: Some(q),
+        game: None,
+    };
+    assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
+    assert!(sink.deliver(&GuestEvent::TouchEnd { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
+    assert!(sink.errors.is_empty(), "{:?}", sink.errors);
+    assert_eq!(*RAN.lock().unwrap(), [true, true], "down and up-inside both ran on the main thread");
+    // A main thread that never drains (no frames, no kick): the poster runs the event itself in the end.
+    sink.main = Some(MainQueue::new(|_| {}, 1));
+    assert!(sink.deliver(&GuestEvent::TouchBegin { id: 0, x: 10.0, y: 10.0, time_ms: 0 }));
+    assert_eq!(*RAN.lock().unwrap(), [true, true, false]);
+    // The stale queue entry is a no-op once the poster ran the event itself.
+    sink.main.as_ref().unwrap().drain(sink.cpu);
+    assert_eq!(RAN.lock().unwrap().len(), 3);
+}
