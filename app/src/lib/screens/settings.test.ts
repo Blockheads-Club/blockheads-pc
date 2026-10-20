@@ -374,6 +374,26 @@ describe('Settings > controls', () => {
     expect(searchSettings('gizle')[0].id).toBe('set-ctl-hide_ui');
   });
 
+  it('switches the game’s D-pad and buttons, with PC defaults for older configurations', async () => {
+    const old = makeConfig();
+    delete (old as Partial<typeof old>).show_dpad;
+    delete (old as Partial<typeof old>).show_game_buttons;
+    store.config = old;
+    render(SettingsControls);
+    const dpad = screen.getByRole('switch', { name: 'Show the game’s on-screen D-pad' });
+    const buttons = screen.getByRole('switch', { name: 'Show the game’s buttons' });
+    expect(dpad).not.toBeChecked();
+    expect(buttons).toBeChecked();
+    expect(screen.getByText(/H shows or hides them while you play/)).toBeVisible();
+    await fireEvent.click(dpad);
+    await waitFor(() => expect(store.config?.show_dpad).toBe(true));
+    await fireEvent.click(buttons);
+    await waitFor(() => expect(store.config?.show_game_buttons).toBe(false));
+    expect(searchSettings('d-pad')[0].id).toBe('set-ctl-dpad');
+    expect(searchSettings('yön tuşları')[0].id).toBe('set-ctl-dpad');
+    expect(searchSettings('start hidden')[0].id).toBe('set-ctl-game-buttons');
+  });
+
   it('assumes a controller for configurations from before the setting', () => {
     const old = makeConfig();
     delete (old as Partial<typeof old>).controller;

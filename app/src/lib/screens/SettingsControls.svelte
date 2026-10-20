@@ -4,6 +4,7 @@
   import { conflicts } from '../util';
   import ControlsEditor from '../parts/ControlsEditor.svelte';
   import GamepadPanel from '../parts/GamepadPanel.svelte';
+  import OnScreenPanel from '../parts/OnScreenPanel.svelte';
   import Alert from '../ui/Alert.svelte';
   import Button from '../ui/Button.svelte';
   import Dialog from '../ui/Dialog.svelte';
@@ -29,6 +30,7 @@
   </Alert>
 {/if}
 <ControlsEditor marks />
+<OnScreenPanel />
 <GamepadPanel />
 
 {#if confirm}

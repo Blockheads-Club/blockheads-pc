@@ -474,6 +474,17 @@ describe('Ready step', () => {
     expect(screen.getByText('Default mouse and keys')).toBeVisible();
   });
 
+  it('names the on-screen control settings only when they are not the default', () => {
+    store.apk = makeReport();
+    store.draft = makeConfig();
+    render(SetupReady);
+    expect(screen.queryByText(/Game’s D-pad shown|Game’s buttons start hidden/)).toBeNull();
+    cleanup();
+    store.draft = makeConfig({ show_dpad: true, show_game_buttons: false });
+    render(SetupReady);
+    expect(screen.getByText('Game’s D-pad shown · Game’s buttons start hidden')).toBeVisible();
+  });
+
   it('rail: finished steps are buttons, the rest are not', async () => {
     store.step = 4;
     render(SetupControls);

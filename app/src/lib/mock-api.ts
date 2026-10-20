@@ -11,6 +11,8 @@ export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
     window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true },
     keys: { ...KEYS },
     controller: true,
+    show_dpad: false,
+    show_game_buttons: true,
     ...over
   };
 }

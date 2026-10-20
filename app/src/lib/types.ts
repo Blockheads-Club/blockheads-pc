@@ -43,6 +43,10 @@ export interface LaunchConfig {
   keys: KeyBindings;
   /** Game controllers drive the game. */
   controller: boolean;
+  /** The game's own on-screen D-pad shows in a world (off on PC). Missing in configurations from before it. */
+  show_dpad?: boolean;
+  /** The game's buttons show when a world starts. Missing in configurations from before it. */
+  show_game_buttons?: boolean;
 }
 
 export interface Prefs {

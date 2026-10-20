@@ -19,6 +19,12 @@
       : []
   );
   const dups = $derived(d ? conflicts(d.keys) : []);
+  /** The on-screen control settings that are not the default. */
+  const onScreen = $derived(
+    d
+      ? [...(d.show_dpad ? [t('ready.dpadShown')] : []), ...(d.show_game_buttons === false ? [t('ready.buttonsHidden')] : [])].join(' · ')
+      : ''
+  );
   const gfx = $derived(
     d
       ? [
@@ -73,6 +79,7 @@
               {changed.length ? t('ready.keysChanged', { n: changed.length }) : t('ready.keysDefault')}
               {#if changed.length}({changed.map((k) => `${t(`act.${k}` as 'act.touch')} → ${d?.keys[k]}`).join(', ')}){/if}
             </p>
+            {#if onScreen}<p class="hint">{onScreen}</p>{/if}
             {#if dups.length}<p class="hint bad">{t('ready.keysConflict')}</p>{/if}
           {:else}
             <p class="v">{imported ? t('ready.imported', { n: imported }) : t('ready.noImport')}</p>
