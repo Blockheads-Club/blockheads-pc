@@ -242,7 +242,7 @@ pub struct Target {
 const WINDOW: &str = "com/apportable/ui/Window";
 const TEXT_FIELD: &str = "com/apportable/ui/TextField";
 const LIFECYCLE: &str = "com/apportable/Lifecycle";
-const GL_VIEW: &str = "com/apportable/opengl/GLSurfaceView";
+const GL_VIEW: &str = "com/apportable/gl/GLSurfaceView";
 const ACTIVITY: &str = "com/apportable/activity/VerdeActivity";
 
 const fn t(class: &'static str, method: &'static str, signature: &'static str) -> Target {

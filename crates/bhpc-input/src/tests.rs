@@ -559,6 +559,8 @@ fn guest_events_know_their_java_targets() {
     }
     let s = GuestEvent::SurfaceChanged { width: 1, height: 2 }.targets();
     assert_eq!(s.len(), 2);
+    // The class the game registers its GL view natives on (`bhpc-jni` startup): `opengl` was a stub nobody bound.
+    assert_eq!((s[0].class, s[0].method), ("com/apportable/gl/GLSurfaceView", "nativeOnSurfaceChanged"));
     assert_eq!(s[1].method, "nativeRootGeometryChanged");
 }
 
