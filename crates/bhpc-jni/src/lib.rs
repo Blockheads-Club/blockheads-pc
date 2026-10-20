@@ -25,7 +25,7 @@ pub use build::ClassBuilder;
 pub use host::{install, Jni, JniError, Usage};
 pub use invoke::Recv;
 pub use jni::{Layout, JNI_VERSION, TABLE_SLOTS};
-pub use platform::{Assets, AudioHooks, GfxHooks, MemAssets, NoAssets, NoAudio, NoGfx, Platform, TrackOp};
+pub use platform::{Assets, AudioHooks, GfxHooks, MemAssets, MusicOp, NoAssets, NoAudio, NoGfx, Platform, TrackOp};
 pub use render::UiFrame;
 pub use startup::{native_env, Stage};
 pub use ui::{Hit, TouchPhase};
@@ -52,6 +52,8 @@ mod tests_jni;
 mod tests_lib;
 #[cfg(test)]
 mod tests_looper;
+#[cfg(test)]
+mod tests_music;
 #[cfg(test)]
 mod tests_render;
 #[cfg(test)]

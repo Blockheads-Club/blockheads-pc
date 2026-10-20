@@ -108,6 +108,36 @@ pub trait AudioHooks: Send + Sync {
     fn write(&self, cpu: &mut bhpc_cpu::Cpu, id: u32, data: &[u8]) -> i32;
     /// `getPlaybackHeadPosition`.
     fn head_position(&self, id: u32) -> i32;
+    /// `com.apportable.media.AudioPlayer.initAudio(path)` (the `MediaPlayer` behind `AVAudioPlayer`, which plays the
+    /// game's music). `asset` is the file when `path` is relative and names an APK asset (`GameResources/x.mp4`, as
+    /// the game passes it); otherwise the host reads the guest path. The player id (never 0), or `None` if it
+    /// cannot be opened.
+    fn music_open(&self, _path: &str, _asset: Option<Vec<u8>>) -> Option<u32> {
+        None
+    }
+    /// One command or query on a music player: 0 (or the queried value) on success, negative on failure.
+    fn music(&self, _id: u32, _op: MusicOp) -> i32 {
+        -1
+    }
+    /// `AudioPlayer.lifecycleSuspend` (`true`) / `lifecycleResume` (`false`): pause every playing player, and
+    /// start again the ones that were paused that way.
+    fn music_suspend(&self, _suspend: bool) {}
+}
+
+/// What `com.apportable.media.AudioPlayer` asks of one music player (milliseconds for positions).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MusicOp {
+    Prepare,
+    Start,
+    Pause,
+    Release,
+    SeekTo(i32),
+    /// `setNumberOfLoops`: Apportable loops forever for -1 only.
+    Loops(i32),
+    Volume(f32, f32),
+    Duration,
+    Position,
+    IsPlaying,
 }
 
 /// Transport and volume commands of an `AudioTrack`.

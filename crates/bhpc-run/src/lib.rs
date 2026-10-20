@@ -13,6 +13,7 @@ pub mod input;
 pub mod mainq;
 pub mod mktimer;
 pub mod mmapio;
+pub mod music;
 pub mod overlay;
 pub mod pace;
 #[cfg(feature = "play")]
@@ -234,6 +235,8 @@ mod tests_input;
 mod tests_mktimer;
 #[cfg(test)]
 mod tests_mmapio;
+#[cfg(test)]
+mod tests_music;
 #[cfg(all(test, unix))]
 mod tests_net;
 #[cfg(test)]

@@ -1,9 +1,11 @@
-//! `android.media.AudioTrack` over the audio mixer: the table of live tracks behind [`bhpc_jni::AudioHooks`].
+//! `android.media.AudioTrack` over the audio mixer: the table of live tracks behind [`bhpc_jni::AudioHooks`], which
+//! also serves the music players ([`Music`]).
 
+use crate::music::Music;
 use bhpc_audio::{track, AudioTrack, Mixer};
-use bhpc_bionic::{sched, Shared};
+use bhpc_bionic::{lock, sched, Shared};
 use bhpc_cpu::Cpu;
-use bhpc_jni::{AudioHooks, TrackOp};
+use bhpc_jni::{AudioHooks, MusicOp, TrackOp};
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -19,11 +21,14 @@ pub struct Tracks {
     st: Shared,
     stall: Duration,
     inner: Mutex<(u32, HashMap<u32, AudioTrack>)>,
+    music: Music,
 }
 
 impl Tracks {
     pub fn new(mixer: Mixer, st: Shared) -> Tracks {
-        Tracks { mixer, st, stall: STALL, inner: Mutex::new((0, HashMap::new())) }
+        // Music files are read through the guest's file system, like every other path the game names.
+        let music = Music::new(mixer.clone(), lock(&st).vfs.fs().clone());
+        Tracks { mixer, st, stall: STALL, inner: Mutex::new((0, HashMap::new())), music }
     }
 
     /// Change how long a full track is retried before `write` gives up.
@@ -86,5 +91,17 @@ impl AudioHooks for Tracks {
 
     fn head_position(&self, id: u32) -> i32 {
         self.with(id, |t| t.playback_head_position()).and_then(Result::ok).map_or(0, |p| p as i32)
+    }
+
+    fn music_open(&self, path: &str, asset: Option<Vec<u8>>) -> Option<u32> {
+        self.music.open(path, asset)
+    }
+
+    fn music(&self, id: u32, op: MusicOp) -> i32 {
+        self.music.op(id, op)
+    }
+
+    fn music_suspend(&self, suspend: bool) {
+        self.music.suspend(suspend)
     }
 }

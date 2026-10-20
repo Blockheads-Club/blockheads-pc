@@ -522,6 +522,7 @@ fn install_misc(vm: &Vm) {
         .field("versionName", "Ljava/lang/String;")
         .field("versionCode", "I");
     install_audio_track(vm);
+    install_audio_player(vm);
     vm.define("android/media/AudioManager")
         .static_field("STREAM_MUSIC", "I", Value::Int(3))
         .method("getStreamVolume", "(I)I", |_| int(8))
@@ -565,6 +566,71 @@ fn log(c: &mut Call, level: char) -> JResult {
     let (tag, msg) = (c.string(0).unwrap_or_default(), c.string(1).unwrap_or_default());
     c.vm.log(&format!("{level}/{tag}: {msg}"));
     int(0)
+}
+
+/// `com.apportable.media.AudioPlayer`, Apportable's `AVAudioPlayer` back end (one Android `MediaPlayer` per id): the
+/// game's music. The player id is always the last argument; the host side is [`crate::AudioHooks::music`].
+fn install_audio_player(vm: &Vm) {
+    use crate::platform::MusicOp;
+    fn run(c: &mut Call, id: i32, op: MusicOp) -> i32 {
+        if id <= 0 {
+            return -1;
+        }
+        c.vm.0.audio.music(id as u32, op)
+    }
+    fn cmd(op: MusicOp) -> impl Fn(&mut Call) -> JResult + Send + Sync + 'static {
+        move |c| {
+            let id = c.int(0);
+            run(c, id, op);
+            void()
+        }
+    }
+    fn query(op: MusicOp) -> impl Fn(&mut Call) -> JResult + Send + Sync + 'static {
+        move |c| {
+            let id = c.int(0);
+            int(run(c, id, op))
+        }
+    }
+    vm.define("com/apportable/media/AudioPlayer")
+        .method("<init>", "(Landroid/content/Context;)V", |_| void())
+        .method("initAudio", "(Ljava/lang/String;)I", |c| {
+            let path = c.string(0).unwrap_or_default();
+            // Like `AssetManager.openFd`, a relative path is an asset of the APK.
+            let asset = if path.starts_with('/') { None } else { c.vm.assets().read(&path) };
+            let id = c.vm.0.audio.music_open(&path, asset);
+            c.vm.log(&format!("AudioPlayer.initAudio({path:?}) -> {id:?}"));
+            int(id.map_or(-1, |id| id as i32))
+        })
+        .method("prepareAudio", "(I)V", cmd(MusicOp::Prepare))
+        .method("startAudio", "(I)V", cmd(MusicOp::Start))
+        .method("pauseAudio", "(I)V", cmd(MusicOp::Pause))
+        .method("releaseAudio", "(I)V", cmd(MusicOp::Release))
+        .method("getDuration", "(I)I", query(MusicOp::Duration))
+        .method("getCurrentPosition", "(I)I", query(MusicOp::Position))
+        .method("isAudioPlaying", "(I)I", query(MusicOp::IsPlaying))
+        .method("seekTo", "(II)V", |c| {
+            let (ms, id) = (c.int(0), c.int(1));
+            run(c, id, MusicOp::SeekTo(ms));
+            void()
+        })
+        .method("setNumberOfLoops", "(II)V", |c| {
+            let (loops, id) = (c.int(0), c.int(1));
+            run(c, id, MusicOp::Loops(loops));
+            void()
+        })
+        .method("setVolume", "(FFI)V", |c| {
+            let (l, r, id) = (c.float(0), c.float(1), c.int(2));
+            run(c, id, MusicOp::Volume(l, r));
+            void()
+        })
+        .static_method("lifecycleSuspend", "()V", |c| {
+            c.vm.0.audio.music_suspend(true);
+            void()
+        })
+        .static_method("lifecycleResume", "()V", |c| {
+            c.vm.0.audio.music_suspend(false);
+            void()
+        });
 }
 
 /// `android.media.AudioTrack` (stream mode) over [`crate::AudioHooks`].
