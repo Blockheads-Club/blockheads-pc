@@ -1,6 +1,7 @@
 //! M0 runner: load one ARM32 shared object, bind its imports to host thunks, run an entry point.
 
 pub mod apkrun;
+pub mod aspect;
 pub mod bench;
 pub mod dl;
 pub mod embed;
@@ -217,6 +218,8 @@ pub fn run_shared_object(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_aspect;
 #[cfg(test)]
 mod tests_dl;
 #[cfg(test)]

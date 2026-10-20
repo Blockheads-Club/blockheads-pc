@@ -601,6 +601,14 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
     // What the window system really gave us is what the game sees (a compositor may ignore the requested size).
     let mut cfg = cfg.clone();
     (cfg.window, cfg.drawable) = (m0.logical, m0.drawable);
+    // The game takes its UI scale from the first screen size: starting fullscreen, that is the desktop's size (the
+    // window only becomes fullscreen once the event loop runs).
+    if cfg.fullscreen && cfg.embed.is_none() {
+        if let Some(d) = backend.desktop_size() {
+            (cfg.window, cfg.drawable) = (d, crate::aspect::drawable_for(d, m0.logical, m0.drawable));
+            eprintln!("[play] starting fullscreen: the game starts with the desktop size {:?}", cfg.drawable);
+        }
+    }
     let cfg = &cfg;
     let mixer = Mixer::new(44100);
     let m = mixer.clone();
@@ -905,6 +913,10 @@ fn boot(
             eprintln!("[play] objc trace unavailable: {e}");
         }
     }
+    let screen_modes = follow_window_aspect(&mut sess)
+        .inspect(|_| eprintln!("[play] the game's screen follows the window size"))
+        .inspect_err(|e| eprintln!("[play] the game keeps its emulated iOS screen size: {e}"))
+        .ok();
     if cfg.unlock_fps {
         match unlock_fps(&mut sess) {
             Ok(n) => eprintln!("[play] 30 FPS cap unlocked ({n} refresh-rate constants patched)"),
@@ -990,6 +1002,7 @@ fn boot(
     let ui = UiThread {
         main: Some(main_q),
         game,
+        screen_modes,
         vm: vm.clone(),
         flags: flags.clone(),
         cfg: cfg.clone(),
@@ -1049,6 +1062,8 @@ struct UiThread {
     main: Option<Arc<crate::mainq::MainQueue>>,
     /// The game's on-screen controls (hide, walk, zoom, pause), when the hooks went in.
     game: Option<Arc<GameHooks>>,
+    /// Gives the game a screen mode of the new window size (see `follow_window_aspect`).
+    screen_modes: Option<ScreenModeCalls>,
     vm: Vm,
     flags: Arc<Flags>,
     cfg: PlayConfig,
@@ -1419,6 +1434,12 @@ impl UiThread {
                     // The display of the game follows the window; `SurfaceChanged` below tells the game.
                     vm.set_screen_size(m.drawable.0 as i32, m.drawable.1 as i32);
                     eprintln!("[play] window {:?}, drawable {:?}", m.logical, m.drawable);
+                    // The game's screen takes the new size before the surface change reaches it.
+                    if let Some(calls) = self.screen_modes.clone() {
+                        if let Err(e) = crate::input::on_main(self.main.as_ref(), sink.cpu, move |c| calls.apply(c)) {
+                            eprintln!("[play] the game's screen keeps its size: {e}");
+                        }
+                    }
                 }
                 if let Event::Wheel { dx, dy } = &ev {
                     if std::env::var_os("BHPC_TRACE_ZOOM").is_some() {
@@ -1659,6 +1680,121 @@ fn hook_or_skip(
     mem.write_bytes(entry, &patch).map_err(|e| e.to_string())?;
     sess.cpu.clear_cache();
     Ok(())
+}
+
+/// How the host gives the game a new screen mode when the window changes size: `+[UIScreen mainScreen]`,
+/// `+[UIScreenMode emulatedMode:]` and `-[UIScreen setCurrentMode:]` (class, implementation, selector name).
+#[derive(Debug, Clone)]
+struct ScreenModeCalls {
+    screen_class: u32,
+    main_screen: (u32, u32),
+    mode_class: u32,
+    emulated: (u32, u32),
+    set_mode: (u32, u32),
+    /// `-[EAGLView layoutSubviews]` and the game's GL view (seen in `setFramebuffer`, 0 before): the layout drops the
+    /// framebuffer, and the next frame makes one of the new size and calls `-[GameView resize:insets:]`.
+    layout: (u32, u32),
+    view: Arc<AtomicU32>,
+}
+
+impl ScreenModeCalls {
+    /// `[[UIScreen mainScreen] setCurrentMode:[UIScreenMode emulatedMode:12]]`: a native mode for the current screen
+    /// (`aspect::content_size` at the first scale). `-[UIScreen _applyMode]` publishes it as the new content size (`setContentSize`); the game's
+    /// `EAGLView` then makes a framebuffer of that size at its next layout and `-[GameView resize:insets:]` re-lays
+    /// the game out. Runs on the guest main thread.
+    fn apply(&self, c: &mut Cpu) -> Result<(), String> {
+        c.set_ticks(FOREVER);
+        let err = |e| format!("{e:?}");
+        let screen = c.call(self.main_screen.0, &[self.screen_class, self.main_screen.1]).map_err(err)?.r0;
+        let mode =
+            c.call(self.emulated.0, &[self.mode_class, self.emulated.1, crate::aspect::MODE_NATIVE]).map_err(err)?.r0;
+        if screen == 0 || mode == 0 {
+            return Err(format!("no screen ({screen:#x}) or mode ({mode:#x})"));
+        }
+        c.call(self.set_mode.0, &[screen, self.set_mode.1, mode]).map_err(err)?;
+        let view = self.view.load(Ordering::SeqCst);
+        if view != 0 {
+            c.call(self.layout.0, &[view, self.layout.1]).map_err(err)?;
+        }
+        Ok(())
+    }
+}
+
+/// The game's screen is the window's size and aspect (see `aspect`): `emulatedMode:` gives the native mode instead
+/// of the best emulated iOS device, and the native mode's scale is [`crate::aspect::ui_scale`] of the display.
+fn follow_window_aspect(sess: &mut Session) -> Result<ScreenModeCalls, String> {
+    use crate::aspect::{called_from_native_mode, screen_mode, ui_scale};
+    use crate::fpsunlock::find_method;
+    let mem = sess.cpu.mem().clone();
+    let class = |name: &str| {
+        sess.linker
+            .modules()
+            .iter()
+            .find_map(|m| m.export(&format!("OBJC_CLASS_$_{name}")))
+            .ok_or(format!("no class {name}"))
+    };
+    let (mode, native) = (class("UIScreenMode")?, class("UINativeScreenMode")?);
+    let emulated = find_method(&mem, mode, "emulatedMode:", true).ok_or("no +[UIScreenMode emulatedMode:]")?;
+    let init = find_method(&mem, mode, "initWithScale:", false).ok_or("no -[UIScreenMode initWithScale:]")?;
+    let native_mode = find_method(&mem, native, "nativeMode:", true).ok_or("no +[UINativeScreenMode nativeMode:]")?;
+    let screen_class = class("UIScreen")?;
+    let call = |cls: u32, sel: &str, meta: bool| {
+        method_and_name(&mem, cls, sel, meta).ok_or(format!("no {}[{sel}]", if meta { '+' } else { '-' }))
+    };
+    let eagl = class("EAGLView")?;
+    let set_framebuffer = find_method(&mem, eagl, "setFramebuffer", false).ok_or("no -[EAGLView setFramebuffer]")?;
+    let view = Arc::new(AtomicU32::new(0));
+    let calls = ScreenModeCalls {
+        layout: call(eagl, "layoutSubviews", false)?,
+        view: view.clone(),
+        screen_class,
+        main_screen: call(screen_class, "mainScreen", true)?,
+        mode_class: mode,
+        emulated: call(mode, "emulatedMode:", true)?,
+        set_mode: call(screen_class, "setCurrentMode:", false)?,
+    };
+    hook_at(sess, emulated, "+[UIScreenMode emulatedMode:]", |c| {
+        let m = screen_mode(c.reg(2));
+        c.set_reg(2, m);
+    })?;
+    hook_at(sess, set_framebuffer, "-[EAGLView setFramebuffer]", move |c| view.store(c.reg(0), Ordering::SeqCst))?;
+    let native_size = find_method(&mem, native, "size", false).ok_or("no -[UINativeScreenMode size]")?;
+    let vm = sess.jni.vm.clone();
+    // The game reads its `PIXEL_SCALE` from the screen once at start and lays its views out with it: later modes
+    // keep that scale (a new scale left the HUD where the old one put it) and get a size for it.
+    let first = Arc::new(Mutex::new(None::<f32>));
+    let scale = first.clone();
+    hook_at(sess, init, "-[UIScreenMode initWithScale:]", move |c| {
+        if called_from_native_mode(c.reg(14), native_mode) {
+            let (w, h) = vm.screen_size();
+            let s = *scale.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(|| ui_scale(w, h));
+            eprintln!("[play] screen {w}x{h} pixels, {s} pixels per point");
+            c.set_reg(2, s.to_bits());
+        }
+    })?;
+    // `-[UINativeScreenMode size]` (the struct is returned through r0): the display's pixels in portrait order, for
+    // the first scale (see `aspect::content_size`).
+    let vm = sess.jni.vm.clone();
+    hook_or_skip(sess, native_size, "-[UINativeScreenMode size]", move |c| {
+        let s = (*first.lock().unwrap_or_else(PoisonError::into_inner))?;
+        let (w, h) = vm.screen_size();
+        let (cw, ch) = crate::aspect::content_size(w, h, s);
+        let out = c.reg(0);
+        let ok = c.mem().write_u32(out, cw.min(ch).to_bits()).is_ok()
+            && c.mem().write_u32(out + 4, cw.max(ch).to_bits()).is_ok();
+        ok.then_some(out)
+    })?;
+    sess.cpu.clear_cache();
+    Ok(calls)
+}
+
+/// Implementation and selector-name pointer of a method of a not yet realised class (see `fpsunlock::methods`).
+fn method_and_name(mem: &bhpc_mem::GuestMemory, class: u32, sel: &str, meta: bool) -> Option<(u32, u32)> {
+    let c = if meta { mem.read_u32(class).ok()? } else { class };
+    let list = mem.read_u32((mem.read_u32(c + 16).ok()? & !3) + 20).ok()?;
+    let i = crate::fpsunlock::methods(mem, class, meta).iter().position(|(n, _)| n == sel)? as u32;
+    let at = list + 8 + i * (mem.read_u32(list).ok()? & !3);
+    Some((mem.read_u32(at + 8).ok()?, mem.read_u32(at).ok()?))
 }
 
 /// The "Unlock 30 FPS cap" option (see `fpsunlock`): the display link's refresh rate constants and its

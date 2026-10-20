@@ -237,6 +237,12 @@ impl SdlBackend {
         Some(Event::PadAdded(id))
     }
 
+    /// Size (logical pixels) of the desktop of the window's display: what a (borderless desktop) fullscreen window gets.
+    pub fn desktop_size(&self) -> Option<(u32, u32)> {
+        let mode = self.video.desktop_display_mode(self.window.display_index().ok()?).ok()?;
+        (mode.w > 0 && mode.h > 0).then_some((mode.w as u32, mode.h as u32))
+    }
+
     /// Name of the active video driver (for logs).
     pub fn driver(&self) -> &'static str {
         self.video.current_video_driver()
