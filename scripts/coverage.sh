@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Coverage gate: 100% of lines and functions of our own Rust code (see ../AGENTS.md).
 #
 # Excluded from measurement, and nothing else:

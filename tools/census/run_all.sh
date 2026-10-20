@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # usage: run_all.sh DYNARMIC_SRC OUT_DIR APKLIBDIR...   (each APKLIBDIR holds the lib*.so of one APK)
 # Runs census.py once per unique library (by sha256); writes OUT_DIR/<sha12>.json and OUT_DIR/index.tsv
 set -euo pipefail

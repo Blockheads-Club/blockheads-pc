@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Thin C ABI wrapper around dynarmic's A32 JIT. Excluded from Rust coverage (C++ glue).
 #include "bhpc_shim.h"
 

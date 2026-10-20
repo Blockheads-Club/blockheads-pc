@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Prebuilt dynarmic cache shared by every checkout, worktree and target directory (`build.rs` includes this file
 //! via `#[path]`; the unit tests below cover it on every OS).
 //!

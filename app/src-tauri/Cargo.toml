@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Blockheads PC launcher"
 edition = "2021"
 rust-version = "1.86"
-license = "GPL-3.0-only"
+license = "GPL-3.0-or-later"
 publish = false
 
 # Own workspace root: keeps the GUI dependencies out of the game workspace (and its CI and coverage gate).

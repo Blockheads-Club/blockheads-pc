@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Writes app/static/third-party-notices.txt: the licences shown under Settings > Updates & about > "Show all
 // licences". It lists every Rust crate behind the launcher and the game runner and every npm package the UI ships,
 // with its SPDX licence, and reproduces the font licences (OFL-1.1 requires the notice).
@@ -56,7 +56,7 @@ const fontTexts = fonts.map((name) => {
 
 const text = `Blockheads PC
 =============
-Blockheads PC is free software, licensed under the GNU General Public License version 3 only (GPL-3.0-only).
+Blockheads PC is free software, licensed under the GNU General Public License, version 3 or (at your option) any later version (GPL-3.0-or-later).
 The full text is in the LICENSE file next to this program. It contains no code or assets of the game: you supply
 your own copy of The Blockheads. It is an unofficial fan project and is not affiliated with the game's developers.
 

@@ -1,7 +1,7 @@
 # bhpc-cpu
 
 Embedded ARM32 JIT (vendored dynarmic, A32 frontend) behind a small C ABI shim, plus the Rust
-`Cpu` wrapper. Guest memory comes from `bhpc-mem`. GPL-3.0-only (dynarmic itself is 0BSD).
+`Cpu` wrapper. Guest memory comes from `bhpc-mem`. GPL-3.0-or-later (dynarmic itself is 0BSD).
 
 ## Host platform support
 

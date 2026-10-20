@@ -51,7 +51,7 @@ Candidates:
 | Engine | License | Guest | Notes |
 |---|---|---|---|
 | **dynarmic** | **0BSD** | ARMv6K to ARMv8 A32 (ARM and Thumb/T32), VFP, ASIMD (NEON); also A64 | Used by Citra, Yuzu and forks. Host x86_64 and arm64, Windows/Linux/macOS. C++. Upstream `merryhime/dynarmic` now returns 404 (removed), lioncash/dynarmic is archived (2024-03). Maintained forks include `azahar-emu/dynarmic` (0BSD, last update 2026-09-26) and Eden's fork (the Azahar issue says it has improvements), so a fork must be vendored and pinned. |
-| unicorn 2 | GPL-2.0 (**GPL-2.0-only; incompatible with GPL-3.0 linking**) | ARM, Thumb, VFP, NEON via QEMU | Easy API (`uc_hook_*`, `uc_mem_*`), but slower per-call hooks, awkward multithreading (one context per thread, global memory), and the license blocks static linking in our GPL-3.0-only repo. |
+| unicorn 2 | GPL-2.0 (**GPL-2.0-only; incompatible with GPL-3.0 linking**) | ARM, Thumb, VFP, NEON via QEMU | Easy API (`uc_hook_*`, `uc_mem_*`), but slower per-call hooks, awkward multithreading (one context per thread, global memory), and the license blocks static linking in our GPL-3.0-or-later repo. |
 | QEMU TCG as library | GPL-2.0 | full | Not designed for embedding. |
 | libriscv/ARMeilleure/Box-like | n/a | n/a | No mature ARM32-on-x86 embeddable JIT besides dynarmic. Writing our own interpreter is a fallback (a Thumb-2 and VFP interpreter is about 10-15 kLOC plus NEON). |
 
@@ -92,13 +92,13 @@ Architecture:
 5. **GL**: thunk the 380 GL/EGL symbols to host OpenGL (GLES 2 / desktop GL via `glow` or `gl`). Apportable's `libgles_apportable` likely emulates GLES1 on GLES2, so in the best case we only need to forward its GLES2 calls. This is a graphics analysis topic.
 6. **Audio**: OpenAL imports go to host OpenAL-soft or `cpal`; `libOpenAL.so` is bundled, so only its backend calls (probably to JNI AudioTrack) need replacing.
 
-## 5. Licensing against GPL-3.0-only
+## 5. Licensing against GPL-3.0-or-later
 
 | Component | License | Compatible? |
 |---|---|---|
 | dynarmic (azahar/Eden/other forks) | 0BSD (permissive; some downstream forks state GPL-3 with extra grants, so check each commit's SPDX headers and pick a pure 0BSD tree) | Yes. 0BSD code can be combined into a GPL-3.0 work. |
 | Its dependencies: fmt (MIT), mcl (MIT), xbyak (BSD-3), oaknut (MIT), Zydis/Catch2/robin-map (MIT) | permissive | Yes |
-| Unicorn / QEMU | GPL-2.0 (unicorn: GPLv2 only) | **No for linking** (GPL-2.0-only cannot combine with GPL-3.0-only). Fine as a separate process. |
+| Unicorn / QEMU | GPL-2.0 (unicorn: GPLv2 only) | **No for linking** (GPL-2.0-only cannot combine with GPL-3.0-or-later). Fine as a separate process. |
 | qemu-user as external tool | GPL-2.0 | Yes as aggregation (Linux validation only, not shipped) |
 | Game libs/assets | proprietary | Never distributed. Loaded from the user's APK at runtime. |
 

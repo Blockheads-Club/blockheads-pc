@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Fast gate for every commit: only what the change can affect.
 #
 #   - cargo fmt --check for the changed crates

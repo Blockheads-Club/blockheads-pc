@@ -9,7 +9,7 @@ The launcher (`app/`): [launcher.md](launcher.md).
 Run **your own copy** of the Android build of The Blockheads natively on a PC. A Rust host loads the ARM32
 (`armeabi-v7a`) shared objects from an APK **you supply**, executes them in an embedded ARM JIT
 ([dynarmic](../third_party/dynarmic/VENDORED.md), 0BSD) and replaces Android with host-side re-implementations of
-the system libraries (bionic, a fake JVM, GLES, audio, windowing). Licensed under GPL-3.0-only.
+the system libraries (bionic, a fake JVM, GLES, audio, windowing). Licensed under GPL-3.0-or-later.
 
 You must supply your own, lawfully obtained APK. The project never downloads, bundles, extracts to disk, caches or
 redistributes game code or assets, and the repository contains none (see `.gitignore`). The only binary in the

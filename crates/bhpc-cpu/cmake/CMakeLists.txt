@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Wrapper project: builds vendored dynarmic (A32 only) plus our C ABI shim as static libraries.
 cmake_minimum_required(VERSION 3.16)
 project(bhpc_cpu_native CXX C)

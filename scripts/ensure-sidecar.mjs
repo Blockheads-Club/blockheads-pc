@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Tauri's beforeDevCommand / beforeBuildCommand: refresh the game runner sidecar (app/src-tauri/binaries/bhpc-run-<triple>)
 // from the current sources, so a launcher build can never bundle a stale runner. `scripts/build-sidecar.sh` is
 // incremental (cargo): fast when nothing changed. BHPC_SKIP_SIDECAR=1 skips it (CI that built the sidecar for another

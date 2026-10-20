@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Per-OS build decisions shared by `build.rs` (via `#[path]`) and the unit tests, so the logic that
 //! only matters on Windows/macOS is still exercised on Linux.
 

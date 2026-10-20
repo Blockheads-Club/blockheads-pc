@@ -2,7 +2,7 @@
 
 Fake `JavaVM` / `JNIEnv` for the Blockheads guest libraries (PLAN 1.4). The Android game is a thin
 Java shell (`VerdeActivity`, `MainThread`, Looper, Apportable's `LibraryLoader`) around native code.
-This crate is that shell on the PC: no JVM, no dex, no Java bytecode. License: GPL-3.0-only.
+This crate is that shell on the PC: no JVM, no dex, no Java bytecode. License: GPL-3.0-or-later.
 
 * **Object model** (`Vm`): classes, objects, strings (UTF-16), primitive and object arrays, boxes,
   local/global/weak references with frames, pending exceptions per guest thread, a mark-and-sweep

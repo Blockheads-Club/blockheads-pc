@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds fixtures/hello.so (armeabi-v7a, softfp, NEON, static libc++) with the Android NDK.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 ndk="${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/27.2.12479018}"

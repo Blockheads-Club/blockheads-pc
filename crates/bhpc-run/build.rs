@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Windows gives a program's main thread 1 MiB of stack (Linux and macOS: 8 MiB). `bhpc-run --init-only` runs the
 //! game's constructors in the JIT on the main thread, so the runner asks for the same 8 MiB there.
 fn main() {

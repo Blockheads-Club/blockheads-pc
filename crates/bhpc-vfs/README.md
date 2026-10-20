@@ -2,7 +2,7 @@
 
 File storage for the PC port (PLAN 1.8): the user's APK as a lazy read-only asset tree, a writable per-user data
 directory, the Android/Apportable path mapping, synthetic `/proc` `/sys` `/dev` files, and system fonts.
-GPL-3.0-only. No game content is stored here; the APK is only ever read, never extracted.
+GPL-3.0-or-later. No game content is stored here; the APK is only ever read, never extracted.
 
 ## API
 

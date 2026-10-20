@@ -540,7 +540,7 @@ describe('Settings > updates and about', () => {
     await waitFor(() => expect(toasts.items.at(-1)?.message).toBe('Could not copy to the clipboard'));
     await click('GitHub');
     expect(mock.api.openUrl).toHaveBeenCalled();
-    expect(screen.getByText(/GPL-3.0-only/, { selector: 'span' })).toBeVisible();
+    expect(screen.getByText(/GPL-3.0-or-later/, { selector: 'span' })).toBeVisible();
   });
 
   it('shows the third-party notices', async () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Aggregate census JSONs into docs/m0/opcode-census.md + CSVs.
 usage: report.py OUT_DIR(with index.tsv + *.json) DOCS_DIR DYNARMIC_SRC DYNARMIC_COMMIT
 """

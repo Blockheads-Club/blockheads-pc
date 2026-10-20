@@ -34,10 +34,10 @@
     "targets": "all",
     "category": "Game",
     "publisher": "Blockheads Club",
-    "copyright": "Blockheads Club contributors. GPL-3.0-only.",
+    "copyright": "Blockheads Club contributors. GPL-3.0-or-later.",
     "shortDescription": "Play The Blockheads on your computer",
     "longDescription": "Blockheads PC runs your own copy of the Android game The Blockheads on Windows, macOS and Linux. It does not contain or download the game. Unofficial fan project.",
-    "license": "GPL-3.0-only",
+    "license": "GPL-3.0-or-later",
     "licenseFile": "../../LICENSE",
     "icon": [
       "icons/32x32.png",

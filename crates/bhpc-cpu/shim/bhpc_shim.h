@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // C ABI over dynarmic's A32 JIT (see bhpc_shim.cpp). Guest memory is reached through a fastmem
 // window (host pointer + 32-bit guest address) with callbacks as the fallback path.
 #pragma once

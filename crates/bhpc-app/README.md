@@ -1,6 +1,6 @@
 # bhpc-app
 
-Window and main-loop skeleton (PLAN 1.5). GPL-3.0-only.
+Window and main-loop skeleton (PLAN 1.5). GPL-3.0-or-later.
 
 * `App<B: Backend, C: Clock>`: event pump, fullscreen toggle (F11, Alt+Enter, consumed), vsync or `fallback_fps`
   pacing (`FramePacer`: no drift, no catch-up bursts), `Handler::event` / `Handler::render_frame` hooks.

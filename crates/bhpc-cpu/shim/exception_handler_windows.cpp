@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Fastmem fault handling for dynarmic on Windows (x86_64 and arm64), replacing the vendored
 // backend/exception_handler_windows.cpp (cmake/CMakeLists.txt swaps the source).
 //

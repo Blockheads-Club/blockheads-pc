@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Full gate before merging into dev (CI runs the same checks):
 #
 #   Rust   cargo fmt --check; clippy -D warnings on the whole workspace with bhpc-run's `play` feature;

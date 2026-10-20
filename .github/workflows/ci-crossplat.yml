@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Builds the whole workspace and runs its tests on every shipped target except Linux x86_64 (the main CI, with the
 # coverage gate): Linux arm64, macOS x86_64 + arm64, Windows x86_64 + arm64. Nothing here needs the game: tests that
 # read an APK are `#[ignore]`d behind BHPC_APK, the guest code in the tests is our own synthetic ELF fixtures.

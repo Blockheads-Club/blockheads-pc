@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # CI for blockheads-pc: format, build, clippy (-D warnings), tests and the 100% line + function coverage gate.
 #

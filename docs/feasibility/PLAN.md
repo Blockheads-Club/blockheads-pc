@@ -13,7 +13,7 @@ Status: decision document. Inputs: [A: native imports](A-native-imports.md), [B:
 | Biggest cost | The **fake Java world**. That is about 28 entry points and 130-180 Java members to reach the menu, and about 90 classes and 350-450 members for full gameplay. These come from libBridgeKit's reflection bridge plus a Looper/MessageQueue that is merged with CFRunLoop. |
 | Effort | **About 31 dev-weeks** (range 26-42) for gameplay plus multiplayer on Linux, Windows and macOS. The first visible frame (M4) comes after about 15 dev-weeks. |
 | Platforms | Linux x86_64 first, then Windows x86_64, then macOS (Intel and Apple Silicon, using dynarmic's arm64 backend). |
-| Legal | The user supplies the APK at runtime and it is read in place. We never ship, cache or commit game bytes. All test fixtures are our own C code built with the NDK. The project is GPL-3.0-only and every dependency is compatible with that. |
+| Legal | The user supplies the APK at runtime and it is read in place. We never ship, cache or commit game bytes. All test fixtures are our own C code built with the NDK. The project is GPL-3.0-or-later and every dependency is compatible with that. |
 
 ## 1. Chosen architecture
 
@@ -62,7 +62,7 @@ Status: decision document. Inputs: [A: native imports](A-native-imports.md), [B:
 
 **Rejected options.**
 - qemu-user with an armhf sysroot: Linux only, needs GPL-2.0 tooling, and we would still have to write every bionic shim.
-- Unicorn: GPL-2.0-only cannot link into a GPL-3.0-only project, and it is slow per hook.
+- Unicorn: GPL-2.0-only cannot link into a GPL-3.0-or-later project, and it is slow per hook.
 - Native AArch32: Apple, Oryon and newer Cortex cores do not have it.
 
 ### 1.3 bionic HLE (bhpc-bionic)
@@ -180,7 +180,7 @@ Content scale: the default makes the window behave like a 1024x768-point iPad-cl
 | `blockheads-server` (clean-room 1.7.1 server, Rust) | It is the M7 multiplayer target. Its README already states that Android 1.7.x clients connect after the patcher's popup fix, which lowers C's protocol-mismatch risk. |
 | `blockheads-server/crates/bh_testclient` (`trace.rs`, `decode.rs`, harness) | It decodes and diffs ENet/protocol traffic from the PC client against an Android-client trace, which is the M7 exit check. |
 | REA/Frida tooling with adb (development only) | A **reference trace** from a real Android device: the JNI `FindClass/GetMethodID/Call*` sequence and GL call stream during boot and menu. This is a dev oracle and does not ship. It replaces the qemu-user oracle from C, which would need a full glibc-to-bionic shim of its own. |
-| Our Rust conventions (GPL-3.0-only, bun, semantic-release, 100% coverage CI) | Applied as is (section 6). |
+| Our Rust conventions (GPL-3.0-or-later, bun, semantic-release, 100% coverage CI) | Applied as is (section 6). |
 
 ## 3. Milestones
 
@@ -233,7 +233,7 @@ Calendar: about 8 months at roughly 1 FTE, or 12-15 months part time. Visible pr
 
   | Component | Licence | Status |
   |---|---|---|
-  | blockheads-pc | GPL-3.0-only | Project licence |
+  | blockheads-pc | GPL-3.0-or-later | Project licence |
   | dynarmic fork | 0BSD | Compatible |
   | xbyak, oaknut, fmt, mcl | BSD/MIT | Compatible |
   | SDL2 | zlib | Compatible |
@@ -245,7 +245,7 @@ Calendar: about 8 months at roughly 1 FTE, or 12-15 months part time. Visible pr
 - **Trademarks.** "The Blockheads" belongs to its owners. Use a neutral product name such as "Blockheads PC Loader" in descriptive use only, no game logo or art, and include the standard "not affiliated with Majic Jungle / Noodlecake" notice. Interoperability with a lawfully owned copy is the stated purpose. This is not legal advice; get a review before the first public release.
 
 ## 6. Engineering rules for the repo
-- Org rules apply: GPL-3.0-only, Conventional Commits, `dev` branch prereleases, and **100% coverage enforced in CI**.
+- Org rules apply: GPL-3.0-or-later, Conventional Commits, `dev` branch prereleases, and **100% coverage enforced in CI**.
 - How the coverage rule stays satisfiable without the APK:
   - The pure-Rust crates (`bhpc-elf`, `bhpc-mem`, `bhpc-bionic`, `bhpc-jni`, the generated GL marshalling) are unit-tested against **NDK-built fixture `.so` files compiled from our own C** in CI (NDK r27 clang `armv7a-linux-androideabi21`).
   - Those fixtures exercise relocations, Thumb interworking, softfp, varargs, pthreads, stdio macros, setjmp, C++ EH and JNI round trips.

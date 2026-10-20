@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Symbol-bounded ARM/Thumb opcode census of one 32-bit ARM ELF shared object.
 
 usage: census.py LIB.so OUT.json [DYNARMIC_CHECKOUT]

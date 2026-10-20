@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Builds the vendored dynarmic (A32 frontend only) and the C ABI shim, then links the static libs.
 //! A build whose inputs match an earlier one (any checkout, worktree or profile) reuses its archives from the shared
 //! cache in `buildcache.rs` instead of running CMake again.

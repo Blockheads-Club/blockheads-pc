@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 blockheads-pc: run the user's own Blockheads Android build (ARM32 `.so` libs) on PC through a Rust loader,
-an embedded ARM JIT (dynarmic) and host re-implementations of Android system libraries. GPL-3.0-only.
+an embedded ARM JIT (dynarmic) and host re-implementations of Android system libraries. GPL-3.0-or-later.
 Architecture and milestones: `docs/feasibility/PLAN.md` (read first), `docs/feasibility/C-execution-strategy.md`.
 Umbrella rules: `../AGENTS.md`.
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Sourced by the check scripts: build caches shared by every checkout and agent worktree.
 #
 #   - dynarmic: crates/bhpc-cpu/build.rs reuses prebuilt archives from ~/.cache/bhpc/dynarmic-<hash> (always on;

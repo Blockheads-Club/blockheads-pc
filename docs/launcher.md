@@ -58,7 +58,7 @@ macOS `.app` and dmg. `.github/workflows/launcher-bundles.yml` does this for all
 macOS, each x86_64 and arm64) and `scripts/check-bundle.sh` checks every bundle for the sidecar and for game files;
 run by hand with `release_tag`, it replaces that release's assets. Bundles contain the launcher,
 the sidecar and icons only: no APK, game libraries or assets. Product name "Blockheads PC", identifier
-`club.blockheads.pc`, licence GPL-3.0-only. `scripts/gen-notices.mjs` regenerates
+`club.blockheads.pc`, licence GPL-3.0-or-later. `scripts/gen-notices.mjs` regenerates
 `app/static/third-party-notices.txt` (shown under Settings > Updates & about).
 
 macOS: the sidecar needs the JIT entitlements (`app/src-tauri/entitlements.plist`); signing and notarisation are not

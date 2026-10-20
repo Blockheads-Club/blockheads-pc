@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only
+/* SPDX-License-Identifier: GPL-3.0-or-later
  * M0 fixture: exercises thunks, ARM/Thumb interworking, NEON, VFP (softfp) and relocations.
  * Own code, built with the NDK for armeabi-v7a. */
 #include <arm_neon.h>

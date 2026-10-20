@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Parse dynarmic A32 decoder tables and emulate its decode order.
 
 Read-only: parses src/dynarmic/frontend/A32/decoder/*.inc and the translate

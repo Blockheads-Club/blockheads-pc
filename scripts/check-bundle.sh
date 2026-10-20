@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Checks every bundle `tauri build` made: it must contain the game runner sidecar (bhpc-run) and nothing of the game
 # (an APK, its libraries libApplication.so / libv.so, an assets/ folder). Lists what each bundle holds.
 #   Linux: deb, rpm, AppImage   Windows: NSIS installer (7-Zip lists it), MSI (administrative install)

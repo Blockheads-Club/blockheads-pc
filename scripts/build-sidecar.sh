@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Builds the game runner (`bhpc-run`, play build with a statically linked SDL2) and puts it where the launcher's
 # Tauri bundle expects its sidecar: app/src-tauri/binaries/bhpc-run-<target triple>[.exe].
 #

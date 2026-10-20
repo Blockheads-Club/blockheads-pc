@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Windows back end: `VirtualAlloc(MEM_RESERVE)` reservation, `MEM_COMMIT` to make pages accessible,
 //! `VirtualFree(MEM_RELEASE)` to give the window back. Declared by hand to avoid a binding crate.
 //! Not exercised on Linux CI; see crates/bhpc-cpu/README.md.

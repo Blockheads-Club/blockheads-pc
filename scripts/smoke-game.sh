@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Headless game smoke test (part of scripts/check-full.sh): boot -> world creation -> in the world -> main menu, once,
 # under a strict time limit. Runs the play build (`--features play`, release) under Xvfb with its own D-Bus session,
 # HOME and data dir, so it never touches the user's game data, display or running launcher.

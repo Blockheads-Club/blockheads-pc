@@ -1,6 +1,6 @@
 # bhpc-gles
 
-OpenGL ES 2.0 and EGL for the guest (PLAN 1.5). GPL-3.0-only.
+OpenGL ES 2.0 and EGL for the guest (PLAN 1.5). GPL-3.0-or-later.
 
 ## What it provides
 

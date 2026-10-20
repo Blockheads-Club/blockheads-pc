@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Builds the "Blockheads PC" launcher installers (Tauri 2) for every shipped target; the game runner `bhpc-run` goes
 # in as a sidecar (scripts/build-sidecar.sh), then `tauri build` makes
 #   Linux x86_64 + arm64: AppImage, deb, rpm   Windows x86_64 + arm64: NSIS, MSI   macOS x86_64 + arm64: dmg
