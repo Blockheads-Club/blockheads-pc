@@ -222,6 +222,8 @@ mod imp {
             if let Some(g) = &gl {
                 overlay.add_overlay(g);
                 overlay.set_overlay_pass_through(g, true);
+                // Invisible until the game is revealed: GTK may show a GL area black before its first render.
+                g.set_opacity(0.0);
             }
             overlay.add_overlay(&area);
             // Until the first frame the page shows its loading screen and must get the mouse (Cancel).
@@ -350,6 +352,7 @@ mod imp {
                 } else if reveal_overdue(&p) {
                     p.revealed = true;
                     show_if_ready(w, &mut p);
+                    g.set_opacity(1.0);
                     g.queue_render();
                 } else if p.first.is_some_and(|f| f.elapsed() < FADE) {
                     g.queue_render();
@@ -637,6 +640,7 @@ mod imp {
                 p.revealed = true;
                 show_if_ready(&v.area, &mut p);
                 if let Some(g) = &v.gl {
+                    g.set_opacity(1.0);
                     g.queue_render();
                 }
                 v.area.queue_draw();

@@ -23,7 +23,8 @@
   const starting = $derived(store.starting);
   const failed = $derived(store.bootFailed);
   const ready = $derived(store.state === 'running' && !!store.game.progress?.ready);
-  let shown = $state(false);
+  // Starts shown when the game is already booting, so the very first paint is the loader, not the empty stage.
+  let shown = $state(store.starting);
   let complete = $state(false);
   let handover = $state(false);
   const loader = $derived((shown && starting) || failed || complete || handover);
