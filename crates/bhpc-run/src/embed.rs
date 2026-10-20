@@ -32,8 +32,6 @@ pub struct PlayFlags {
     pub game_speed: f64,
     /// Game controllers drive the game (off with `--no-controller`).
     pub controller: bool,
-    /// The game's buttons start hidden (`--hide-ui`).
-    pub hide_ui: bool,
     /// The game's D-pad stays hidden (`--hide-dpad`).
     pub hide_dpad: bool,
 }
@@ -74,7 +72,6 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             .transpose()?
             .unwrap_or(1.0),
         controller: !args.iter().any(|a| a == "--no-controller"),
-        hide_ui: args.iter().any(|a| a == "--hide-ui"),
         hide_dpad: args.iter().any(|a| a == "--hide-dpad"),
     })
 }

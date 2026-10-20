@@ -67,7 +67,6 @@ export const SETTINGS: SettingEntry[] = [
     keywords: [...ACTION_WORDS[a], ...CONTROL_WORDS]
   })),
   { id: 'set-ctl-dpad', page: 'controls', titleKey: 'osc.dpad', hintKey: 'osc.dpadHint', keywords: ['dpad', 'd-pad', 'arrows', 'arrow pad', 'joystick', 'on-screen', 'touch controls', 'yön tuşları', 'ok tuşları', 'ekran', 'dokunmatik'] },
-  { id: 'set-ctl-game-buttons', page: 'controls', titleKey: 'osc.buttons', hintKey: 'osc.buttonsHint', keywords: ['hud', 'buttons', 'interface', 'on-screen', 'start hidden', 'düğmeler', 'arayüz', 'ekran'] },
   { id: 'set-ctl-pad', page: 'controls', titleKey: 'pad.enable', hintKey: 'pad.enableHint', keywords: [...PAD_WORDS, 'on', 'off', 'aç', 'kapat'] },
   { id: 'set-ctl-pad-map', page: 'controls', titleKey: 'pad.mapTitle', hintKey: 'pad.mapHint', keywords: [...PAD_WORDS, 'buttons', 'layout', 'düğmeler', 'düzen'], fallback: 'set-ctl-pad' },
 

@@ -90,7 +90,7 @@ Useful flags (all optional):
 | `--shot FILE.png` with `--shot-at N` | save a screenshot of swap N (and `FILE-first.png` of the first frame); `--exit-after-shot` quits afterwards |
 | `--script FILE` | scripted input, see below; `--click X,Y@MS` is a one-off click at a time in ms; `--shot-dir DIR` is where script `shot` steps go |
 | `--force` | run a build that is not one of the known versions |
-| `--hide-dpad`, `--hide-ui` | keep the game's on-screen D-pad hidden (a controller still walks with it); start worlds with the game's buttons hidden (H shows them) |
+| `--hide-dpad` | keep the game's on-screen D-pad hidden (a controller still walks with it) |
 | `--serial-guest` | run the game's threads one at a time instead of in parallel on several cores (troubleshooting; `BHPC_PARALLEL_GUEST=0` does the same) |
 | `--trace-objc`, `--trace-fs`, `--trace-jni`, `--trace-jni-calls`, `--trace-fn LIST`, `--jni-report FILE` | tracing of the guest's Objective-C messages, file access and the fake JVM; `BHPC_TRACE_NET=1` in the environment logs every socket call |
 | `-v` | verbose |

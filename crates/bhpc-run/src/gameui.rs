@@ -10,8 +10,8 @@
 //!
 //! * **Hide game buttons** hooks the render and touch methods of `WorldUI` and `DPad` (see `play.rs`): while hidden,
 //!   rendering returns at once and the touch methods answer "not mine", so taps go to the world. The pop-ups, the
-//!   pause menu and the game's alerts are other classes and stay. Showing again just lets the methods run. The
-//!   launcher's "Show the game's buttons" setting off (`--hide-ui`) starts every world with them hidden.
+//!   pause menu and the game's alerts are other classes and stay. Showing again just lets the methods run. Every
+//!   world starts with them shown.
 //! * **The D-pad alone** ("Show the game's on-screen D-pad" off, `--hide-dpad`): the same hooks keep only the `DPad`
 //!   hidden for the whole run. The game's own "BLOCKHEAD D-PAD" option (`dpadDirectControlDisabled` in its
 //!   defaults) is not used for this: with it off the game stops displaying the D-pad altogether, and the
@@ -274,10 +274,8 @@ impl GameUi {
         GameUi { ivars, ..GameUi::default() }
     }
 
-    /// The hidden state a run starts with: all the game's buttons (`ui`, until toggled) and the D-pad alone
-    /// (`dpad`, for the whole run).
-    pub fn start_hidden(self, ui: bool, dpad: bool) -> GameUi {
-        self.hidden.store(ui, Ordering::SeqCst);
+    /// Keep the D-pad alone hidden (`dpad`) for the whole run.
+    pub fn dpad_hidden(self, dpad: bool) -> GameUi {
         self.dpad_off.store(dpad, Ordering::SeqCst);
         self
     }

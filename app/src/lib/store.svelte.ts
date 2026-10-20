@@ -293,10 +293,6 @@ export class AppStore {
     await this.patchConfig((c) => (c.show_dpad = on));
   }
 
-  async setShowGameButtons(on: boolean) {
-    await this.patchConfig((c) => (c.show_game_buttons = on));
-  }
-
   async setBinding(action: ActionId, text: string): Promise<boolean> {
     const cfg = this.cfg;
     if (!cfg) return false;

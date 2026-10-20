@@ -155,13 +155,14 @@ fn old_window_tables_get_the_new_defaults() {
     // A launcher.toml written before `show_fps` and `fps_limit` existed.
     let old = "apk = \"a\"\ndata_dir = \"d\"\n[window]\nwidth = 1600\nheight = 900\nfullscreen = true\nvsync = false\nui_scale = 1.25\n";
     let c = LaunchConfig::from_toml(old).unwrap();
+    // The removed "Show the game's buttons" setting is ignored.
+    assert_eq!(LaunchConfig::from_toml(&format!("show_game_buttons = false\n{old}")).unwrap(), c);
     assert_eq!((c.window.width, c.window.vsync, c.window.show_fps, c.window.fps_limit), (1600, false, false, 60));
     assert_eq!(c.window.fps_position, crate::window::FpsPosition::TopLeft);
     assert_eq!(c.window.game_speed, 1.0);
     assert!(c.window.parallel_threads, "game threads run in parallel unless switched off");
     assert!(c.controller, "controllers are on unless switched off");
     assert!(!c.show_dpad, "the game's D-pad is hidden unless switched on");
-    assert!(c.show_game_buttons, "the game's buttons show unless switched off");
     assert_eq!(c.keys.hide_ui.to_string(), "H");
     assert_eq!(crate::window::FpsPosition::TopLeft.flag(), "tl");
     let mut c = LaunchConfig::new("a", "d");
@@ -171,10 +172,9 @@ fn old_window_tables_get_the_new_defaults() {
     c.window.game_speed = 0.75;
     c.controller = false;
     c.show_dpad = true;
-    c.show_game_buttons = false;
     let text = c.to_toml();
     assert!(text.contains("controller = false"), "{text}");
-    assert!(text.contains("show_dpad = true") && text.contains("show_game_buttons = false"), "{text}");
+    assert!(text.contains("show_dpad = true") && !text.contains("show_game_buttons"), "{text}");
     assert!(text.contains("game_speed = 0.75"), "{text}");
     assert!(text.contains("fps_position = \"bottom-right\""), "{text}");
     assert!(text.contains("show_fps = true") && text.contains("fps_limit = 144"), "{text}");

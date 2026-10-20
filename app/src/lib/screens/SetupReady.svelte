@@ -21,9 +21,7 @@
   const dups = $derived(d ? conflicts(d.keys) : []);
   /** The on-screen control settings that are not the default. */
   const onScreen = $derived(
-    d
-      ? [...(d.show_dpad ? [t('ready.dpadShown')] : []), ...(d.show_game_buttons === false ? [t('ready.buttonsHidden')] : [])].join(' · ')
-      : ''
+    d?.show_dpad ? t('ready.dpadShown') : ''
   );
   const gfx = $derived(
     d

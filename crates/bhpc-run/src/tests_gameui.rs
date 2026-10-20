@@ -107,9 +107,9 @@ fn hiding_toggles_and_the_dpad_keeps_the_walking_finger() {
 }
 
 #[test]
-fn the_dpad_can_stay_hidden_and_the_buttons_can_start_hidden() {
+fn the_dpad_can_stay_hidden() {
     // The D-pad alone: the other buttons show, the D-pad neither draws nor takes touches, except the walking finger.
-    let g = GameUi::default().start_hidden(false, true);
+    let g = GameUi::default().dpad_hidden(true);
     assert!(!g.hidden() && !g.off(false) && g.off(true));
     assert!(!g.suppress(false) && g.suppress(true));
     g.set_walking(true);
@@ -118,9 +118,10 @@ fn the_dpad_can_stay_hidden_and_the_buttons_can_start_hidden() {
     // Toggling hides the rest too; showing again leaves the D-pad hidden.
     assert!(g.toggle() && g.off(false) && g.off(true));
     assert!(!g.toggle() && !g.off(false) && g.off(true));
-    // All hidden at the start, the D-pad with them until the buttons are shown.
-    let g = GameUi::default().start_hidden(true, false);
-    assert!(g.hidden() && g.off(false) && g.off(true) && g.suppress(true));
+    // Without it, the D-pad hides and shows with the rest.
+    let g = GameUi::default().dpad_hidden(false);
+    assert!(!g.hidden() && !g.off(true));
+    assert!(g.toggle() && g.off(false) && g.off(true) && g.suppress(true));
     assert!(!g.toggle() && !g.off(true) && !g.suppress(true));
     assert_eq!(message(false), "GAME BUTTONS SHOWN");
 }

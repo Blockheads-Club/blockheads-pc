@@ -88,8 +88,6 @@ pub struct PlayConfig {
     pub game_speed: f64,
     /// Game controllers drive the game (`bhpc_input::pad`).
     pub controller: bool,
-    /// The game's buttons start hidden (`gameui`; the hide-buttons binding shows them).
-    pub hide_ui: bool,
     /// The game's D-pad stays hidden (`gameui`).
     pub hide_dpad: bool,
     /// Window title.
@@ -128,7 +126,6 @@ impl PlayConfig {
             unlock_fps: false,
             game_speed: 1.0,
             controller: true,
-            hide_ui: false,
             hide_dpad: false,
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
@@ -917,13 +914,10 @@ fn boot(
             Err(e) => eprintln!("[play] cannot change the game speed: {e}"),
         }
     }
-    let game = match install_game_ui(&mut sess, cfg.hide_ui, cfg.hide_dpad) {
+    let game = match install_game_ui(&mut sess, cfg.hide_dpad) {
         Ok(g) => {
-            if cfg.hide_ui || cfg.hide_dpad {
-                eprintln!(
-                    "[play] the game's buttons start hidden: {}, its D-pad stays hidden: {}",
-                    cfg.hide_ui, cfg.hide_dpad
-                );
+            if cfg.hide_dpad {
+                eprintln!("[play] the game's D-pad stays hidden");
             }
             Some(g)
         }
@@ -1709,9 +1703,9 @@ const HIDDEN_METHODS: [(&str, &str, bool); 9] = [
 ];
 
 /// Hook the game's controls (see `gameui`): remember the `GameView` it renders, stop the buttons' rendering and
-/// touch handling while they are hidden, and find the pause actions. `hide_ui` and `hide_dpad` are the hidden state
-/// at the start (`GameUi::start_hidden`).
-fn install_game_ui(sess: &mut Session, hide_ui: bool, hide_dpad: bool) -> Result<Arc<GameHooks>, String> {
+/// touch handling while they are hidden, and find the pause actions. `hide_dpad` keeps the D-pad hidden
+/// for the whole run (`GameUi::dpad_hidden`).
+fn install_game_ui(sess: &mut Session, hide_dpad: bool) -> Result<Arc<GameHooks>, String> {
     use crate::fpsunlock::methods;
     let mem = sess.cpu.mem().clone();
     let export = |name: &str| sess.linker.modules().iter().find_map(|m| m.export(name));
@@ -1737,7 +1731,7 @@ fn install_game_ui(sess: &mut Session, hide_ui: bool, hide_dpad: bool) -> Result
     let pinch = method("GameView", crate::gameui::PINCH_SELECTOR)
         .inspect_err(|e| eprintln!("[play] the wheel zooms around the centre: {e}"))
         .ok();
-    let ui = Arc::new(crate::gameui::GameUi::new(ivars).start_hidden(hide_ui, hide_dpad));
+    let ui = Arc::new(crate::gameui::GameUi::new(ivars).dpad_hidden(hide_dpad));
     let g = ui.clone();
     hook_at(sess, render, "-[GameView render:]", move |c| g.saw_game_view(c.reg(0)))?;
     for (imp, cls, sel, dpad) in hidden {
