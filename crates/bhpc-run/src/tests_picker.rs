@@ -23,11 +23,20 @@ fn the_first_dialog_that_starts_answers() {
 }
 
 #[test]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn kde_gets_its_own_dialog_first() {
     let names = |d: &str| candidates(d).into_iter().map(|c| c.program).collect::<Vec<_>>();
     assert_eq!(names("GNOME"), ["zenity", "kdialog"]);
     assert_eq!(names("KDE"), ["kdialog", "zenity"]);
     assert!(candidates("").iter().all(|c| c.args.iter().any(|a| a.contains("png"))));
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn macos_asks_through_applescript() {
+    let c = candidates("KDE");
+    assert_eq!(c.iter().map(|c| c.program.as_str()).collect::<Vec<_>>(), ["osascript"]);
+    assert!(c[0].args.iter().any(|a| a.contains("public.png")));
 }
 
 #[test]

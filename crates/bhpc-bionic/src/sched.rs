@@ -1212,7 +1212,10 @@ mod tests {
         e.mem().write_u32(TS + 4, 2_000_000).unwrap();
         let t0 = Instant::now();
         assert_eq!(e.call("nanosleep", &[TS, 0]).r0, 0);
-        assert!(t0.elapsed() >= std::time::Duration::from_millis(2));
+        // In parallel mode the other thread may have run and exited already: the sleep is then a single-thread
+        // one and goes to the (test) clock instead of really waiting.
+        let alone = lock(&e.st).sched.parallel() && e.clock.slept() == [2_000_000];
+        assert!(alone || t0.elapsed() >= std::time::Duration::from_millis(2));
         if lock(&e.st).sched.parallel() {
             // The lock is not FIFO: the new thread may still be starting; it runs in parallel anyway.
             pump(&mut e, FLAG);
