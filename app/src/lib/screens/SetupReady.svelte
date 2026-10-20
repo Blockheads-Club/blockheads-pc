@@ -60,7 +60,7 @@
   </div>
   <Card pad={false} label={t('ready.summary')}>
     {#each rows as r (r.step)}
-      <div class="sr">
+      <div class="srow">
         <span class="si"><Icon name={r.icon} /></span>
         <div class="sv">
           <p class="k">{r.k}</p>
@@ -86,7 +86,7 @@
         <Button size="sm" variant="ghost" label={r.label} onclick={() => store.jump(r.step)}>{t('common.edit')}</Button>
       </div>
     {/each}
-    <div class="sr">
+    <div class="srow">
       <span class="si"><Icon name="folder" /></span>
       <div class="sv"><p class="k">{t('ready.dataFolder')}</p><p class="v mono">{d?.data_dir}</p></div>
     </div>
@@ -98,8 +98,8 @@
   .tt { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 260px; }
   h1 { font-size: 32px; }
   .lead { font-size: 16px; }
-  .sr { display: flex; gap: 14px; align-items: center; padding: 14px 16px; border-top: 1px solid var(--line); }
-  .sr:first-child { border-top: 0; }
+  .srow { display: flex; gap: 14px; align-items: center; padding: 14px 16px; border-top: 1px solid var(--line); }
+  .srow:first-child { border-top: 0; }
   .si { width: 40px; height: 40px; border-radius: 11px; background: var(--surface-2); color: var(--primary-ink); display: grid; place-items: center; flex: none; }
   .sv { flex: 1; min-width: 0; }
   .k { font-size: 13px; font-weight: 700; color: var(--text-3); }
