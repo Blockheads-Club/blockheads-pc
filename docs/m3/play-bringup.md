@@ -140,3 +140,19 @@ or `blockheads://` argument) and passes it to the next game start. The game buil
 but whether the link handler acts on either form is unverified (a fresh data dir goes straight into the first world,
 where the call had no visible effect). So no scheme is registered in the bundle's `.desktop` file yet; to try it:
 `xdg-mime default blockheads-pc.desktop x-scheme-handler/blockheads` with `Exec=blockheads-pc %u`.
+
+## Store, achievements and "Your pic"
+
+* **Store (in-app billing).** `ApportableIAP` answers like a device without Google Play billing: `setupFinished`
+  reaches the game after start-up, product queries fail at once (`querySkusResponse(.., error)`), purchases and
+  restores answer false. The game has no "store unavailable" screen of its own: its prices stay `...`, a pack cannot
+  be bought (no product), Restore ends in the game's own failure message. Nothing is ever bought.
+* **Achievements (Google Play Games).** The start-up sign-in fails with `SERVICE_MISSING` (`nativeOnConnectionFailed`);
+  "View achievements" then only asks `isLoggedIn` (the game signs in once per run) and the host shows
+  "ACHIEVEMENTS ARE NOT AVAILABLE ON PC". The return to the main menu asks `isLoggedIn` too but queries the products
+  right after it, which keeps it quiet (`bhpc-jni/src/jlib/services.rs`).
+* **"Your pic".** `startActivityForResult(ACTION_PICK, content://media/internal/images/media)` (request 9001) opens a
+  file dialog (`bhpc-run/src/picker.rs`: zenity or kdialog, PowerShell on Windows, osascript on macOS) on a thread;
+  the answer is `nativeOnActivityResult(9001, RESULT_OK, intent with file://...)` or `RESULT_CANCELED`, and
+  `MediaStore.Images.Media.getBitmap` decodes the PNG/JPEG (scaled to 1024 px at most). `BHPC_PICK_IMAGE=FILE`
+  replaces the dialog (headless runs; empty = cancel).

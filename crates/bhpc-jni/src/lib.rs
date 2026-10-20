@@ -24,6 +24,10 @@ pub mod vm;
 pub use build::ClassBuilder;
 pub use host::{install, Jni, JniError, Usage};
 pub use invoke::Recv;
+pub use jlib::{
+    file_uri, uri_path, ActivityRequest, BILLING_UNAVAILABLE, GAMES_CHECK_MS, GAMES_NOTICE, RESULT_CANCELED, RESULT_OK,
+    SERVICE_MISSING, STORE_NOTICE,
+};
 pub use jni::{Layout, JNI_VERSION, TABLE_SLOTS};
 pub use platform::{
     Assets, AudioHooks, GfxHooks, MemAssets, MusicOp, NoAssets, NoAudio, NoGfx, NoSystem, Platform, SystemHooks,
@@ -64,6 +68,8 @@ mod tests_music;
 mod tests_net;
 #[cfg(test)]
 mod tests_render;
+#[cfg(test)]
+mod tests_services;
 #[cfg(test)]
 mod tests_startup;
 #[cfg(test)]

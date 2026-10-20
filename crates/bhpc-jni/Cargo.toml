@@ -11,6 +11,7 @@ bhpc-mem.workspace = true
 bhpc-cpu.workspace = true
 bhpc-vfs.workspace = true
 ab_glyph = { version = "0.2", default-features = false, features = ["std"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [dev-dependencies]
 libc.workspace = true

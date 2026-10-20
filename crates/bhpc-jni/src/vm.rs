@@ -201,6 +201,10 @@ pub(crate) struct State {
     pub dialog: Option<crate::render::dialog::Dialog>,
     /// Alerts shown while a dialog was up, in order: each gets the dialog when the one before is answered.
     pub dialog_queue: Vec<Alert>,
+    /// Activities started for a result, waiting for the host (see `Vm::take_activity_requests`).
+    pub activity_requests: Vec<crate::jlib::ActivityRequest>,
+    /// Billing, Play Games and the host's messages (see `jlib::services`).
+    pub services: crate::jlib::Services,
 }
 
 /// Resolver for exported native symbols: name -> guest address.

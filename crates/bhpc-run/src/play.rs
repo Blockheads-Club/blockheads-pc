@@ -1464,6 +1464,33 @@ impl UiThread {
         *frames = (self.flags.swaps.load(Ordering::SeqCst), Instant::now());
     }
 
+    /// The fake services' messages for the user ("achievements are not available"), and the activities the game
+    /// started for a result: the picture picker's file dialog runs on a thread, its answer goes to the game here.
+    fn services_frame(&self, c: &mut Cpu, pickers: &crate::picker::Pickers) {
+        let vm = &self.vm;
+        for n in vm.take_notices() {
+            eprintln!("[play] notice: {n}");
+            self.say(&n);
+        }
+        for req in vm.take_activity_requests() {
+            eprintln!("[play] activity for a result: {req:?}");
+            let fixed = std::env::var_os("BHPC_PICK_IMAGE");
+            let dialogs = crate::picker::candidates(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default());
+            pickers.start(&req, Box::new(move || crate::picker::pick_image(fixed, &dialogs)));
+        }
+        for (code, pick) in pickers.poll() {
+            let (result, uri) = crate::picker::result_of(&pick);
+            eprintln!("[play] activity {code}: result {result}, {uri:?}");
+            if let Some(m) = crate::picker::message(&pick) {
+                self.say(m);
+            }
+            c.set_ticks(FOREVER);
+            if let Err(e) = vm.activity_result(c, code, result, uri.as_deref()) {
+                eprintln!("[play] activity result: {e:?}");
+            }
+        }
+    }
+
     fn ui_loop(&self, c: &mut Cpu, mapper: &mut InputMapper, rx: Option<&Receiver<Event>>) -> String {
         let (vm, flags, cfg, st) = (&self.vm, &self.flags, &self.cfg, &self.st);
         let begun = Instant::now();
@@ -1472,6 +1499,7 @@ impl UiThread {
         let mut dialog_keys = crate::input::DialogInput::default();
         // The game's frame count and when it last changed: a dialog with no game frames is presented by the host.
         let mut frames = (flags.swaps.load(Ordering::SeqCst), Instant::now());
+        let pickers = crate::picker::Pickers::default();
         // The wheel step in progress (the game's own pinch, a few frames long).
         let mut wheel: Option<crate::gameui::WheelAnim> = None;
         loop {
@@ -1518,6 +1546,7 @@ impl UiThread {
                 }
             }
             self.present_dialog(c, &mut frames);
+            self.services_frame(c, &pickers);
             if flags.dump_views.swap(false, Ordering::SeqCst) {
                 eprintln!("[views]\n{}", vm.dump_views());
             }

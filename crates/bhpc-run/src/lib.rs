@@ -18,6 +18,7 @@ pub mod mmapio;
 pub mod music;
 pub mod overlay;
 pub mod pace;
+pub mod picker;
 #[cfg(feature = "play")]
 pub mod play;
 pub mod png;
@@ -247,6 +248,8 @@ mod tests_music;
 mod tests_net;
 #[cfg(test)]
 mod tests_overlay;
+#[cfg(test)]
+mod tests_picker;
 #[cfg(test)]
 mod tests_script;
 #[cfg(test)]

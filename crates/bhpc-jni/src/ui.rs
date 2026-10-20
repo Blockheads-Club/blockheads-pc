@@ -336,6 +336,7 @@ impl Vm {
     /// touch down and for the touch up (inside or outside); a text field gets the keyboard focus. Everything else
     /// returns `false`.
     pub fn ui_touch(&self, cpu: &mut bhpc_cpu::Cpu, phase: TouchPhase, x: f32, y: f32) -> Result<bool, Throw> {
+        self.note_user_input();
         // An alert's input dialog is modal.
         if let Some(taken) = self.dialog_touch(phase, x, y) {
             return Ok(taken);

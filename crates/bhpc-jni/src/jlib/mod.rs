@@ -8,9 +8,11 @@ mod android;
 mod apportable;
 pub(crate) mod desktop;
 mod graphics;
+mod intent;
 mod io;
 mod lang;
 mod net;
+mod services;
 mod util;
 
 pub(crate) fn void() -> JResult {
@@ -51,6 +53,8 @@ pub(crate) fn install(vm: &Vm) {
     apportable::install(vm);
     net::install(vm);
     desktop::install(vm);
+    intent::install(vm);
+    services::install(vm);
     crate::looper::install(vm);
 }
 
@@ -58,4 +62,7 @@ pub(crate) fn install(vm: &Vm) {
 pub(crate) use apportable::WIDGETS;
 pub(crate) use apportable::{activity, surface_view};
 pub(crate) use graphics::{bitmap_info, bitmap_info_in, face_in, face_of, Face, BOLD, ITALIC};
+pub use intent::{file_uri, uri_path, ActivityRequest, RESULT_CANCELED, RESULT_OK};
 pub(crate) use lang::thread_object;
+pub(crate) use services::Services;
+pub use services::{BILLING_UNAVAILABLE, GAMES_CHECK_MS, GAMES_NOTICE, SERVICE_MISSING, STORE_NOTICE};

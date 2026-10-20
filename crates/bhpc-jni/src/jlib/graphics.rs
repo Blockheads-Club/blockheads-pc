@@ -39,6 +39,42 @@ pub(crate) fn new_bitmap(vm: &Vm, w: i32, h: i32) -> Option<Obj> {
     Some(o)
 }
 
+/// The longest side a decoded picture keeps (larger ones are scaled down: the game crops a small square of it).
+pub(crate) const MAX_PICTURE_SIDE: u32 = 1024;
+
+/// Decode a PNG or JPEG file into premultiplied RGBA: `(width, height, pixels)`, scaled to fit
+/// [`MAX_PICTURE_SIDE`].
+pub(crate) fn decode_picture(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let (w, h) = (img.width(), img.height());
+    let img = if w.max(h) > MAX_PICTURE_SIDE {
+        let k = MAX_PICTURE_SIDE as f64 / w.max(h) as f64;
+        let size = |v: u32| ((v as f64 * k).round() as u32).max(1);
+        img.resize_exact(size(w), size(h), image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let mut px = rgba.into_raw();
+    for p in px.chunks_exact_mut(4) {
+        let a = u16::from(p[3]);
+        for c in &mut p[..3] {
+            *c = ((u16::from(*c) * a + 127) / 255) as u8;
+        }
+    }
+    Some((w, h, px))
+}
+
+/// A bitmap of the picture in the host file `path` (`None` when it cannot be read or decoded).
+pub(crate) fn bitmap_from_file(vm: &Vm, path: &str) -> Option<Obj> {
+    let (w, h, px) = decode_picture(&std::fs::read(path).ok()?)?;
+    let b = new_bitmap(vm, w as i32, h as i32)?;
+    let (_, _, ptr) = bitmap_info(vm, b)?;
+    vm.mem().write_bytes(ptr, &px).ok()?;
+    Some(b)
+}
+
 /// The decoded view of a typeface object.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Face {
@@ -101,6 +137,11 @@ pub(crate) fn install(vm: &Vm) {
             }
             void()
         });
+    vm.define("android/graphics/BitmapFactory").static_method(
+        "decodeFile",
+        "(Ljava/lang/String;)Landroid/graphics/Bitmap;",
+        |c| object(c.string(0).and_then(|p| bitmap_from_file(c.vm, &p))),
+    );
     vm.define("android/graphics/Typeface")
         .field("path", "Ljava/lang/String;")
         .field("name", "Ljava/lang/String;")
