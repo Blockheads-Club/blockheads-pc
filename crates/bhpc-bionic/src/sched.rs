@@ -943,8 +943,12 @@ mod tests {
         assert_eq!(create(&mut e, 0, nop, 0), 0);
         let t = handle(&e);
         assert_eq!(e.call("pthread_detach", &[t]).r0, 0);
-        assert_eq!(e.call("pthread_detach", &[t]).r0, errno::EINVAL);
-        assert_eq!(e.call("pthread_join", &[t, 0]).r0, errno::EINVAL);
+        // In parallel mode the thread may already have finished and been reaped (ESRCH).
+        let gone = if lock(&e.st).sched.parallel() { errno::ESRCH } else { errno::EINVAL };
+        for (f, args) in [("pthread_detach", vec![t]), ("pthread_join", vec![t, 0])] {
+            let r = e.call(f, &args).r0;
+            assert!(r == errno::EINVAL || r == gone, "{f}: {r}");
+        }
         pump(&mut e, FLAG);
         assert_eq!(e.call("pthread_join", &[t, 0]).r0, errno::ESRCH, "reaped");
         e.mem().write_u32(FLAG, 0).unwrap();
