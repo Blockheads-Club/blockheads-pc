@@ -980,6 +980,25 @@ fn untranslatable_instruction_requests_interpreter_fallback() {
     let mut cpu = setup();
     put(&cpu, CODE, &[0xF100_0000, BX_LR]); // cpsie-class encoding dynarmic wants interpreted
     assert_eq!(cpu.call(CODE, &[]), Err(Stop::Fallback { pc: CODE }));
+    // The other interpreted forms (no backend may see an Interpret terminal: arm64 has none), each after a
+    // translated instruction so the stop lands mid-block on the right pc.
+    let interpreted = [
+        0xE8D0_0003, // ldmia r0, {r0, r1}^ (user registers)
+        0xE8D0_8001, // ldmia r0, {r0, pc}^ (exception return)
+        0xE8C0_0003, // stmia r0, {r0, r1}^
+        0xF890_0A00, // rfeia r0
+        0xF8CD_0513, // srsia sp, #0x13
+    ];
+    for word in interpreted {
+        put(&cpu, CODE, &[0xE3A0_0000 | 0x10, word, BX_LR]); // mov r0, #16 ; <word>
+        cpu.clear_cache();
+        assert_eq!(cpu.call(CODE, &[]), Err(Stop::Fallback { pc: CODE + 4 }), "{word:#010x}");
+    }
+    // Neighbouring encodings stay translated: a plain stm/ldm and an unconditional pld.
+    // mov r0, #DATA ; stmia r0, {r1} ; pld [r0] ; ldmia r0, {r0}
+    put(&cpu, CODE, &[0xE3A0_0901, 0xE880_0002, 0xF5D0_F000, 0xE890_0001, BX_LR]);
+    cpu.clear_cache();
+    assert_eq!(cpu.call(CODE, &[0, 7]).unwrap().r0, 7);
 }
 
 fn counting_cpu() -> Box<Cpu> {

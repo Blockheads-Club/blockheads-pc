@@ -2,6 +2,7 @@
 // Thin C ABI wrapper around dynarmic's A32 JIT. Excluded from Rust coverage (C++ glue).
 #include "bhpc_shim.h"
 
+#include <cstring>
 #include <memory>
 
 #include <dynarmic/interface/A32/a32.h>
@@ -10,9 +11,37 @@
 #include <dynarmic/interface/optimization_flags.h>
 
 #include "dynarmic/frontend/A32/a32_ir_emitter.h"
+#include "dynarmic/frontend/A32/decoder/arm.h"
+#include "dynarmic/frontend/A32/translate/impl/a32_translate_impl.h"
 #include "dynarmic/ir/basic_block.h"
 
 namespace {
+
+// Pseudo exception the shim raises for the instructions dynarmic's translator would hand to the interpreter
+// (`Term::Interpret`). The arm64 backend has no Interpret terminal (it asserts), so the shim never lets one reach
+// a backend: the instruction ends the block with this exception, which ExceptionRaised turns into the same
+// InterpreterFallback callback the x64 backend makes. Outside dynarmic's Exception enum on purpose.
+constexpr auto kInterpretException = static_cast<Dynarmic::A32::Exception>(0x100);
+
+// ARM encodings dynarmic translates with InterpretThisInstruction() (privileged system instructions that user
+// code never executes): CPS, RFE, SRS and the user-register/exception-return LDM/STM forms.
+bool IsInterpretedArm(std::uint32_t word) {
+    const bool candidate = (word >> 28) == 0xF || ((word >> 25) & 7) == 4;  // unconditional space or LDM/STM
+    if (!candidate) {
+        return false;
+    }
+    const auto m = Dynarmic::A32::DecodeArm<Dynarmic::A32::TranslatorVisitor>(word);
+    if (!m) {
+        return false;
+    }
+    const char* name = m->get().GetName();
+    for (const char* n : {"CPS", "RFE", "SRS", "LDM (usr reg)", "LDM (exce ret)", "STM (usr reg)"}) {
+        if (std::strcmp(name, n) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 struct Callbacks final : Dynarmic::A32::UserCallbacks {
     bhpc_callbacks cb;
@@ -35,6 +64,10 @@ struct Callbacks final : Dynarmic::A32::UserCallbacks {
     void InterpreterFallback(std::uint32_t pc, std::size_t n) override { cb.interpreter_fallback(cb.user, pc, n); }
     void CallSVC(std::uint32_t swi) override { cb.svc(cb.user, swi); }
     void ExceptionRaised(std::uint32_t pc, Dynarmic::A32::Exception e) override {
+        if (e == kInterpretException) {
+            cb.interpreter_fallback(cb.user, pc, 1);
+            return;
+        }
         cb.exception(cb.user, pc, static_cast<std::uint32_t>(e));
     }
     // Two guards on the instruction about to be translated.
@@ -43,16 +76,21 @@ struct Callbacks final : Dynarmic::A32::UserCallbacks {
     //    reported where it happens. Running on would also be pathological: a run of conditional
     //    instructions becomes one huge block, and dynarmic's conditional bookkeeping rescans the whole
     //    block per instruction (quadratic time).
+    //  * An instruction dynarmic would interpret becomes the fallback pseudo exception (see kInterpretException),
+    //    with the PC left on it as the x64 Interpret terminal does.
     //  * Cap the length of an unconditional block for the same quadratic-time reason (huge straight-line
     //    static initialisers).
     bool PreCodeReadHook(bool is_thumb, std::uint32_t pc, Dynarmic::A32::IREmitter& ir) override {
         constexpr std::uint64_t kMaxBlockInstructions = 256;
-        if (!is_thumb && MemoryRead32(pc) == 0) {
-            ir.UpdateUpperLocationDescriptor();
-            ir.BranchWritePC(ir.Imm32(pc + 4));
-            ir.ExceptionRaised(Dynarmic::A32::Exception::UndefinedInstruction);
-            ir.SetTerm(Dynarmic::IR::Term::CheckHalt{Dynarmic::IR::Term::ReturnToDispatch{}});
-            return false;
+        if (!is_thumb) {
+            const std::uint32_t word = MemoryRead32(pc);
+            if (word == 0 || IsInterpretedArm(word)) {
+                ir.UpdateUpperLocationDescriptor();
+                ir.BranchWritePC(ir.Imm32(word == 0 ? pc + 4 : pc));
+                ir.ExceptionRaised(word == 0 ? Dynarmic::A32::Exception::UndefinedInstruction : kInterpretException);
+                ir.SetTerm(Dynarmic::IR::Term::CheckHalt{Dynarmic::IR::Term::ReturnToDispatch{}});
+                return false;
+            }
         }
         if (ir.block.CycleCount() >= kMaxBlockInstructions && ir.block.GetCondition() == Dynarmic::IR::Cond::AL) {
             ir.SetTerm(Dynarmic::IR::Term::LinkBlockFast{ir.current_location});

@@ -36,6 +36,7 @@ jobs:
           - { name: windows-arm64, os: windows-11-arm }
           - { name: macos-x86_64, os: macos-15-intel }
           - { name: macos-arm64, os: macos-14 }
+          - { name: macos15-arm64, os: macos-15 }
     steps:
       - uses: actions/checkout@v4
 
