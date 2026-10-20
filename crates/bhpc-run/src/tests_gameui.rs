@@ -177,18 +177,15 @@ fn unreadable_parts_of_a_world_fail_softly() {
 
 #[test]
 fn zoom_steps_and_levels() {
-    assert_eq!(zoom_step(1.0, true), 0.8);
-    assert_eq!(zoom_step(1.0, false), 1.25);
-    assert_eq!(zoom_step(0.55, true), ZOOM_MIN);
-    assert_eq!(zoom_step(3.9, false), ZOOM_MAX);
-    assert_eq!(zoom_step(f64::NAN, false), 1.25);
-    assert_eq!(zoom_step(-1.0, true), 0.8);
     assert_eq!(zoom_cycle(1.0), 2.0);
-    assert_eq!(zoom_cycle(2.0), 4.0);
-    assert_eq!(zoom_cycle(4.0), 0.5);
+    assert_eq!(zoom_cycle(2.0), 3.0);
+    assert_eq!(zoom_cycle(3.0), 0.5);
     assert_eq!(zoom_cycle(0.5), 1.0);
-    assert_eq!(zoom_cycle(1.3), 2.0, "from between levels: after the nearest");
+    assert_eq!(zoom_cycle(1.1), 2.0, "from where the zoom settles");
+    assert_eq!(zoom_cycle(1.5), 2.0, "a level outside the cycle: after the nearest");
+    assert_eq!(zoom_cycle(8.0), 0.5);
     assert_eq!(zoom_cycle(f64::NAN), 2.0);
+    assert!(ZOOM_LEVELS.iter().all(|l| SNAP_LEVELS.contains(l)));
 }
 
 #[test]

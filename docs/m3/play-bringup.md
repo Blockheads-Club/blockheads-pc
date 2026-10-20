@@ -97,4 +97,6 @@ World..." opens the world dialog).
   and moves the camera around the centre like a finger pinch. Notches during a step re-aim the running pinch. If the
   game ignores the pinch (a button under the cursor), the zoom is written directly. Menus keep the touch pinch.
   `BHPC_TRACE_ZOOM=1` logs each step; scripts have `wheel DY X Y`.
+* The controller's L1/R1 (one level out/in) and Y (cycle 1, 2, 3, 0.5) take the same path, centred on the
+  controller cursor (the middle of the picture while it is hidden).
 * Before a blockhead is warped in, the camera stays on the portal, so the zoom happens around the screen centre there.

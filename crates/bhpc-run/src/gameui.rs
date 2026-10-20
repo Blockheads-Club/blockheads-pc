@@ -14,7 +14,8 @@
 //! * **Cursor grid**: the world's tap matrices (`World.tapModelviewMatrix`, `tapProjectionMatrix`, `tapViewport`)
 //!   give the tile grid on screen ([`bhpc_input::Grid`]).
 //! * **Zoom**: `GameView.pinchScale` (a double, 1 = normal, smaller is closer) is what the game's pinch gesture
-//!   changes; it is written directly, within the game's own limits.
+//!   changes. The wheel and the controller step through the game's own levels ([`SNAP_LEVELS`]) with short pinches
+//!   of the game's handler ([`WheelAnim`], [`pinch_args`]); the value is written directly only as a fallback.
 //! * **Pause**: `-[World pauseButtonTapped]` / `-[World pauseResumeButtonTapped]`, the pause button's own actions,
 //!   chosen by whether the `PauseUI` shows (`GameUIView.displayed`).
 //!
@@ -89,21 +90,6 @@ impl Ivars {
             dpad_right,
         })
     }
-}
-
-/// Closest zoom (`GameView.pinchScale`) the game allows (its pinch gesture stops there in a normal world).
-pub const ZOOM_MIN: f64 = 0.5;
-/// Farthest zoom the controller goes to.
-pub const ZOOM_MAX: f64 = 4.0;
-/// One shoulder-button step.
-pub const ZOOM_STEP: f64 = 1.25;
-/// The levels the cycle button goes through: normal, far, farther, close.
-pub const ZOOM_LEVELS: [f64; 4] = [1.0, 2.0, 4.0, 0.5];
-
-/// The zoom one step closer (`closer`) or farther from `z`, inside the limits.
-pub fn zoom_step(z: f64, closer: bool) -> f64 {
-    let z = if z.is_finite() && z > 0.0 { z } else { 1.0 };
-    (if closer { z / ZOOM_STEP } else { z * ZOOM_STEP }).clamp(ZOOM_MIN, ZOOM_MAX)
 }
 
 /// The zoom levels the game itself settles on (`-[GameView update:accurateDT:]`): when no pinch is in progress it
@@ -187,8 +173,14 @@ pub fn pinch_args(view: u32, sel: u32, state: u32, factor: f32, centre: (f32, f3
     [view, sel, factor.to_bits(), f32::NAN.to_bits(), state, centre.0.to_bits(), centre.1.to_bits(), 2]
 }
 
-/// The next level of [`ZOOM_LEVELS`] after `z` (from a zoom between levels: the one after the nearest).
+/// The levels the controller's cycle button goes through: normal, far, farther, close. All are levels of the game
+/// itself ([`SNAP_LEVELS`]), so none springs back; 1.5 is left to the shoulder buttons and 8 (a tiny picture) out.
+pub const ZOOM_LEVELS: [f64; 4] = [1.0, 2.0, 3.0, 0.5];
+
+/// The next level of [`ZOOM_LEVELS`] after the one `z` settles on (from a level outside the cycle: the one after the
+/// nearest).
 pub fn zoom_cycle(z: f64) -> f64 {
+    let z = SNAP_LEVELS[snap_level(z)];
     let nearest =
         ZOOM_LEVELS.iter().enumerate().min_by(|a, b| (a.1 - z).abs().total_cmp(&(b.1 - z).abs())).map_or(0, |(i, _)| i);
     ZOOM_LEVELS[(nearest + 1) % ZOOM_LEVELS.len()]

@@ -1126,10 +1126,14 @@ impl UiThread {
         c: &mut Cpu,
         actions: &[HostAction],
         content: (f32, f32),
+        pad_cursor: Option<(f32, f32)>,
         now_ms: i64,
         wheel: &mut Option<crate::gameui::WheelAnim>,
     ) {
-        use crate::gameui::{message, view_point, wheel_target, zoom_cycle, zoom_step, WheelAnim, PINCH_BEGAN};
+        use crate::gameui::{message, view_point, wheel_target, zoom_cycle, WheelAnim, PINCH_BEGAN};
+        // The controller zooms around its cursor (the middle of the picture while the cursor is hidden).
+        let pad_at = pad_cursor.unwrap_or((content.0 / 2.0, content.1 / 2.0));
+        let pad_at = (pad_at.0.round() as i32, pad_at.1.round() as i32);
         for a in actions {
             let Some(g) = &self.game else {
                 if *a == HostAction::ToggleGameButtons {
@@ -1144,20 +1148,17 @@ impl UiThread {
                     eprintln!("[play] game buttons {}", if hidden { "hidden" } else { "shown" });
                     self.say(message(hidden));
                 }
-                HostAction::ZoomIn | HostAction::ZoomOut | HostAction::ZoomCycle => {
+                HostAction::ZoomIn | HostAction::ZoomOut | HostAction::ZoomCycle | HostAction::WheelZoom { .. } => {
                     let Some(z) = g.ui.zoom(&mem) else { continue };
-                    let to = match a {
-                        HostAction::ZoomIn => zoom_step(z, true),
-                        HostAction::ZoomOut => zoom_step(z, false),
-                        _ => zoom_cycle(z),
+                    // A running step counts from where it is heading, so quick presses and notches add up.
+                    let from = wheel.as_ref().map_or(z, |a| a.to);
+                    let (to, at) = match *a {
+                        HostAction::ZoomIn => (wheel_target(from, 1), pad_at),
+                        HostAction::ZoomOut => (wheel_target(from, -1), pad_at),
+                        HostAction::WheelZoom { steps, at } => (wheel_target(from, steps), at),
+                        _ => (zoom_cycle(from), pad_at),
                     };
-                    g.ui.set_zoom(&mem, to);
-                }
-                HostAction::WheelZoom { steps, at } => {
-                    let Some(z) = g.ui.zoom(&mem) else { continue };
-                    // A running step counts from where it is heading, so quick notches add up.
-                    let to = wheel_target(wheel.as_ref().map_or(z, |a| a.to), *steps);
-                    let centre = g.ui.view_size(&mem).and_then(|v| view_point(*at, content, v));
+                    let centre = g.ui.view_size(&mem).and_then(|v| view_point(at, content, v));
                     if let Some(a) = wheel.as_mut() {
                         // The pinch is still on: aim it at the new level from where it is now.
                         (a.from, a.to, a.start_ms) = (z, to, now_ms);
@@ -1170,7 +1171,7 @@ impl UiThread {
                         g.ui.set_zoom(&mem, to);
                     }
                     if std::env::var_os("BHPC_TRACE_ZOOM").is_some() {
-                        eprintln!("[zoom] wheel {steps:+} at {at:?} {centre:?}: {z:.4} -> {to}");
+                        eprintln!("[zoom] {a:?} at {at:?} {centre:?}: {z:.4} -> {to}");
                     }
                 }
                 HostAction::Pause => {
@@ -1414,7 +1415,7 @@ impl UiThread {
                 flags.toggle_fullscreen.store(true, Ordering::SeqCst);
             }
             let content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
-            self.game_actions(c, &actions, content, now, &mut wheel);
+            self.game_actions(c, &actions, content, mapper.pad().cursor(), now, &mut wheel);
             self.wheel_frame(c, now, &mut wheel);
             {
                 let mut v = flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner);
