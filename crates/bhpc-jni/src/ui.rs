@@ -245,7 +245,9 @@ impl Vm {
                 return Some(h);
             }
         }
-        matches!(info.kind.as_str(), "Button" | "TextField" | "TextView").then_some(v).filter(|_| info.enabled && inside)
+        matches!(info.kind.as_str(), "Button" | "TextField" | "TextView")
+            .then_some(v)
+            .filter(|_| info.enabled && inside)
     }
 
     /// The topmost enabled control (button, text field) under window position `(x, y)`.
