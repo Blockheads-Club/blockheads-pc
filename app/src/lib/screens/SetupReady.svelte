@@ -19,9 +19,9 @@
       : []
   );
   const dups = $derived(d ? conflicts(d.keys) : []);
-  /** The on-screen control settings that are not the default. */
+  /** The on-screen control and controller settings that are not the default. */
   const onScreen = $derived(
-    d?.show_dpad ? t('ready.dpadShown') : ''
+    [...(d?.show_dpad ? [t('ready.dpadShown')] : []), ...(d?.pad_tile_cursor ? [t('ready.padTiles')] : [])].join(' · ')
   );
   const gfx = $derived(
     d

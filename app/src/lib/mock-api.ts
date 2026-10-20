@@ -12,6 +12,7 @@ export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
     keys: { ...KEYS },
     controller: true,
     show_dpad: false,
+    pad_tile_cursor: false,
     ...over
   };
 }

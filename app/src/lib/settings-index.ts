@@ -68,6 +68,7 @@ export const SETTINGS: SettingEntry[] = [
   })),
   { id: 'set-ctl-dpad', page: 'controls', titleKey: 'osc.dpad', hintKey: 'osc.dpadHint', keywords: ['dpad', 'd-pad', 'arrows', 'arrow pad', 'joystick', 'on-screen', 'touch controls', 'yön tuşları', 'ok tuşları', 'ekran', 'dokunmatik'] },
   { id: 'set-ctl-pad', page: 'controls', titleKey: 'pad.enable', hintKey: 'pad.enableHint', keywords: [...PAD_WORDS, 'on', 'off', 'aç', 'kapat'] },
+  { id: 'set-ctl-pad-tiles', page: 'controls', titleKey: 'pad.tiles', hintKey: 'pad.tilesHint', keywords: [...PAD_WORDS, 'tile', 'tiles', 'grid', 'cursor', 'snap', 'step', 'block', 'kare', 'ızgara', 'imleç', 'blok', 'adım'], fallback: 'set-ctl-pad' },
   { id: 'set-ctl-pad-map', page: 'controls', titleKey: 'pad.mapTitle', hintKey: 'pad.mapHint', keywords: [...PAD_WORDS, 'buttons', 'layout', 'düğmeler', 'düzen'], fallback: 'set-ctl-pad' },
 
   { id: 'set-snd-sound', page: 'audio', titleKey: 'set.sound', hintKey: 'set.soundHint', keywords: ['sound', 'volume', 'music', 'effects', 'audio', 'ses', 'müzik', 'efekt', 'ses düzeyi'] },

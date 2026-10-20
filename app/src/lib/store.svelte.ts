@@ -293,6 +293,10 @@ export class AppStore {
     await this.patchConfig((c) => (c.show_dpad = on));
   }
 
+  async setPadTileCursor(on: boolean) {
+    await this.patchConfig((c) => (c.pad_tile_cursor = on));
+  }
+
   async setBinding(action: ActionId, text: string): Promise<boolean> {
     const cfg = this.cfg;
     if (!cfg) return false;

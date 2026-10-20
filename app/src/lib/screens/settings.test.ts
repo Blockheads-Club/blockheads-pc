@@ -370,7 +370,7 @@ describe('Settings > controls', () => {
     expect(screen.queryByRole('table', { name: 'Controller buttons and what they do' })).toBeNull();
     await fireEvent.click(sw);
     await waitFor(() => expect(store.config?.controller).toBe(true));
-    expect(searchSettings('gamepad').map((s) => s.id)).toEqual(['set-ctl-pad', 'set-ctl-pad-map']);
+    expect(searchSettings('gamepad').map((s) => s.id)).toEqual(['set-ctl-pad', 'set-ctl-pad-tiles', 'set-ctl-pad-map']);
     expect(searchSettings('gizle')[0].id).toBe('set-ctl-hide_ui');
   });
 
@@ -386,6 +386,27 @@ describe('Settings > controls', () => {
     await waitFor(() => expect(store.config?.show_dpad).toBe(true));
     expect(searchSettings('d-pad')[0].id).toBe('set-ctl-dpad');
     expect(searchSettings('yön tuşları')[0].id).toBe('set-ctl-dpad');
+  });
+
+  it('switches the tile-by-tile controller cursor, off for older configurations', async () => {
+    const old = makeConfig();
+    delete (old as Partial<typeof old>).pad_tile_cursor;
+    store.config = old;
+    render(SettingsControls);
+    const tiles = screen.getByRole('switch', { name: 'Move the controller cursor tile by tile' });
+    expect(tiles).not.toBeChecked();
+    await fireEvent.click(tiles);
+    await waitFor(() => expect(store.config?.pad_tile_cursor).toBe(true));
+    expect(tiles).toBeChecked();
+    await fireEvent.click(tiles);
+    await waitFor(() => expect(store.config?.pad_tile_cursor).toBe(false));
+    for (const q of ['tile', 'grid', 'cursor', 'kare', 'ızgara', 'imleç']) {
+      expect(searchSettings(q).map((s) => s.id), q).toContain('set-ctl-pad-tiles');
+    }
+    // Hidden with controllers off: search shows the controller switch instead.
+    await fireEvent.click(screen.getByRole('switch', { name: 'Use a game controller' }));
+    await waitFor(() => expect(store.config?.controller).toBe(false));
+    expect(screen.queryByRole('switch', { name: 'Move the controller cursor tile by tile' })).toBeNull();
   });
 
   it('assumes a controller for configurations from before the setting', () => {

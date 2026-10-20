@@ -9,6 +9,8 @@
   /** The fixed controller layout (`crates/bhpc-input/src/pad.rs`), in table order. */
   const PAD = ['leftStick', 'rightStick', 'dpad', 'a', 'b', 'x', 'y', 'lbrb', 'start', 'r3'] as const;
   const on = $derived(store.cfg?.controller ?? true);
+  /** Older configurations take the default (off). */
+  const tiles = $derived(store.cfg?.pad_tile_cursor ?? false);
 </script>
 
 {#if store.cfg}
@@ -17,6 +19,9 @@
       <Toggle label={t('pad.enable')} hideLabel checked={on} onchange={(v) => store.setController(v)} />
     </Row>
     {#if on}
+      <Row id="set-ctl-pad-tiles" title={t('pad.tiles')} hint={t('pad.tilesHint')}>
+        <Toggle label={t('pad.tiles')} hideLabel checked={tiles} onchange={(v) => store.setPadTileCursor(v)} />
+      </Row>
       <div id="set-ctl-pad-map" class="map">
         <p class="t">{t('pad.mapTitle')}</p>
         <p class="hint">{t('pad.mapHint')}</p>

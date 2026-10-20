@@ -483,6 +483,15 @@ describe('Ready step', () => {
     store.draft = makeConfig({ show_dpad: true });
     render(SetupReady);
     expect(screen.getByText('Game’s D-pad shown')).toBeVisible();
+    expect(screen.queryByText(/tile by tile/)).toBeNull();
+    cleanup();
+    store.draft = makeConfig({ pad_tile_cursor: true });
+    render(SetupReady);
+    expect(screen.getByText('Controller cursor moves tile by tile')).toBeVisible();
+    cleanup();
+    store.draft = makeConfig({ show_dpad: true, pad_tile_cursor: true });
+    render(SetupReady);
+    expect(screen.getByText('Game’s D-pad shown · Controller cursor moves tile by tile')).toBeVisible();
   });
 
   it('rail: finished steps are buttons, the rest are not', async () => {
