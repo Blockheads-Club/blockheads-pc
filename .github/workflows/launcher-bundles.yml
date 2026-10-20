@@ -160,7 +160,8 @@ jobs:
           TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          ls -l bundles
+          # The artifacts keep their bundle/<format>/ folders: upload the files inside.
+          find bundles -type f | sort
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
             while IFS= read -r a; do gh release delete-asset "$TAG" "$a" -R "$GITHUB_REPOSITORY" --yes; done
-          gh release upload "$TAG" bundles/* -R "$GITHUB_REPOSITORY" --clobber
+          find bundles -type f -print0 | xargs -0 gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber
