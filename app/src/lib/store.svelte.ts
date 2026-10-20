@@ -418,6 +418,8 @@ export class AppStore {
     }
     try {
       await api.gameStart();
+      // The loading screen starts at 0 %, not where the last session ended, until the first poll comes back.
+      this.game = { ...this.game, state: 'starting', progress: null };
       this.screen = 'playing';
       this.dialog = null;
       await this.poll();

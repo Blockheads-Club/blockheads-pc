@@ -6,6 +6,7 @@ vi.mock('./api', () => ({
   win: new Proxy({}, { get: (_t, k: string) => mock.win[k] })
 }));
 
+import type { BootProgress } from './types';
 import { makeApi, makeBoot, makeConfig, makeReport, makeSnap, makeWin, PREFS } from './mock-api';
 import { MAX_LOG, store } from './store.svelte';
 import { resetStore } from './test-utils';
@@ -415,8 +416,15 @@ describe('import', () => {
 
 describe('playing', () => {
   it('starts the game and shows the playing screen', async () => {
-    mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'starting', running_secs: 0 }));
+    // Play again after a finished session: its 100 % is dropped before the first poll answers.
+    store.game = makeSnap({ state: 'stopped', progress: { ...makeSnap().progress, ready: true, percent: 100 } as BootProgress });
+    let seen: BootProgress | null | undefined;
+    mock.api.gamePoll = vi.fn(async () => {
+      seen = store.game.progress;
+      return makeSnap({ state: 'starting', running_secs: 0 });
+    });
     await store.play();
+    expect(seen).toBeNull();
     expect(mock.api.gameStart).toHaveBeenCalled();
     expect(store.screen).toBe('playing');
     expect(store.active).toBe(true);
