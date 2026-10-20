@@ -9,6 +9,7 @@ mod apportable;
 mod graphics;
 mod io;
 mod lang;
+mod net;
 mod util;
 
 pub(crate) fn void() -> JResult {
@@ -47,6 +48,7 @@ pub(crate) fn install(vm: &Vm) {
     android::install(vm);
     graphics::install(vm);
     apportable::install(vm);
+    net::install(vm);
     crate::looper::install(vm);
 }
 

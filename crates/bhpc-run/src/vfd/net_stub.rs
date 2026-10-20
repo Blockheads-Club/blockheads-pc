@@ -20,6 +20,11 @@ impl HostSock {
     }
 }
 
+/// No guest sockets here, so no LAN play either.
+pub fn host_has_lan() -> bool {
+    false
+}
+
 impl Vfd {
     pub(super) fn install_net(&self, _cpu: &Cpu, _st: &Shared) {}
 

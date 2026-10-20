@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 #[cfg_attr(not(unix), path = "vfd/net_stub.rs")]
 mod net;
+pub use net::host_has_lan;
 pub(crate) mod timerfd;
 
 /// First descriptor number handed out.

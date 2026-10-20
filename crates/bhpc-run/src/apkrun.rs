@@ -374,6 +374,7 @@ impl Session {
         cpu.clear_cache();
         report(Phase::Libraries, 1, 1);
         let mut platform = bhpc_jni::Platform::for_guest(&storage.guest);
+        platform.lan = crate::vfd::host_has_lan();
         if let Some((w, h)) = cfg.screen {
             (platform.screen_width, platform.screen_height) = (w, h);
         }

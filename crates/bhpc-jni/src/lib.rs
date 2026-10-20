@@ -55,6 +55,8 @@ mod tests_looper;
 #[cfg(test)]
 mod tests_music;
 #[cfg(test)]
+mod tests_net;
+#[cfg(test)]
 mod tests_render;
 #[cfg(test)]
 mod tests_startup;

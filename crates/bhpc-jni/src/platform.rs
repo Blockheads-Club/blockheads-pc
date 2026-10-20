@@ -214,6 +214,9 @@ pub struct Platform {
     pub obb_dir: String,
     /// `Context.getPackageCodePath()` (the APK).
     pub apk_path: String,
+    /// The host is on a local network (a non-loopback IPv4 interface is up): `Reachability` then reports
+    /// WiFi and the game offers LAN hosting and joining.
+    pub lan: bool,
 }
 
 impl Default for Platform {
@@ -240,6 +243,7 @@ impl Default for Platform {
             external_dir: format!("{base}/sdcard"),
             obb_dir: format!("{base}/obb"),
             apk_path: String::new(),
+            lan: true,
         }
     }
 }

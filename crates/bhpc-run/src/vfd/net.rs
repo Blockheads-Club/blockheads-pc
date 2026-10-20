@@ -836,6 +836,36 @@ fn sockaddr_bytes(ip: IpAddr, port: u16) -> Vec<u8> {
     v
 }
 
+/// True when the host has an IPv4 interface that is up and not loopback (what a phone on WiFi has).
+pub fn host_has_lan() -> bool {
+    lan_in(&host_ipv4())
+}
+
+/// Whether one of `(flags, address)` is an up, non-loopback interface.
+fn lan_in(list: &[(u32, Ipv4Addr)]) -> bool {
+    let (up, lo) = (libc::IFF_UP as u32, libc::IFF_LOOPBACK as u32);
+    list.iter().any(|(flags, ip)| flags & up != 0 && flags & lo == 0 && !ip.is_loopback())
+}
+
+/// The host's IPv4 interface addresses as `(flags, address)`; empty when they cannot be listed.
+fn host_ipv4() -> Vec<(u32, Ipv4Addr)> {
+    let mut out = Vec::new();
+    let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
+    let ok = unsafe { libc::getifaddrs(&mut list) } == 0;
+    let mut p = if ok { list } else { std::ptr::null_mut() };
+    while let Some(ifa) = unsafe { p.as_ref() } {
+        let sa = ifa.ifa_addr as *const libc::sockaddr_in;
+        if let Some(sin) = unsafe { sa.as_ref() }.filter(|a| i32::from(a.sin_family) == libc::AF_INET) {
+            out.push((ifa.ifa_flags, Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr))));
+        }
+        p = ifa.ifa_next;
+    }
+    if ok {
+        unsafe { libc::freeifaddrs(list) };
+    }
+    out
+}
+
 type NetFn = fn(&Vfd, &mut Cpu, &Shared);
 
 const TABLE: &[(&str, NetFn)] = &[
@@ -869,10 +899,10 @@ impl Vfd {
         for &(name, f) in TABLE {
             let (v, s) = (self.clone(), st.clone());
             let thunk = move |c: &mut Cpu| {
-                let args = [c.reg(0), c.reg(1), c.reg(2), c.reg(3)];
+                let (args, lr) = ([c.reg(0), c.reg(1), c.reg(2), c.reg(3)], c.reg(14));
                 f(&v, c, &s);
                 if v.t().trace_net {
-                    eprintln!("[net] {name}({args:x?}) = {} errno {}", c.reg(0) as i32, get_errno(c, &s));
+                    eprintln!("[net] {name}({args:x?}) = {} errno {} from {lr:#x}", c.reg(0) as i32, get_errno(c, &s));
                 }
             };
             let _ = cpu.register_shared_thunk(name, Arc::new(thunk));
@@ -890,5 +920,24 @@ impl Vfd {
                 }),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod lan_tests {
+    use super::*;
+
+    #[test]
+    fn lan_needs_an_up_non_loopback_ipv4_interface() {
+        let (up, lo) = (libc::IFF_UP as u32, libc::IFF_LOOPBACK as u32);
+        let wlan = Ipv4Addr::new(192, 168, 1, 2);
+        assert!(lan_in(&[(up | lo, Ipv4Addr::LOCALHOST), (up, wlan)]));
+        assert!(!lan_in(&[(up | lo, Ipv4Addr::LOCALHOST)]));
+        assert!(!lan_in(&[(0, wlan)]));
+        assert!(!lan_in(&[(up, Ipv4Addr::LOCALHOST)]));
+        assert!(!lan_in(&[]));
+        // The host always lists its loopback interface.
+        assert!(host_ipv4().iter().any(|(_, ip)| ip.is_loopback()));
+        assert_eq!(host_has_lan(), lan_in(&host_ipv4()));
     }
 }

@@ -64,3 +64,25 @@ SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=offscreen bhpc-run --apk <1.7.4 apk> --scr
 
 The server logs `Player Connected TESTER | 127.0.0.1 | <id>` and the client shows the in-world HUD with the portal at the
 spawn point.
+
+The same flow works against the machine's LAN address (`Server IP/URL` = `192.168.68.68`, port 15160): the client
+exchanges ENet datagrams with the server and spawns in its world. For this Android build that *is* LAN play.
+
+## LAN: Reachability, and why there are no LAN buttons
+
+- `com.apportable.net.Reachability` (`bhpc-jni/src/jlib/net.rs`) now behaves like Android's connectivity receiver:
+  `start()` posts `didStart`, `stateChanged(TYPE_WIFI = 1, 0, 4)`, `stateChangeFinished` to the main looper.
+  `-[AndroidReachability stateChange:from:to:]` (libApplication) maps state 4 on type 1/7/8/9 to
+  `Reachable | IsDirect`, type 0/2..6 to `Reachable | IsWWAN`, state 2 to nothing. `Platform::lan` (set by
+  `bhpc-run` from `getifaddrs`: an up, non-loopback IPv4 interface) picks connected or disconnected.
+  The game log changes from `Reachability Flag Status: WR -------` (cellular) to `-R -------`.
+- The LAN host/join buttons still do not appear, and cannot: in libApplication 1.7.x for Android they are dead code.
+  `JoinWorldUI.advancedLocalNetworkButton` and `LoadWorldUI.hostMultiButton` are only read (layout, touch
+  forwarding, release), never allocated; `-advancedButton:` builds only Cancel / Online IP/Port / Search, and the
+  selectors `advancedLocalNetworkButton:` and `hostMultiButton:` have no selector reference anywhere in the
+  library (only their method-list entries). `hostMultiButton:` is the only code that creates the
+  "HOST LOCAL NETWORK..." button (whose action `hostMultiLANButton:` leads to `hostNowButton:` ->
+  `hostLANGameInCurrentWorld`), so that chain is unreachable without patching the game.
+- Hence no Bonjour (mDNS) discovery is needed for this build. The 4 `socket(AF_UNIX, SOCK_STREAM)` calls per run
+  (`[net] ... errno 97 from 0x...`; the trace now names the caller's return address) are not on the LAN path; the
+  game also asks `reachabilityWithHostName:` for `cloud.theblockheads.net`, which simply no longer resolves.
