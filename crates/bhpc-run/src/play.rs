@@ -1035,8 +1035,10 @@ fn boot(
         gles.set_frame_hook(Arc::new(move |c| q.drain(c)));
     }
     kick_main_queue(&mut sess, &main_q);
+    let marker = main_marker(&mut sess);
     let ui = UiThread {
         main: Some(main_q),
+        marker,
         gles: gles.clone(),
         game,
         screen_modes,
@@ -1097,6 +1099,8 @@ fn boot(
 /// What the Android UI thread needs (moved into its start routine).
 struct UiThread {
     main: Option<Arc<crate::mainq::MainQueue>>,
+    /// Tells when the main run loop has run everything queued before it (see [`main_marker`]).
+    marker: Option<MainMarker>,
     /// Presents host frames while a dialog waits and the game draws nothing.
     gles: Gles,
     /// The game's on-screen controls (hide, walk, zoom, pause), when the hooks went in.
@@ -1192,7 +1196,11 @@ impl UiThread {
             },
             ..InputConfig::default()
         });
-        Ok(self.ui_loop(c, &mut mapper, rx.as_ref()))
+        let why = self.ui_loop(c, &mut mapper, rx.as_ref());
+        if CLOSES.contains(&why.as_str()) {
+            self.close_app(c);
+        }
+        Ok(why)
     }
 
     /// The host actions that steer the game's own controls: hide its buttons, zoom, pause.
@@ -1381,6 +1389,56 @@ impl UiThread {
             Err(Throw::Exc(e)) => {
                 eprintln!("[play] layout: Java exception {}", vm.exception_message(e).unwrap_or_default());
             }
+        }
+        Ok(())
+    }
+
+    /// Close the app the way Android closes an activity, so the game saves its preferences and the world: resign
+    /// active, `onPause`, background, `onStop`, then terminate and `onDestroy`. The lifecycle natives queue their work
+    /// on the main run loop; after each half the UI thread keeps turning until the main thread has run it (a
+    /// marker queued behind it), plus a moment for savers on other threads, at most a few seconds. The game's
+    /// `onDestroy` calls `exit(0)`, which ends the run.
+    fn close_app(&self, c: &mut Cpu) {
+        eprintln!("[play] closing: the game goes to the background and terminates");
+        let begun = Instant::now();
+        for half in [
+            &[Stage::WillResignActive, Stage::ActivityPause, Stage::DidEnterBackground, Stage::ActivityStop][..],
+            &[Stage::WillTerminate, Stage::ActivityDestroy][..],
+        ] {
+            for s in half {
+                // `onDestroy` ends the process itself (`exit(0)`), after everything else ran.
+                if let Err((e, _)) = run_stage(c, &self.vm, *s) {
+                    eprintln!("[play] closing: {e} ({} ms)", begun.elapsed().as_millis());
+                    return;
+                }
+            }
+            if let Err(e) = self.settle(c) {
+                eprintln!("[play] closing: {e}");
+                return;
+            }
+        }
+        eprintln!("[play] closed in {} ms", begun.elapsed().as_millis());
+    }
+
+    /// Turn until the main run loop has run what is queued now (at most [`SETTLE_MAX`]), then [`SETTLE_GRACE`] more.
+    fn settle(&self, c: &mut Cpu) -> Result<(), String> {
+        let begun = Instant::now();
+        let reached = self.marker.as_ref().map(|m| m.queue(c));
+        while begun.elapsed() < SETTLE_MAX {
+            if reached.as_ref().is_some_and(|r| r()) {
+                break;
+            }
+            if lock(&self.st).sched.failure().is_some() {
+                return Err("a guest thread failed".into());
+            }
+            self.turn(c)?;
+        }
+        let ran = begun.elapsed();
+        if reached.is_none_or(|r| !r()) {
+            eprintln!("[play] closing: the main thread did not get to it in {} ms", ran.as_millis());
+        }
+        while begun.elapsed() < ran + SETTLE_GRACE {
+            self.turn(c)?;
         }
         Ok(())
     }
@@ -1602,8 +1660,49 @@ impl UiThread {
     }
 }
 
+/// How the UI loop ends when the user closes the game (the window, the launcher's `quit` or end of input, a script's
+/// `quit`): these run [`UiThread::close_app`] first.
+const CLOSES: [&str; 3] = ["window closed", "script quit", "quit requested"];
 /// How often a dialog is presented while the game draws no frames.
 const HOST_FRAME: Duration = Duration::from_millis(100);
+/// The longest wait for the main run loop while closing, per half of the sequence.
+const SETTLE_MAX: Duration = Duration::from_secs(4);
+/// Extra time after the main run loop got there (savers on other threads).
+const SETTLE_GRACE: Duration = Duration::from_millis(400);
+
+/// A job for the main run loop that only counts its runs: `dispatch_async_f(&_dispatch_main_q, 0, marker)`. The main
+/// queue runs in order, so once it ran, the main thread has run everything queued before it.
+struct MainMarker {
+    async_f: u32,
+    main_q: u32,
+    thunk: u32,
+    runs: Arc<AtomicU64>,
+}
+
+impl MainMarker {
+    /// Queue the marker; the result tells whether it has run.
+    fn queue(&self, c: &mut Cpu) -> impl Fn() -> bool {
+        let (runs, want) = (self.runs.clone(), self.runs.load(Ordering::SeqCst) + 1);
+        c.set_ticks(FOREVER);
+        if let Err(e) = c.call(self.async_f, &[self.main_q, 0, self.thunk]) {
+            eprintln!("[play] main queue marker: guest stopped: {e}");
+        }
+        move || runs.load(Ordering::SeqCst) >= want
+    }
+}
+
+fn main_marker(sess: &mut Session) -> Option<MainMarker> {
+    let export = |n: &str| sess.linker.modules().iter().find_map(|m| m.export(n));
+    let (async_f, main_q) = (export("dispatch_async_f")?, export("_dispatch_main_q")?);
+    let runs = Arc::new(AtomicU64::new(0));
+    let r = runs.clone();
+    let f: bhpc_cpu::SharedThunkFn = Arc::new(move |_: &mut Cpu| {
+        r.fetch_add(1, Ordering::SeqCst);
+    });
+    let thunk = sess.cpu.register_shared_thunk("bhpc:main_queue_marker", f).ok()?;
+    Some(MainMarker { async_f, main_q, thunk, runs })
+}
+
 /// While the main thread presents no frames (start-up), a job waiting in `queue` for 20 ms asks libdispatch to run
 /// the queue from the main run loop: `dispatch_async_f(&_dispatch_main_q, 0, drain)`. Without libdispatch the poster
 /// keeps waiting and finally runs the job itself, as before.

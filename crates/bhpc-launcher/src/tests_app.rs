@@ -379,6 +379,26 @@ mod unix {
     }
 
     #[test]
+    fn stop_asks_an_in_window_game_to_quit_first() {
+        let mut s = Session::new(Duration::from_secs(3600));
+        // It reads `quit` and ends by itself: stopped, not killed.
+        let (prog, mut args) = sh("read l; [ \"$l\" = quit ] && exit 0; exit 5");
+        args.push("--embed".into());
+        s.start(&prog, &args, &[]).unwrap();
+        s.stop();
+        let snap = s.poll(0, true);
+        assert_eq!((snap.state, snap.exit_code, snap.signal), (GameState::Stopped, Some(0), None));
+        // One that does not end in time is killed.
+        s.set_quit_grace(Duration::from_millis(100));
+        let (prog, mut args) = sh("trap '' TERM; exec sleep 30");
+        args.push("--embed".into());
+        s.start(&prog, &args, &[]).unwrap();
+        s.stop();
+        let snap = s.poll(0, true);
+        assert_eq!((snap.state, snap.signal), (GameState::Stopped, Some(9)));
+    }
+
+    #[test]
     fn progress_lines_drive_the_state_and_leave_the_log() {
         let dir = tempfile::tempdir().unwrap();
         let hist = crate::progress::history_path(dir.path());

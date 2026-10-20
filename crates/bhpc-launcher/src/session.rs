@@ -118,6 +118,8 @@ struct Running {
     readers: Vec<JoinHandle<()>>,
     /// Lines for the game's stdin (see [`Session::input`]).
     input: Option<Sender<String>>,
+    /// Started with `--embed`: the game reads its stdin and quits on `quit`.
+    embedded: bool,
     stopping: bool,
     /// The step durations of this start went into the history.
     learned: bool,
@@ -143,10 +145,15 @@ pub struct Session {
     grace: Duration,
     /// Called with the text of every `@copy` line of the game (see [`crate::embed::copy_line`]).
     on_copy: CopyHandler,
+    /// How long an in-window game asked to quit may take to save and end (see [`Session::stop`]).
+    quit_grace: Duration,
 }
 
 /// What the launcher does with text the game copied.
 pub type CopyHandler = Arc<Mutex<Option<Box<dyn Fn(String) + Send>>>>;
+
+/// How long [`Session::stop`] waits for an in-window game to close itself (it saves first: background, terminate).
+pub const QUIT_GRACE: Duration = Duration::from_secs(8);
 
 impl Default for Session {
     fn default() -> Self {
@@ -230,6 +237,7 @@ impl Session {
             stall: progress::STALL,
             grace,
             on_copy: Arc::default(),
+            quit_grace: QUIT_GRACE,
         }
     }
 
@@ -241,6 +249,11 @@ impl Session {
     /// Keeps the step durations of every start in this file and derives the next start's weights from it.
     pub fn set_history(&mut self, path: PathBuf) {
         self.history = Some(path);
+    }
+
+    /// How long [`Session::stop`] waits for an in-window game to quit by itself (default [`QUIT_GRACE`]).
+    pub fn set_quit_grace(&mut self, after: Duration) {
+        self.quit_grace = after;
     }
 
     /// How long a starting game may print no progress before it counts as stuck (default [`progress::STALL`]).
@@ -275,7 +288,8 @@ impl Session {
         );
         readers.extend(child.stderr.take().map(|s| pump(Box::new(s), self.log.clone(), None)));
         let input = child.stdin.take().map(|s| feed(Box::new(s)));
-        self.run = Some(Running { child, started, readers, input, stopping: false, learned: false });
+        let embedded = args.iter().any(|a| a == "--embed");
+        self.run = Some(Running { child, started, readers, input, embedded, stopping: false, learned: false });
         Ok(())
     }
 
@@ -286,11 +300,25 @@ impl Session {
         self.run.as_ref().and_then(|r| r.input.clone())
     }
 
-    /// Kills the game if it runs; the session then counts as stopped by the user.
+    /// Ends the game if it runs; the session then counts as stopped by the user. An in-window game is asked to
+    /// quit first (`quit`, then end of input), so it closes like its window would: it goes to the background and
+    /// terminates, which saves its settings and the world. It is killed if it is not gone after the grace time
+    /// (a game in its own window does not read its input and is killed at once).
     pub fn stop(&mut self) {
         self.refresh();
         if let Some(mut run) = self.run.take() {
             run.stopping = true;
+            if let Some(input) = run.input.take().filter(|_| run.embedded) {
+                // Dropping the sender ends the writer thread after this line, which closes the game's stdin.
+                let _ = input.send("quit".to_string());
+                let deadline = Instant::now() + self.quit_grace;
+                while Instant::now() < deadline {
+                    if let Ok(Some(status)) = run.child.try_wait() {
+                        return self.finish(run, status);
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
             self.kill(run);
         }
     }

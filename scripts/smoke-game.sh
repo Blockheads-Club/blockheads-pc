@@ -47,7 +47,7 @@ mkdir -p "$run/home" "$run/data" "$run/shots"
 # On a fresh data dir the game first asks for consent (a system alert, drawn as a host dialog: "Allow" is clicked),
 # then creates "My First World" by itself (the first-run flow has no world options, and it is already the cheapest
 # world creation: ~10 s). The script waits for the in-world welcome popup, enters the world, then pauses and exits
-# to the main menu. Times are ms after the first frame (`+N` = after
+# to the main menu; `quit` closes the game through its lifecycle (background, terminate). Times are ms after the first frame (`+N` = after
 # the previous step); `clicktext` waits for its text. Coordinates are for the default 1024x768 window.
 cat > "$run/smoke.script" << 'EOF'
 0     clicktext Allow
@@ -85,6 +85,7 @@ set -e
 took=$((SECONDS - start))
 
 if [[ $rc == 0 ]] && grep -q 'found "OK"' "$run/err.log" && grep -q 'mark menu' "$run/err.log" &&
+  grep -q 'closing: the game goes to the background' "$run/err.log" &&
   [[ -s "$run/shots/inworld.png" && -s "$run/shots/menu.png" ]]; then
   echo "smoke-game: OK, in the world after $(grep -o '[0-9]* ms: mark world' "$run/err.log" | cut -d' ' -f1) ms (${took} s total)"
   exit 0

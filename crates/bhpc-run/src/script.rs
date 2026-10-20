@@ -23,7 +23,7 @@
 //! +100  pad a 80                # press controller button `a` for 80 ms (default 80; `paddown a` / `padup a`)
 //! +100  stick right 0.5 -1      # tilt a stick (`left`/`right`) to x, y (-1..1); `stick right 0 0` centres it
 //! +100  wait                   # no-op, only moves the clock
-//! 60000 quit
+//! 60000 quit                   # close the game like the window's close button (background, terminate)
 //! ```
 use bhpc_app::{Event, Key, Mods, MouseButton};
 

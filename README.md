@@ -76,9 +76,11 @@ cargo build --release -p bhpc-run --features play
 ./target/release/bhpc-run --apk "$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk"
 ```
 
-The first start takes a few seconds to load the libraries. A consent dialog ("Enable multiplayer and free
-crystals?") is answered with its first button ("Allow") automatically; `--alert-choice N` picks another one.
-The window closes the run when you close it.
+The first start takes a few seconds to load the libraries. The game's system alerts (the consent question "Enable
+multiplayer and free crystals?", "Exit?", ...) are shown as dialogs: click a button, or use the arrow keys/Tab and
+Enter (Escape picks the negative button; controller: D-pad, A, B). `--auto-alerts` answers them with their first
+button instead (headless runs), `--alert-choice N` with button N. Closing the window lets the game save (it goes
+to the background and terminates) before the run ends.
 
 Useful flags (all optional):
 
