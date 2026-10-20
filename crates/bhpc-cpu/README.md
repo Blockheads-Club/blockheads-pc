@@ -51,10 +51,17 @@ unverified:
   tell. The first macOS-14 CI failure is most likely here (or in the Boost step).
 
 **Fastmem on macOS**: dynarmic's Mach exception handler runs `mig` and writes generated sources into
-the vendored (verbatim) tree. `cmake/CMakeLists.txt` pre-sets `MACH_EXC_DEFS_DIR` to NOTFOUND so the
-generic (no-op) handler is linked, and `CpuOptions::default()` turns fastmem off on macOS so faults go
-to the callbacks instead of crashing. Fastmem on macOS is therefore slower and untested; enabling it
-would need the Mach handler built out of tree (a vendored-code change).
+the vendored (verbatim) tree, so `cmake/CMakeLists.txt` keeps it out and compiles dynarmic's POSIX signal
+handler (`exception_handler_posix.cpp`, which handles Darwin's SIGSEGV/SIGBUS and ucontext on both archs) in
+place of the generic no-op one. Fastmem is on by default on every host. On 16 KiB host pages an unmapped guest
+page that shares a host page with a mapped one does not fault (see above).
+
+**Interpreter fallback**: dynarmic's arm64 backend has no `Term::Interpret` (it asserts "Interpret should never be
+emitted"). The shim's `PreCodeReadHook` ends the block before the instructions the translator would interpret
+(CPS, RFE, SRS, LDM/STM with `^`) with a pseudo exception that becomes the same `InterpreterFallback` callback as
+on x86_64, so no backend ever sees that terminal.
+
+**Unsafe float flags** (`fast_fp`) are x86_64-only in dynarmic; the arm64 backend ignores them and stays exact.
 
 **Windows fastmem** uses our own `shim/exception_handler_windows.cpp`, a vectored exception handler
 (x86_64 and arm64), which `cmake/CMakeLists.txt` builds into dynarmic in place of the vendored
