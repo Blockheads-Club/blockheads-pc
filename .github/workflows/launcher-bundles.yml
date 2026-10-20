@@ -112,6 +112,23 @@ jobs:
         shell: bash
         run: scripts/check-bundle.sh app/src-tauri/target/${{ matrix.target }}/release/bundle
 
+      # Ad-hoc signed (tauri.macos.conf.json): the sidecar must carry the JIT entitlements, and its JIT must run from
+      # inside the signed bundle (MAP_JIT under the hardened runtime).
+      - name: Signed app runs the JIT
+        if: runner.os == 'macOS'
+        run: |
+          app="$(ls -d app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app | head -1)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -d --entitlements - --xml "$app/Contents/MacOS/bhpc-run" | grep -q com.apple.security.cs.allow-jit
+          codesign -dv "$app/Contents/MacOS/bhpc-run" 2>&1 | tee /dev/stderr | grep -q "Signature=adhoc"
+          "$app/Contents/MacOS/bhpc-run" --bench-thunk 100000
+      - name: Sidecar runs the JIT
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          ext=""; case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
+          "app/src-tauri/binaries/bhpc-run-${{ matrix.target }}$ext" --bench-thunk 100000
+
       - uses: actions/upload-artifact@v4
         with:
           name: blockheads-pc-${{ matrix.name }}
