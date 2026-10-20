@@ -71,12 +71,31 @@ pub unsafe fn protect(p: *mut u8, len: usize, prot: crate::Prot) -> Result<(), i
             bits |= bit;
         }
     }
-    // SAFETY: forwarded from the caller.
-    if unsafe { libc::mprotect(p.cast(), len, bits) } != 0 {
+    // An empty shrunk range is a successful no-op for mprotect.
+    let (start, len) = protect_range(p as usize, len, host_page())?;
+    // SAFETY: forwarded from the caller; the shrunk range stays inside it.
+    if unsafe { libc::mprotect(start as *mut libc::c_void, len, bits) } != 0 {
         Err(errno())
     } else {
         Ok(())
     }
+}
+
+/// The host range `protect` changes for the guest range `[addr, addr+len)` on host pages of `page` bytes.
+///
+/// With 4 KiB host pages that is the range itself (the kernel rejects bad ones). Guest pages are 4 KiB, so on
+/// larger host pages a start that a 4 KiB host would reject is rejected here, and only the host pages wholly
+/// inside the range change: a host page shared with a neighbouring guest page keeps its read/write access.
+fn protect_range(addr: usize, len: usize, page: usize) -> Result<(usize, usize), i32> {
+    if page == 4096 {
+        return Ok((addr, len));
+    }
+    if addr % 4096 != 0 {
+        return Err(libc::EINVAL);
+    }
+    let start = (addr + page - 1) & !(page - 1);
+    let end = (addr + len) & !(page - 1);
+    Ok((start, end.saturating_sub(start)))
 }
 
 /// # Safety
@@ -96,6 +115,15 @@ mod tests {
         assert_eq!(round_range(0x7000, 0x2000, 0x4000), (0x4000, 0x8000));
         assert_eq!(round_range(0x4000, 0x4000, 0x4000), (0x4000, 0x4000));
         assert_eq!(round_range(0x2000, 0x1000, 0x1000), (0x2000, 0x1000));
+    }
+
+    #[test]
+    fn protect_range_shrinks_to_host_pages() {
+        assert_eq!(protect_range(0x1001, 0x10, 0x1000), Ok((0x1001, 0x10)), "4 KiB hosts: the kernel decides");
+        assert_eq!(protect_range(0x1001, 0x10, 0x4000), Err(libc::EINVAL));
+        assert_eq!(protect_range(0x1000, 0x1000, 0x4000), Ok((0x4000, 0)));
+        assert_eq!(protect_range(0x1000, 0x8000, 0x4000), Ok((0x4000, 0x4000)));
+        assert_eq!(protect_range(0x4000, 0x8000, 0x4000), Ok((0x4000, 0x8000)));
     }
 
     #[test]
