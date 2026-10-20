@@ -14,7 +14,7 @@ pub fn supported() -> bool {
     imp::SUPPORTED && std::env::var("BHPC_EMBED").map_or(true, |v| v != "0")
 }
 
-pub use imp::{close, layout, open, reveal, set_fullscreen, Opts};
+pub use imp::{close, layout, open, prepare, reveal, set_fullscreen, Opts};
 
 /// How close (logical pixels) to the window's side or bottom edge a press on the game view resizes the window.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -659,6 +659,11 @@ mod imp {
         Ok(overlay)
     }
 
+    /// Moves the webview into its overlay before the window first shows, so the first game start doesn't flash.
+    pub fn prepare(win: &WebviewWindow) -> Result<(), String> {
+        on_main(win, |w| host_overlay(w).map(|_| ()))?
+    }
+
     fn close_now() {
         VIEW.with(|v| {
             if let Some(v) = v.borrow_mut().take() {
@@ -702,6 +707,9 @@ mod imp {
         Ok(())
     }
     pub fn reveal(_: &WebviewWindow) -> Result<(), String> {
+        Ok(())
+    }
+    pub fn prepare(_: &WebviewWindow) -> Result<(), String> {
         Ok(())
     }
     pub fn set_fullscreen(win: &WebviewWindow, _: &AppHandle, on: bool) -> Result<(), String> {

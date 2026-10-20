@@ -155,6 +155,9 @@ async fn main_ready(app: AppHandle, state: State<'_, App>) -> Res<()> {
     }
     state.revealed.store(true, Ordering::SeqCst);
     if let Some(w) = app.get_webview_window("main") {
+        if embed::supported() {
+            let _ = embed::prepare(&w).map_err(|e| eprintln!("in-window game view: {e}"));
+        }
         w.show().map_err(text)?;
         // Frameless windows on Wayland drop the config's size hints when GTK realizes them; set them again.
         let _ = w.set_min_size(Some(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1)));
