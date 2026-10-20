@@ -54,27 +54,36 @@ impl MainQueue {
 
     /// Run `f` on the main thread and return its result.
     pub fn call<R: Send + 'static>(&self, c: &mut Cpu, f: impl FnOnce(&mut Cpu) -> R + Send + 'static) -> R {
-        let slot = Arc::new(Mutex::new(Some(f)));
+        // The generic part stays straight-line; the waiting lives in the non-generic `run`.
         let out = Arc::new(Mutex::new(None));
-        let (s2, o2) = (slot.clone(), out.clone());
+        let o2 = out.clone();
+        self.run(c, Box::new(move |c| *o2.lock().unwrap_or_else(PoisonError::into_inner) = Some(f(c))));
+        let r = out.lock().unwrap_or_else(PoisonError::into_inner).take();
+        r.expect("MainQueue::run returns once the job has run")
+    }
+
+    /// Queue `job` for the main thread and wait until it has run (on the main thread, or here after the timeout).
+    fn run(&self, c: &mut Cpu, job: Job) {
+        let slot = Arc::new(Mutex::new(Some(job)));
+        let done = Arc::new(Mutex::new(false));
+        let (s2, d2) = (slot.clone(), done.clone());
         self.jobs.lock().unwrap_or_else(PoisonError::into_inner).push_back(Box::new(move |c| {
-            let f = s2.lock().unwrap_or_else(PoisonError::into_inner).take();
-            if let Some(f) = f {
-                let r = f(c);
-                *o2.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+            let job = s2.lock().unwrap_or_else(PoisonError::into_inner).take();
+            if let Some(job) = job {
+                job(c);
+                *d2.lock().unwrap_or_else(PoisonError::into_inner) = true;
             }
         }));
-        let result = |out: &Mutex<Option<R>>| out.lock().unwrap_or_else(PoisonError::into_inner).take();
         let mut waits = 0;
         loop {
-            if let Some(r) = result(&out) {
-                return r;
+            if *done.lock().unwrap_or_else(PoisonError::into_inner) {
+                return;
             }
             if waits >= self.max_waits {
                 // Nobody drains (no frames): run it here, unless the main thread started it meanwhile (then wait).
-                let f = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
-                if let Some(f) = f {
-                    return f(c);
+                let job = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+                if let Some(job) = job {
+                    return job(c);
                 }
             }
             // (A kick while the main thread runs the job already is a harmless extra drain.)
