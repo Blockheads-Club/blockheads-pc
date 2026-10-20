@@ -85,6 +85,8 @@ export interface BootState {
   config: LaunchConfig | null;
   defaults: LaunchConfig;
   prefs: Prefs;
+  /** `false` on the very first start (no preferences file yet): the language follows the system's. */
+  prefs_saved: boolean;
 }
 
 /** How a started game runs: inside the launcher window, or in a window of its own. */

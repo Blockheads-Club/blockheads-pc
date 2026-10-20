@@ -3,7 +3,8 @@ import type { Page } from '@playwright/test';
 /**
  * Replaces the Tauri IPC with an in-page fake launcher backend so the built web UI can be driven in a browser.
  * Scenarios come from the URL query: ?first=1 (no saved config), ?os=macos|windows|linux, ?game=ready|running|
- * stopped|crashed|missing, ?updates=1 (the update feed exists), ?update=available, ?splash=hang|error (main window boot) and, on /splash, ?splash=slow|error&first=1 (state of the splash window).
+ * stopped|crashed|missing, ?lang=en|tr|ru|kk (saved language), ?fresh=1 (no saved preferences: the language follows
+ * the browser's), ?updates=1 (the update feed exists), ?update=available, ?splash=hang|error (main window boot) and, on /splash, ?splash=slow|error&first=1 (state of the splash window).
  */
 export async function mockTauri(page: Page) {
   await page.addInitScript(() => {
@@ -26,7 +27,7 @@ export async function mockTauri(page: Page) {
     };
     const s: any = {
       config: q.get('first') ? null : structuredClone(saved),
-      prefs: { language: 'en', theme: 'system', auto_update_check: true, keep_private_copy: true, game_sound: true, mute_in_background: false },
+      prefs: { language: q.get('lang') ?? 'en', theme: 'system', auto_update_check: true, keep_private_copy: true, game_sound: true, mute_in_background: false },
       game: q.get('game') ?? 'ready',
       startedAt: 0,
       lines: [] as string[],
@@ -101,7 +102,7 @@ export async function mockTauri(page: Page) {
       boot: async () => {
         if (q.get('splash') === 'hang') await new Promise(() => {});
         if (q.get('splash') === 'error') throw 'i/o error: Permission denied (os error 13)';
-        return { config: s.config, defaults, prefs: s.prefs };
+        return { config: s.config, defaults, prefs: s.prefs, prefs_saved: !q.get('fresh') };
       },
       splash_set: () => undefined,
       splash_get: () => ({
@@ -110,7 +111,7 @@ export async function mockTauri(page: Page) {
         first_run: !!q.get('first'),
         version: '0.1.0',
         config_dir: '/home/mira/.config/blockheads-pc',
-        lang: 'en'
+        lang: q.get('lang') ?? 'en'
       }),
       splash_retry: () => undefined,
       app_quit: () => undefined,

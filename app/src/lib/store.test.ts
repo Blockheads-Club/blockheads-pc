@@ -43,6 +43,19 @@ describe('start-up', () => {
     expect(store.firstRun).toBe(false);
   });
 
+  it('follows the system language until the preferences are saved', async () => {
+    const langs = vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['kk-KZ', 'ru-RU']);
+    mock.api.boot = vi.fn(async () => makeBoot({ config: null, prefs_saved: false }));
+    await store.init();
+    expect([i18n.lang, store.prefs.language]).toEqual(['kk', 'kk']);
+    expect(mock.api.savePrefs).not.toHaveBeenCalled();
+    // Once saved, the saved choice wins over the system.
+    mock.api.boot = vi.fn(async () => makeBoot({ config: null }));
+    await store.init();
+    expect(i18n.lang).toBe('en');
+    langs.mockRestore();
+  });
+
   it('opens Home with the saved configuration and checks the game file', async () => {
     mock.api.appInfo = vi.fn(async () => ({ version: '1', os: 'linux', arch: 'x', config_dir: '/c', updates_enabled: true, native_controls: false }));
     await store.init();

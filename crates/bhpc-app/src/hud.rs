@@ -14,9 +14,27 @@ pub const TEXT: [u8; 4] = [245, 245, 245, 255];
 pub const BOX_ALPHA: f32 = 0.85;
 
 /// Rows of a glyph, the top row first, bit 4 = leftmost column. `None` for characters the font does not have
-/// (they are drawn as blanks). Letters are upper case only (lower case is drawn the same).
+/// (they are drawn as blanks). Letters are upper case only (lower case is drawn the same): Latin with the Turkish
+/// letters, and Cyrillic with the Kazakh ones. Cyrillic letters shaped like Latin ones share their glyphs.
 pub fn glyph(c: char) -> Option<[u8; 7]> {
-    Some(match c.to_ascii_uppercase() {
+    let c = c.to_uppercase().next().unwrap_or(c);
+    let c = match c {
+        'А' => 'A',
+        'В' => 'B',
+        'Е' => 'E',
+        'К' => 'K',
+        'М' => 'M',
+        'Н' => 'H',
+        'О' => 'O',
+        'Р' => 'P',
+        'С' => 'C',
+        'Т' => 'T',
+        'Х' => 'X',
+        'Ү' => 'Y',
+        'І' => 'I',
+        other => other,
+    };
+    Some(match c {
         '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
         '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
         '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
@@ -61,8 +79,117 @@ pub fn glyph(c: char) -> Option<[u8; 7]> {
         '(' => [0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010],
         ')' => [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
         '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0, 0b00100],
+        ',' => [0, 0, 0, 0, 0b01100, 0b00100, 0b01000],
+        '\'' | '’' => [0b00100, 0b00100, 0b01000, 0, 0, 0, 0],
+        // Turkish.
+        'Ç' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10001, 0b01110, 0b00100],
+        'Ğ' => [0b01110, 0, 0b01111, 0b10000, 0b10111, 0b10001, 0b01111],
+        'İ' => [0b00100, 0, 0b01110, 0b00100, 0b00100, 0b00100, 0b01110],
+        'Ö' => [0b01010, 0, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110],
+        'Ş' => [0b01111, 0b10000, 0b01110, 0b00001, 0b11110, 0b00100, 0b01100],
+        'Ü' => [0b01010, 0, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        // Cyrillic (Russian).
+        'Б' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b11110],
+        'Г' => [0b11111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000],
+        'Д' => [0b00110, 0b01010, 0b01010, 0b01010, 0b01010, 0b11111, 0b10001],
+        'Ё' => [0b01010, 0, 0b11111, 0b10000, 0b11110, 0b10000, 0b11111],
+        'Ж' => [0b10101, 0b10101, 0b10101, 0b01110, 0b10101, 0b10101, 0b10101],
+        'З' => [0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110],
+        'И' => [0b10001, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b10001],
+        'Й' => [0b01110, 0, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001],
+        'Л' => [0b00111, 0b01001, 0b01001, 0b01001, 0b01001, 0b01001, 0b10001],
+        'П' => [0b11111, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001],
+        'У' => [0b10001, 0b10001, 0b10001, 0b01111, 0b00001, 0b10001, 0b01110],
+        'Ф' => [0b00100, 0b01110, 0b10101, 0b10101, 0b10101, 0b01110, 0b00100],
+        'Ц' => [0b10010, 0b10010, 0b10010, 0b10010, 0b10010, 0b11111, 0b00001],
+        'Ч' => [0b10001, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b00001],
+        'Ш' => [0b10101, 0b10101, 0b10101, 0b10101, 0b10101, 0b10101, 0b11111],
+        'Щ' => [0b10101, 0b10101, 0b10101, 0b10101, 0b10101, 0b11111, 0b00001],
+        'Ъ' => [0b11000, 0b01000, 0b01000, 0b01110, 0b01001, 0b01001, 0b01110],
+        'Ы' => [0b10001, 0b10001, 0b10001, 0b11101, 0b10011, 0b10011, 0b11101],
+        'Ь' => [0b10000, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b11110],
+        'Э' => [0b01110, 0b10001, 0b00001, 0b00111, 0b00001, 0b10001, 0b01110],
+        'Ю' => [0b10010, 0b10101, 0b10101, 0b11101, 0b10101, 0b10101, 0b10010],
+        'Я' => [0b01111, 0b10001, 0b10001, 0b01111, 0b00101, 0b01001, 0b10001],
+        // Kazakh.
+        'Ә' => [0b01110, 0b10001, 0b00001, 0b11111, 0b10001, 0b10001, 0b01110],
+        'Ғ' => [0b01111, 0b01000, 0b01000, 0b11110, 0b01000, 0b01000, 0b01000],
+        'Қ' => [0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10011, 0b00001],
+        'Ң' => [0b10010, 0b10010, 0b10010, 0b11110, 0b10010, 0b10011, 0b00001],
+        'Ө' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b01110],
+        'Ұ' => [0b10001, 0b10001, 0b01010, 0b00100, 0b11111, 0b00100, 0b00100],
+        'Һ' => [0b10000, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001],
         _ => return None,
     })
+}
+
+/// Language of the host's messages over the game (`bhpc-run --lang`, the launcher's language).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Lang {
+    #[default]
+    En,
+    Tr,
+    Ru,
+    Kk,
+}
+
+impl Lang {
+    /// `en`, `tr`, `ru` or `kk`, with or without a region (`ru-RU`, `kk_KZ`); anything else is English.
+    pub fn parse(s: &str) -> Lang {
+        match s.split(['-', '_']).next().unwrap_or_default().to_ascii_lowercase().as_str() {
+            "tr" => Lang::Tr,
+            "ru" => Lang::Ru,
+            "kk" => Lang::Kk,
+            _ => Lang::En,
+        }
+    }
+}
+
+/// The host's messages: English (the text the code posts), Turkish, Russian, Kazakh. Upper case, in the
+/// characters [`glyph`] draws.
+const MESSAGES: [[&str; 4]; 7] = [
+    ["GAME BUTTONS HIDDEN", "OYUN DÜĞMELERİ GİZLENDİ", "КНОПКИ ИГРЫ СКРЫТЫ", "ОЙЫН БАТЫРМАЛАРЫ ЖАСЫРЫЛДЫ"],
+    ["GAME BUTTONS SHOWN", "OYUN DÜĞMELERİ GÖSTERİLDİ", "КНОПКИ ИГРЫ ПОКАЗАНЫ", "ОЙЫН БАТЫРМАЛАРЫ КӨРСЕТІЛДІ"],
+    [
+        "GAME BUTTONS CANNOT BE HIDDEN",
+        "OYUN DÜĞMELERİ GİZLENEMİYOR",
+        "КНОПКИ ИГРЫ НЕЛЬЗЯ СКРЫТЬ",
+        "ОЙЫН БАТЫРМАЛАРЫН ЖАСЫРУ МҮМКІН ЕМЕС",
+    ],
+    ["COPIED TO CLIPBOARD", "PANOYA KOPYALANDI", "СКОПИРОВАНО В БУФЕР ОБМЕНА", "АЛМАСУ БУФЕРІНЕ КӨШІРІЛДІ"],
+    [
+        "ACHIEVEMENTS ARE NOT AVAILABLE ON PC",
+        "BAŞARIMLAR PC’DE KULLANILAMAZ",
+        "ДОСТИЖЕНИЯ НА ПК НЕДОСТУПНЫ",
+        "ЖЕТІСТІКТЕР КОМПЬЮТЕРДЕ ҚОЛЖЕТІМСІЗ",
+    ],
+    [
+        "IN-APP PURCHASES ARE NOT AVAILABLE ON PC",
+        "UYGULAMA İÇİ SATIN ALMA PC’DE KULLANILAMAZ",
+        "ПОКУПКИ В ИГРЕ НА ПК НЕДОСТУПНЫ",
+        "ОЙЫН ІШІНДЕГІ САТЫП АЛУ КОМПЬЮТЕРДЕ ҚОЛЖЕТІМСІЗ",
+    ],
+    [
+        "NO FILE DIALOG: INSTALL ZENITY OR KDIALOG",
+        "DOSYA SEÇME PENCERESİ YOK: ZENITY YA DA KDIALOG KURUN",
+        "НЕТ ОКНА ВЫБОРА ФАЙЛА: УСТАНОВИТЕ ZENITY ИЛИ KDIALOG",
+        "ФАЙЛ ТАҢДАУ ТЕРЕЗЕСІ ЖОҚ: ZENITY НЕМЕСЕ KDIALOG ОРНАТЫҢЫЗ",
+    ],
+];
+
+/// The message posted when a photo was saved, followed by its path, in each language (order of [`MESSAGES`]).
+pub const PHOTO_SAVED: [&str; 4] = ["PHOTO SAVED: ", "FOTOĞRAF KAYDEDİLDİ: ", "ФОТО СОХРАНЕНО: ", "ФОТО САҚТАЛДЫ: "];
+
+/// `text` (a host message in English) in `lang`; texts without a translation are shown as they are.
+pub fn localise(lang: Lang, text: &str) -> String {
+    let i = lang as usize;
+    if let Some(m) = MESSAGES.iter().find(|m| m[0] == text) {
+        return m[i].to_string();
+    }
+    match text.strip_prefix(PHOTO_SAVED[0]) {
+        Some(path) => format!("{}{path}", PHOTO_SAVED[i]),
+        None => text.to_string(),
+    }
 }
 
 /// A premultiplied RGBA picture, top row first.
@@ -366,6 +493,46 @@ mod tests {
         }
         assert_eq!(glyph('h'), glyph('H'));
         assert_ne!(glyph('O'), glyph('0'));
+    }
+
+    #[test]
+    fn the_font_has_turkish_russian_and_kazakh_letters() {
+        let set = "ÇĞİÖŞÜБГДЁЖЗИЙЛПУФЦЧШЩЪЫЬЭЮЯӘҒҚҢӨҰҺ,'";
+        let all: Vec<_> = set.chars().filter_map(glyph).collect();
+        assert_eq!(all.len(), set.chars().count(), "every character has a glyph");
+        let latin: Vec<_> = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".chars().filter_map(glyph).collect();
+        for (i, a) in all.iter().enumerate() {
+            assert!(a.iter().all(|r| *r < 32) && a.iter().any(|r| *r != 0));
+            assert!(all[i + 1..].iter().all(|b| b != a), "glyphs are distinct");
+            assert!(!latin.contains(a), "{:?} differs from the Latin letters", set.chars().nth(i));
+        }
+        // Look-alikes share the Latin glyphs; lower case is drawn as upper case.
+        for (cy, la) in [('А', 'A'), ('Н', 'H'), ('Р', 'P'), ('С', 'C'), ('Ү', 'Y'), ('І', 'I'), ('ы', 'Ы'), ('ç', 'Ç')]
+        {
+            assert_eq!(glyph(cy), glyph(la), "{cy}");
+        }
+        assert_eq!(glyph('’'), glyph('\''));
+        assert_eq!(glyph('ı'), glyph('I'));
+    }
+
+    #[test]
+    fn host_messages_follow_the_language() {
+        assert_eq!(
+            [Lang::parse("en"), Lang::parse("tr"), Lang::parse("ru-RU"), Lang::parse("kk_KZ")],
+            [Lang::En, Lang::Tr, Lang::Ru, Lang::Kk]
+        );
+        assert_eq!([Lang::parse("RU"), Lang::parse("de"), Lang::parse("")], [Lang::Ru, Lang::En, Lang::En]);
+        assert_eq!(Lang::default(), Lang::En);
+        assert_eq!(localise(Lang::Ru, "GAME BUTTONS HIDDEN"), "КНОПКИ ИГРЫ СКРЫТЫ");
+        assert_eq!(localise(Lang::En, "COPIED TO CLIPBOARD"), "COPIED TO CLIPBOARD");
+        assert_eq!(localise(Lang::Kk, "PHOTO SAVED: /home/a/b.png"), "ФОТО САҚТАЛДЫ: /home/a/b.png");
+        assert_eq!(localise(Lang::Tr, "60 FPS"), "60 FPS");
+        // Every translation is drawable: no character falls back to a blank.
+        for text in MESSAGES.iter().flatten().chain(&PHOTO_SAVED) {
+            for c in text.chars().filter(|c| *c != ' ') {
+                assert!(glyph(c).is_some(), "{c:?} in {text:?}");
+            }
+        }
     }
 
     #[test]

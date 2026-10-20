@@ -83,7 +83,7 @@
 <SettingsGroup title={t('lic.title')} id="set-licences">
   <div class="lic first"><span>Blockheads PC</span><span class="hint">GPL-3.0-only</span></div>
   <div class="lic"><span>{t('lic.rust')}</span><span class="hint">{t('lic.rustLic')}</span></div>
-  <div class="lic"><span>Bricolage Grotesque · Atkinson Hyperlegible Next · JetBrains Mono</span><span class="hint">OFL-1.1</span></div>
+  <div class="lic"><span>Bricolage Grotesque · Atkinson Hyperlegible Next · Onest · JetBrains Mono</span><span class="hint">OFL-1.1</span></div>
   <div class="lic"><span>Svelte · SvelteKit · Tauri</span><span class="hint">MIT / Apache-2.0</span></div>
   <button class="more" onclick={showLicences}>{t('lic.all')}</button>
 </SettingsGroup>

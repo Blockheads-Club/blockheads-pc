@@ -42,7 +42,12 @@ const npm = ['svelte', '@sveltejs/kit', ...Object.keys(pkg.dependencies)].map((n
   return { name, version: p.version, license: p.license };
 });
 
-const fonts = ['@fontsource-variable/bricolage-grotesque', '@fontsource/atkinson-hyperlegible-next', '@fontsource/jetbrains-mono'];
+const fonts = [
+  '@fontsource-variable/bricolage-grotesque',
+  '@fontsource/atkinson-hyperlegible-next',
+  '@fontsource/jetbrains-mono',
+  '@fontsource-variable/onest'
+];
 const fontTexts = fonts.map((name) => {
   const dir = join(app, 'node_modules', name);
   const file = ['LICENSE', 'LICENSE.md', 'LICENSE.txt'].map((f) => join(dir, f)).find(existsSync);

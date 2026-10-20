@@ -2,7 +2,7 @@
 //! so the window blends them over it when it presents the frame. Also the pictures of the controller cursor and of
 //! short host messages ([`SpriteCache`]).
 
-use bhpc_app::hud::{cursor_picture, hud_scale, message_sprite, Sprite};
+use bhpc_app::hud::{cursor_picture, hud_scale, localise, message_sprite, Lang, Sprite};
 use bhpc_gles::{GlWindow, Overlay};
 use bhpc_jni::UiFrame;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -63,9 +63,16 @@ pub struct SpriteCache {
     cursor: Option<(u32, Overlay)>,
     message: Option<(String, u32, Overlay)>,
     serial: u64,
+    /// The messages' language.
+    lang: Lang,
 }
 
 impl SpriteCache {
+    /// Messages shown in `lang`.
+    pub fn new(lang: Lang) -> SpriteCache {
+        SpriteCache { lang, ..SpriteCache::default() }
+    }
+
     fn next(&mut self) -> u64 {
         self.serial += 1;
         self.serial
@@ -95,7 +102,7 @@ impl SpriteCache {
             let scale = hud_scale(picture.1);
             if self.message.as_ref().is_none_or(|(t, s, _)| t != text || *s != scale) {
                 let serial = self.next();
-                let sp = message_sprite(text, scale, serial, (0.5, 0.12));
+                let sp = message_sprite(&localise(self.lang, text), scale, serial, (0.5, 0.12));
                 self.message = Some((text.clone(), scale, sp.overlay));
             }
             if let Some((_, _, ov)) = &self.message {

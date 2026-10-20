@@ -35,7 +35,7 @@ export function makeReport(over: Partial<ApkReport> = {}): ApkReport {
 }
 
 export function makeBoot(over: Partial<BootState> = {}): BootState {
-  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, ...over };
+  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, prefs_saved: true, ...over };
 }
 
 /** A fake of everything `$lib/api` exports. */

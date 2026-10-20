@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Languages the launcher has strings for.
-pub const LANGUAGES: [&str; 2] = ["en", "tr"];
+pub const LANGUAGES: [&str; 4] = ["en", "tr", "ru", "kk"];
 /// Theme choices.
 pub const THEMES: [&str; 3] = ["system", "light", "dark"];
 

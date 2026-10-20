@@ -1,5 +1,5 @@
 import { api } from './api';
-import { errText, setLang, t } from './i18n.svelte';
+import { detectLang, errText, setLang, t } from './i18n.svelte';
 import type { SettingsPage } from './settings-index';
 import { setTheme } from './theme.svelte';
 import { toast } from './ui/toast.svelte';
@@ -130,7 +130,7 @@ export class AppStore {
       this.info = await api.appInfo();
       const b = await api.boot();
       this.defaults = b.defaults;
-      this.applyPrefs(b.prefs);
+      this.applyPrefs(b.prefs_saved ? b.prefs : { ...b.prefs, language: detectLang(navigator.languages) });
       this.config = b.config;
       this.display = await api.displayInfo().catch(() => null);
       if (b.config) {

@@ -523,6 +523,7 @@ mod ops_tests {
         let (paths, c) = setup(t.path());
         let b = boot(&paths, "/data".into()).unwrap();
         assert_eq!((b.config, b.defaults.data_dir, b.prefs), (None, PathBuf::from("/data"), Prefs::default()));
+        assert!(!b.prefs_saved);
         let mut bad = c.clone();
         bad.window = WindowOptions { width: 1, ..WindowOptions::default() };
         assert!(matches!(save_config(&paths, bad), Err(LauncherError::Window(_))));
@@ -533,8 +534,20 @@ mod ops_tests {
         assert_eq!(p.language, "en");
         let b = boot(&paths, "/data".into()).unwrap();
         assert_eq!(b.config, Some(dup));
+        assert!(b.prefs_saved);
+        for l in ["tr", "ru", "kk"] {
+            assert_eq!(save_prefs(&paths, Prefs { language: l.into(), ..Prefs::default() }).unwrap().language, l);
+        }
         std::fs::write(paths.prefs(), "language = 1").unwrap();
         assert!(boot(&paths, "/data".into()).is_err());
+    }
+
+    #[test]
+    fn the_game_title_follows_the_language() {
+        assert_eq!(ops::game_title("en", Some("1.7.6")), "Blockheads PC · Playing The Blockheads 1.7.6");
+        assert_eq!(ops::game_title("tr", Some("1.7.4")), "Blockheads PC · The Blockheads 1.7.4 oynanıyor");
+        assert_eq!(ops::game_title("kk", None), "Blockheads PC · Ойын жүріп жатыр: The Blockheads (белгісіз жинақ)");
+        assert_eq!(ops::game_title("zz", None), "Blockheads PC · Playing The Blockheads (unknown build)");
     }
 
     #[test]
@@ -625,6 +638,7 @@ mod ops_tests {
         assert_eq!(plan.args[2], "--title");
         assert_eq!(plan.title, "Blockheads PC · Playing The Blockheads (unknown build)");
         assert_eq!(plan.args[3], plan.title);
+        assert_eq!(plan.args[4..6], ["--lang", "en"]);
         assert_eq!(plan.window, c.window);
         assert_eq!(plan.keys, c.keys);
         assert_eq!(plan.args_for(None)[..plan.args.len()], plan.args);
@@ -637,8 +651,13 @@ mod ops_tests {
             linked.args_for(None)[plan.args.len()..],
             ["--progress", "--open-uri", "http://theblockheads.net/join.php?ip=1"]
         );
-        Prefs { game_sound: false, ..Prefs::default() }.save(&paths.prefs()).unwrap();
-        assert_eq!(launch_plan(&paths, exe).unwrap().env, [("SDL_AUDIODRIVER".to_string(), "dummy".to_string())]);
+        Prefs { game_sound: false, language: "ru".into(), ..Prefs::default() }.save(&paths.prefs()).unwrap();
+        let ru = launch_plan(&paths, exe).unwrap();
+        assert_eq!(ru.env, [("SDL_AUDIODRIVER".to_string(), "dummy".to_string())]);
+        assert_eq!(
+            (ru.title.as_str(), &ru.args[5]),
+            ("Blockheads PC · Идёт игра: The Blockheads (неизвестная сборка)", &"ru".to_string())
+        );
         c.window.width = 1;
         c.save(&paths.config()).unwrap();
         assert!(matches!(launch_plan(&paths, exe), Err(LauncherError::Window(_))));

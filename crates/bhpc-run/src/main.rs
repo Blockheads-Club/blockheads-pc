@@ -181,6 +181,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             cfg.controller = f.controller;
             cfg.hide_dpad = f.hide_dpad;
             cfg.pad_tile_cursor = f.pad_tile_cursor;
+            cfg.lang = f.lang;
         }
         Err(e) => {
             let _ = writeln!(stderr, "bhpc-run: {e}");

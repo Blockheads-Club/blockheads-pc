@@ -18,6 +18,9 @@ pub struct Boot {
     /// A fresh configuration with the platform defaults (used as the setup draft and for "reset").
     pub defaults: LaunchConfig,
     pub prefs: Prefs,
+    /// The preferences were saved before: `false` on the very first start, when the UI picks the language from the
+    /// system's.
+    pub prefs_saved: bool,
 }
 
 /// The launcher's config directory: `BHPC_CONFIG_DIR` when set (tests, portable installs), else the platform's.
@@ -50,6 +53,7 @@ pub fn boot(paths: &Paths, default_data_dir: PathBuf) -> Result<Boot, LauncherEr
         config: LaunchConfig::load(&paths.config())?,
         defaults: LaunchConfig::new("", default_data_dir),
         prefs: Prefs::load(&paths.prefs())?,
+        prefs_saved: paths.prefs().exists(),
     })
 }
 
@@ -168,6 +172,18 @@ pub fn open_uri_arg(args: &[String]) -> Option<String> {
     args.iter().find(|a| ["http://", "https://", "blockheads://"].iter().any(|p| a.starts_with(p))).cloned()
 }
 
+/// The game window's title in `lang` (one of [`crate::prefs::LANGUAGES`], else English) for the game `version`
+/// (`None`: a build the launcher does not know). The same texts as the UI's `tb.playing` and `apk.gameUnknown`.
+pub fn game_title(lang: &str, version: Option<&str>) -> String {
+    let (playing, unknown) = match lang {
+        "tr" => ("The Blockheads {v} oynanıyor", "(bilinmeyen sürüm)"),
+        "ru" => ("Идёт игра: The Blockheads {v}", "(неизвестная сборка)"),
+        "kk" => ("Ойын жүріп жатыр: The Blockheads {v}", "(белгісіз жинақ)"),
+        _ => ("Playing The Blockheads {v}", "(unknown build)"),
+    };
+    format!("Blockheads PC · {}", playing.replace("{v}", version.unwrap_or(unknown)))
+}
+
 /// What to run for "Play": the sidecar next to the launcher with `--config <launcher.toml>`. The game file is
 /// checked first so a missing or changed APK is reported here rather than as a crash.
 pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, LauncherError> {
@@ -175,8 +191,8 @@ pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, Launcher
         LaunchConfig::load(&paths.config())?.ok_or_else(|| LauncherError::Io("setup is not finished".into()))?;
     config.window.validate().map_err(LauncherError::Window)?;
     let info = apk::validate(&config.apk, config.force).map_err(LauncherError::Apk)?;
-    let version = info.release.map(bhpc_loader::apk::Release::version).unwrap_or("(unknown build)");
     let prefs = Prefs::load(&paths.prefs())?;
+    let title = game_title(&prefs.language, info.release.map(bhpc_loader::apk::Release::version));
     let mut env = Vec::new();
     if !prefs.game_sound {
         env.push(("SDL_AUDIODRIVER".to_string(), "dummy".to_string()));
@@ -187,10 +203,12 @@ pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, Launcher
             "--config".to_string(),
             paths.config().display().to_string(),
             "--title".to_string(),
-            format!("Blockheads PC · Playing The Blockheads {version}"),
+            title.clone(),
+            "--lang".to_string(),
+            prefs.language.clone(),
         ],
         env,
-        title: format!("Blockheads PC · Playing The Blockheads {version}"),
+        title,
         window: config.window,
         keys: config.keys,
         open_uri: None,

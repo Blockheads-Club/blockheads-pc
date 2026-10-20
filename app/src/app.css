@@ -1,7 +1,8 @@
 /* "Sunlit Blocks" design tokens and base styles. Components read these semantic tokens only. */
 :root {
-  --f-display: 'Bricolage Grotesque Variable', ui-rounded, 'Segoe UI', system-ui, sans-serif;
-  --f-body: 'Atkinson Hyperlegible Next', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  /* Bricolage and Atkinson have no Cyrillic: Russian and Kazakh letters come from Onest. */
+  --f-display: 'Bricolage Grotesque Variable', 'Onest Variable', ui-rounded, 'Segoe UI', system-ui, sans-serif;
+  --f-body: 'Atkinson Hyperlegible Next', 'Onest Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --f-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
 
   --bg: #fbf8f4;

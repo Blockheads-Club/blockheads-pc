@@ -97,6 +97,8 @@ pub struct PlayConfig {
     pub pad_tile_cursor: bool,
     /// Window title.
     pub title: String,
+    /// Language of the messages shown over the game.
+    pub lang: bhpc_app::hud::Lang,
     /// What the buttons, wheel and keys do.
     pub bindings: Bindings,
     /// Render for the launcher's window instead of one of our own: the frame file the launcher created. The video
@@ -137,6 +139,7 @@ impl PlayConfig {
             hide_dpad: false,
             pad_tile_cursor: false,
             title: "The Blockheads".into(),
+            lang: bhpc_app::hud::Lang::En,
             bindings: Bindings::default(),
             embed: None,
             open_uri: None,
@@ -868,7 +871,7 @@ fn boot(
         None => None,
     });
     let (shot, shot_at, check_gl) = (cfg.shot.clone(), cfg.shot_at, cfg.check_gl);
-    let (fps_limit, fps_hud) = (cfg.fps_limit, cfg.show_fps.then_some(cfg.fps_position));
+    let (fps_limit, fps_hud, lang) = (cfg.fps_limit, cfg.show_fps.then_some(cfg.fps_position), cfg.lang);
     let mut sess = Session::open_setup(&icfg, Box::new(std::io::stdout()), None, &mut |cpu, st| {
         cpu.table().set_stats(std::env::var_os("BHPC_THUNK_STATS").is_some());
         let primary = window
@@ -899,7 +902,7 @@ fn boot(
             overlay: crate::overlay::OverlayFeed::default(),
             sdl: sdl.clone(),
             pace: Mutex::new(crate::pace::SwapPacer::new(lock(st).sched.clone(), fps_limit, fps_hud)),
-            sprites: Mutex::default(),
+            sprites: Mutex::new(crate::overlay::SpriteCache::new(lang)),
             embed: embed_out.lock().unwrap_or_else(PoisonError::into_inner).take().map(Mutex::new),
         });
         // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.

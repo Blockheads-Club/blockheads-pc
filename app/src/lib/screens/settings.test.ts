@@ -165,6 +165,19 @@ describe('Settings search', () => {
   it('folds case, accents and the Turkish i', () => {
     expect(fold('İSTANBUL Işık ŞĞÇÖÜ')).toBe('istanbul isik sgcou');
     expect(searchSettings('   ')).toEqual([]);
+    expect(fold('СЧЁТЧИК Қазақша')).toBe('счетчик қазақша');
+  });
+
+  it('finds settings by Russian and Kazakh words in any launcher language', () => {
+    for (const [q, id] of [
+      ['геймпад', 'set-ctl-pad'],
+      ['счетчик', 'set-gfx-show-fps'],
+      ['язык', 'set-lng-language'],
+      ['тақырып', 'set-lng-theme'],
+      ['тінтуір', 'set-ctl-reset'],
+      ['дыбыс', 'set-snd-sound']
+    ])
+      expect(searchSettings(q).map((s) => s.id), q).toContain(id);
   });
 
   it('finds settings on every page by title, hint and keywords, grouped by page', async () => {

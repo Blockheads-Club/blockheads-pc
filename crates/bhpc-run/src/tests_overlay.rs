@@ -109,3 +109,20 @@ fn the_cursor_and_messages_become_sprites_rebuilt_only_on_change() {
     assert!(cache.sprites(&v, (0, 1600), now).is_empty());
     assert!(cache.sprites(&PadView::default(), (2000, 1600), now).is_empty());
 }
+
+#[test]
+fn messages_are_drawn_in_the_launcher_language() {
+    use crate::overlay::{PadView, SpriteCache};
+    use bhpc_app::hud::{hud_scale, render_label, Lang};
+    use std::time::Instant;
+    let now = Instant::now();
+    let v = PadView {
+        cursor: None,
+        tile: None,
+        content: (1000.0, 800.0),
+        message: Some(("GAME BUTTONS SHOWN".into(), now)),
+    };
+    let s = SpriteCache::new(Lang::Ru).sprites(&v, (1000, 800), now);
+    let want = render_label("КНОПКИ ИГРЫ ПОКАЗАНЫ", hud_scale(800));
+    assert_eq!((s[0].overlay.width, &*s[0].overlay.rgba), (want.width, &want.rgba));
+}

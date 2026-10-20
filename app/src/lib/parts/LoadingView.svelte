@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { etaText } from '../format';
-  import { t } from '../i18n.svelte';
+  import { num, t } from '../i18n.svelte';
   import type { Key } from '../messages';
   import type { BootProgress } from '../types';
   import Icon from '../ui/Icon.svelte';
@@ -62,7 +62,7 @@
       return {
         n, label: label(n), done: ok, cur, fail,
         cls: ok ? 'done' : cur ? (slow ? 'cur slow' : 'cur') : fail ? 'fail' : '',
-        time: ok && typeof secs === 'number' ? `${secs.toFixed(1)} s` : ''
+        time: ok && typeof secs === 'number' ? `${num(secs, 1)} s` : ''
       };
     })
   );

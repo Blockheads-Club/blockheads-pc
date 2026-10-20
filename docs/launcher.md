@@ -196,7 +196,10 @@ fade when GTK animations are off), takes the mouse and the keyboard focus.
 - **Window chrome**: frameless (custom bar, drag region, native resize) on Windows and Linux; on macOS the native
   traffic lights are kept (overlay title bar). The Linux button order setting (`gtk-decoration-layout`) is not read;
   Windows 11 Snap layouts on the maximize button are not wired.
-- **Languages**: English and Turkish only.
+- **Languages**: English, Turkish, Russian and Kazakh (Cyrillic; the Russian and Kazakh texts await a native
+  speaker's review). The first start follows the system language (`navigator.languages`) until the preferences are
+  saved. The game runner gets `--lang` for its on-screen messages (its 5x7 font has the Turkish, Russian and Kazakh
+  letters) and a translated window title; the game itself stays English.
 - **Update check** is UI only: the backend answers "not available" and the interface hides it
   (`updates_enabled: false`); the full flow (available, downloading, installing, ready, playing, error) is built and
   exercised against the mock. "Restart now" just closes the window.
