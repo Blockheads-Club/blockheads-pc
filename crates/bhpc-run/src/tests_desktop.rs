@@ -120,5 +120,13 @@ fn desktop_hooks() {
     let bad_file = Desktop::new(recorder(&log), d.join("p2"), None, Box::new(|_| {}), Box::new(|_| {}));
     std::fs::create_dir_all(d.join("p2")).unwrap();
     assert!(bad_file.write_page("x", &[("../../../../../../../../proc/nope/x".into(), vec![])]).is_err());
+    // Nothing outside the page's folder, on any host.
+    for name in ["/etc/x", "a//b", "", "C:x", "a\\b", "img/../../x"] {
+        let e = bad_file.write_page("x", &[(name.into(), vec![])]).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{name:?}");
+    }
+    // The page folder itself cannot be made: a plain error.
+    let blocked = Desktop::new(recorder(&log), d.join("blocker/p3"), None, Box::new(|_| {}), Box::new(|_| {}));
+    assert!(blocked.write_page("x", &[]).is_err());
     let _ = std::fs::remove_dir_all(&d);
 }

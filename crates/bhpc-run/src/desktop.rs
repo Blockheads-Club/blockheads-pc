@@ -129,6 +129,10 @@ impl Desktop {
         let dir = self.pages.join(format!("{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
         for (name, data) in files {
+            // Names come from the game: only plain relative paths inside the page's folder.
+            if name.is_empty() || name.contains(['\\', ':']) || name.split('/').any(|c| c.is_empty() || c == "..") {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad page file {name:?}")));
+            }
             let p = dir.join(name);
             std::fs::create_dir_all(p.parent().unwrap_or(&dir))?;
             std::fs::write(p, data)?;
