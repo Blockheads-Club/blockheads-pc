@@ -214,13 +214,19 @@ mod imp {
             // The webview keeps the whole window; the game view is laid over the part of it below the bars.
             if let Some(g) = &gl {
                 overlay.add_overlay(g);
-                overlay.set_overlay_pass_through(g, true);
+                // The picture never takes input (the input widget above it does).
+                pass_through(g, true);
+                g.connect_realize(|g| pass_through(g, true));
                 // Invisible until the game is revealed: GTK may show a GL area black before its first render.
                 g.set_opacity(0.0);
             }
             overlay.add_overlay(&area);
             // Until the first frame the page shows its loading screen and must get the mouse (Cancel).
-            overlay.set_overlay_pass_through(&area, true);
+            pass_through(&area, true);
+            area.connect_realize(|w| {
+                let p = w.parent().and_then(|o| o.downcast::<gtk::Overlay>().ok());
+                pass_through(w, p.is_some_and(|o| o.is_overlay_pass_through(w)));
+            });
             // Hidden until the page has reported where the stage starts (`layout`): the runner sizes its first frame
             // by the first size it hears, which must be the real one.
             VIEW.with(|v| *v.borrow_mut() = Some(View { area, overlay, gl, paint }));
@@ -306,6 +312,26 @@ mod imp {
         }
     }
 
+    /// Lets clicks on an overlay widget go to the webview under it (`on`), or not. The overlay's own pass-through
+    /// only covers the window it puts around the widget: the windows the widget makes itself when realized (the
+    /// drawing area's, the GL area's input window) still caught every click, so the loading screen's Cancel never
+    /// got one and the press moved the keyboard focus to the game view (Esc no longer reached the page either).
+    fn pass_through(w: &impl IsA<gtk::Widget>, on: bool) {
+        if let Some(o) = w.parent().and_then(|p| p.downcast::<gtk::Overlay>().ok()) {
+            o.set_overlay_pass_through(w, on);
+        }
+        // A widget without a window of its own (the GL area) has its parent's: only the input windows under it are
+        // its own, and the parent's (the overlay's child window) is already set above.
+        if let Some(gw) = w.window() {
+            if w.has_window() {
+                gw.set_pass_through(on);
+            }
+            for c in gw.children() {
+                c.set_pass_through(on);
+            }
+        }
+    }
+
     /// A game frame arrived: the game shows once the page has also let it.
     fn frame_arrived(w: &gtk::DrawingArea, p: &mut Paint) {
         p.arrived.get_or_insert_with(Instant::now);
@@ -322,9 +348,7 @@ mod imp {
         let first = &mut p.first;
         if first.is_none() && p.revealed && p.arrived.is_some() {
             *first = Some(Instant::now());
-            if let Some(o) = w.parent().and_then(|p| p.downcast::<gtk::Overlay>().ok()) {
-                o.set_overlay_pass_through(w, false);
-            }
+            pass_through(w, false);
             w.grab_focus();
         }
     }
