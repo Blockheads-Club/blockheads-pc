@@ -13,7 +13,7 @@ Embedded ARM32 JIT (vendored dynarmic, A32 frontend) behind a small C ABI shim, 
 | macOS arm64 (Apple Silicon) | Written, **never built or run**. |
 
 `.github/workflows/ci-crossplat.yml` builds and tests the host-facing crates on `windows-latest`,
-`macos-13` and `macos-14`. Until it has gone green, everything below the table is unverified.
+`macos-15-intel` and `macos-14`. Until it has gone green, everything below the table is unverified.
 
 ### What is verified here (Linux)
 

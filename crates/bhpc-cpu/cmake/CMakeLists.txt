@@ -30,9 +30,13 @@ if (MSVC)
     add_compile_options(/permissive- /Zc:__cplusplus /bigobj /DNOMINMAX)
 endif()
 
+# dynarmic's headers include Boost (variant, icl) and dynarmic links Boost::boost only PRIVATE, so the shim needs it
+# too. On Linux the headers sit in /usr/include and this went unnoticed; Homebrew and Windows keep them elsewhere.
+find_package(Boost 1.57 REQUIRED)
+
 add_subdirectory(${BHPC_DYNARMIC_DIR} dynarmic EXCLUDE_FROM_ALL)
 
 add_library(bhpc_shim STATIC ${BHPC_SHIM_DIR}/bhpc_shim.cpp)
 target_include_directories(bhpc_shim PRIVATE ${BHPC_SHIM_DIR} ${BHPC_DYNARMIC_DIR}/src ${BHPC_DYNARMIC_DIR}/externals/mcl/include ${BHPC_DYNARMIC_DIR}/externals/fmt/include ${BHPC_DYNARMIC_DIR}/externals/robin-map/include)
-target_link_libraries(bhpc_shim PRIVATE dynarmic)
+target_link_libraries(bhpc_shim PRIVATE dynarmic Boost::boost)
 install(TARGETS bhpc_shim ARCHIVE DESTINATION lib)
