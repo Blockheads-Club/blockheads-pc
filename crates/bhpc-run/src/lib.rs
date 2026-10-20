@@ -3,6 +3,7 @@
 pub mod apkrun;
 pub mod aspect;
 pub mod bench;
+pub mod desktop;
 pub mod dl;
 pub mod embed;
 pub mod fastdiv;
@@ -220,6 +221,8 @@ pub fn run_shared_object(
 mod tests;
 #[cfg(test)]
 mod tests_aspect;
+#[cfg(test)]
+mod tests_desktop;
 #[cfg(test)]
 mod tests_dl;
 #[cfg(test)]

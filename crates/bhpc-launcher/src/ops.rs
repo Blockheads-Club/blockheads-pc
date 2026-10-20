@@ -138,6 +138,8 @@ pub struct LaunchPlan {
     pub window: crate::window::WindowOptions,
     /// The key bindings (the launcher itself handles the fullscreen one in the in-window view).
     pub keys: crate::keys::KeyBindings,
+    /// A link to hand the game once it runs (`--open-uri`, see [`open_uri_arg`]).
+    pub open_uri: Option<String>,
 }
 
 impl LaunchPlan {
@@ -149,8 +151,21 @@ impl LaunchPlan {
         if let Some(f) = embed {
             a.extend(["--embed".to_string(), f.display().to_string()]);
         }
+        if let Some(u) = &self.open_uri {
+            a.extend(["--open-uri".to_string(), u.clone()]);
+        }
         a
     }
+}
+
+/// The link the launcher was started with: `--open-uri URL`, or a bare `http(s)://` or `blockheads://` argument (what
+/// a desktop file's `%u` passes). The game gets it at its next start (`bhpc-run --open-uri`, `VerdeActivity.nativeHandleUri`), e.g. a
+/// `http://theblockheads.net/join.php?...` join link.
+pub fn open_uri_arg(args: &[String]) -> Option<String> {
+    if let Some(i) = args.iter().position(|a| a == "--open-uri") {
+        return args.get(i + 1).cloned();
+    }
+    args.iter().find(|a| ["http://", "https://", "blockheads://"].iter().any(|p| a.starts_with(p))).cloned()
 }
 
 /// What to run for "Play": the sidecar next to the launcher with `--config <launcher.toml>`. The game file is
@@ -178,5 +193,6 @@ pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, Launcher
         title: format!("Blockheads PC · Playing The Blockheads {version}"),
         window: config.window,
         keys: config.keys,
+        open_uri: None,
     })
 }

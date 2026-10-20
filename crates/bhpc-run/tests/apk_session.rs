@@ -383,15 +383,26 @@ fn a_setup_hook_can_supply_window_audio_and_screen_size() {
     cfg.data_dir = Some(dir.0.join("data"));
     cfg.screen = Some((640, 480));
     cfg.trace_jni_calls = true;
+    // Camera photos go to the host Pictures folder, created on demand.
+    cfg.pictures = Some(dir.0.join("Pictures"));
     let mut ran = false;
     let sess = Session::open_setup(&cfg, Box::new(std::io::sink()), None, &mut |cpu, _st| {
         // The hook runs before linking and may register thunks.
         assert!(cpu.thunk_addr("bhpc_test_hook").is_none());
         ran = true;
-        Ok(HostHooks { gfx: Some(Arc::new(bhpc_jni::NoGfx)), audio: Some(Arc::new(bhpc_jni::NoAudio)) })
+        Ok(HostHooks {
+            gfx: Some(Arc::new(bhpc_jni::NoGfx)),
+            audio: Some(Arc::new(bhpc_jni::NoAudio)),
+            system: Some(Arc::new(bhpc_jni::NoSystem)),
+        })
     })
     .unwrap();
     assert!(ran);
+    assert!(dir.0.join("Pictures").is_dir());
+    // A Pictures folder that cannot be made only keeps the photos in the game's storage.
+    std::fs::write(dir.0.join("file"), b"").unwrap();
+    cfg.pictures = Some(dir.0.join("file/Pictures"));
+    Session::open_setup(&cfg, Box::new(std::io::sink()), None, &mut |_, _| Ok(HostHooks::default())).unwrap();
     assert_eq!((sess.platform.screen_width, sess.platform.screen_height), (640, 480));
     // A failing hook aborts the open.
     let err =

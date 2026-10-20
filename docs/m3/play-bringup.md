@@ -100,3 +100,43 @@ World..." opens the world dialog).
 * The controller's L1/R1 (one level out/in) and Y (cycle 1, 2, 3, 0.5) take the same path, centred on the
   controller cursor (the middle of the picture while it is hidden).
 * Before a blockhead is warped in, the camera stays on the portal, so the zoom happens around the screen centre there.
+
+## Links, mail, clipboard, photos and join links (desktop integration)
+
+The fake Java layer (`bhpc-jni/src/jlib/desktop.rs`) gives the game a working `Uri`/`Intent` model and hands what it
+asks for to `bhpc_jni::SystemHooks`, which `bhpc-run/src/desktop.rs` implements:
+
+- Links (More Games, the pause-menu links, Free Offers, support): `openURL:` -> `Intent(ACTION_VIEW, uri)` ->
+  `resolveActivity` (answered for `http`, `https`, `mailto`, `market://`, the latter mapped to the Play Store web
+  page) -> `startActivity` -> the opener. Other schemes are logged and dropped.
+- Mail (`VerdeActivity.sendEmail`, `canSendEmail` is now true): a `mailto:` link with subject, body, to/cc/bcc
+  (an HTML body is reduced to text; attachments are dropped). A `SEND` intent with recipients or `message/rfc822`
+  becomes a `mailto:` link too.
+- Sharing (`SocialShareManager`, other `SEND` intents): the text and links go to the clipboard and
+  "COPIED TO CLIPBOARD" shows over the game. Pictures are not shared. `canSendFacebook`/`canSendTweet` stay false.
+- Clipboard (`ClipboardManager`/`ClipData`): in a window of our own SDL's clipboard (set on the main thread); in the
+  launcher's window the runner prints `@copy <text, %XX-escaped>` on stdout and the launcher sets the GTK clipboard.
+  Reading answers the last copied text (the host clipboard is not read from guest threads).
+- Camera photos (`UIImageWriteToSavedPhotosAlbum` writes `<public dir>/The Blockheads/<time>.png` below
+  `ANDROID_EXTERNAL_STORAGE`): `/sdcard/Pictures` and `/sdcard/DCIM` are mounted on the user's Pictures folder
+  (`XDG_PICTURES_DIR`, else the platform's, else `~/Pictures`). `MediaScannerConnection.scanFile` shows
+  "PHOTO SAVED: <host path>".
+- Help/Credits (`NoodleWebView.showBlockheadsWebView(html, editable, id)`, also custom-rules help): the HTML and the
+  assets it refers to (`GameResources/instructions/...`, style sheet pictures) are written to
+  `$TMPDIR/blockheads-pc-pages/<pid>-<n>/index.html` and opened in the browser. The *editable* page (the server
+  welcome message, `editable = true`) opens read-only: editing needs an in-game text editor that calls the native
+  `BlockheadsWebView.nativeSetWelcomeMessage(String, long id)` with the edited text (not done).
+
+Opener: `BHPC_OPENER` (a command; `%s` is the target, else it is appended), else `BROWSER` (first entry), else
+`xdg-open` / `open` / `rundll32 url.dll,FileProtocolHandler`. Headless runs and tests set `BROWSER=true` (or a
+recording `BHPC_OPENER`) so nothing opens on the desktop.
+
+Join links: `bhpc-run --open-uri URL` calls `VerdeActivity.nativeHandleUri(URL)` after the start-up lifecycle, as
+Android does with the data of the launching intent. The launcher takes `--open-uri URL` (or a bare `http(s)://`
+or `blockheads://` argument) and passes it to the next game start. The game builds invite links as
+`http://theblockheads.net/join.php?ip=%@&port=%@&name=%@` (or `?id=%@&name=%@`). Its Android manifest only claims
+`http://theblockheads.net/...`, `http://blockheads.noodlecake.com/...` and a malformed scheme
+`theblockheads.net/join`; the binary also has a `blockheads://` prefix next to `http://` (probably the iOS scheme),
+but whether the link handler acts on either form is unverified (a fresh data dir goes straight into the first world,
+where the call had no visible effect). So no scheme is registered in the bundle's `.desktop` file yet; to try it:
+`xdg-mime default blockheads-pc.desktop x-scheme-handler/blockheads` with `Exec=blockheads-pc %u`.

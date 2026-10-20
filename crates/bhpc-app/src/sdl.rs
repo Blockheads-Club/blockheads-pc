@@ -223,6 +223,11 @@ impl SdlBackend {
         }
     }
 
+    /// Put `text` on the desktop clipboard (main thread only, like every SDL video call).
+    pub fn set_clipboard_text(&mut self, text: &str) -> bool {
+        self.video.clipboard().set_clipboard_text(text).is_ok()
+    }
+
     /// Resize the window (logical pixels); the window system answers with a `Resized` event.
     pub fn set_size(&mut self, width: u32, height: u32) -> bool {
         self.window.set_size(width, height).is_ok()

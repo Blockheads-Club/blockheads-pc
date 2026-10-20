@@ -6,6 +6,7 @@ use crate::vm::{Call, JResult, Vm};
 
 mod android;
 mod apportable;
+pub(crate) mod desktop;
 mod graphics;
 mod io;
 mod lang;
@@ -49,6 +50,7 @@ pub(crate) fn install(vm: &Vm) {
     graphics::install(vm);
     apportable::install(vm);
     net::install(vm);
+    desktop::install(vm);
     crate::looper::install(vm);
 }
 

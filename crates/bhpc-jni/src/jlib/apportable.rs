@@ -51,14 +51,16 @@ pub(crate) fn install(vm: &Vm) {
             c.cpu.request_stop(bhpc_cpu::Stop::Host("VerdeActivity.terminateProcess".into()));
             void()
         })
-        .method("canSendEmail", "()Z", |_| boolean(false))
+        .method("canSendEmail", "()Z", |_| boolean(true))
         .method("getContentWidth", "()I", |c| int(c.vm.content_pixels().0))
         .method("getContentHeight", "()I", |c| int(c.vm.content_pixels().1))
         .method("getScreenWidth", "()I", |c| int(c.vm.screen_size().0))
         .method("getScreenHeight", "()I", |c| int(c.vm.screen_size().1))
         .method("getSplashScreenWidth", "()I", |c| int(c.vm.screen_size().0))
         .method("getSplashScreenHeight", "()I", |c| int(c.vm.screen_size().1))
-        .method("hasActivityForAction", "(Ljava/lang/String;)Z", |_| boolean(false))
+        .method("hasActivityForAction", "(Ljava/lang/String;)Z", |c| {
+            boolean(super::desktop::has_activity_for(&c.string(0).unwrap_or_default()))
+        })
         .method("hasSystemFeature", "(Ljava/lang/String;)I", |c| int(feature_flag(&c.string(0).unwrap_or_default())))
         .method("hasWindowFocus", "()Z", |_| boolean(true))
         .method("getAttributionId", "()Ljava/lang/String;", |_| object(None))
@@ -109,7 +111,7 @@ pub(crate) fn install(vm: &Vm) {
             }
             None => void(),
         })
-        .method("sendEmail", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V", |_| void());
+        .method("sendEmail", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V", super::desktop::send_email);
     v.natives(&ACTIVITY_NATIVES);
 
     vm.define("com/apportable/MainThread")

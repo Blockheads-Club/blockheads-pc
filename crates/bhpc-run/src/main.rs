@@ -160,6 +160,9 @@ fn run_apk(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn st
 fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dyn std::io::Write) -> u8 {
     use bhpc_run::play::{play, PlayConfig};
     let mut cfg = PlayConfig::new(init);
+    // Camera photos land in the user's Pictures folder; `--open-uri` hands the game a link (a join link).
+    cfg.init.pictures = bhpc_run::desktop::user_pictures_dir();
+    cfg.open_uri = opt(args, "--open-uri").cloned();
     if let Some((w, h)) = opt(args, "--window").and_then(|v| v.split_once('x')) {
         cfg.window = (w.parse().unwrap_or(1024), h.parse().unwrap_or(768));
     }

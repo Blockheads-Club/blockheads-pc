@@ -50,6 +50,8 @@ pub struct InitConfig {
     pub screen: Option<(i32, i32)>,
     /// Run guest threads in parallel (`bhpc_bionic::sched::enable_parallel`) instead of one at a time.
     pub parallel_guest: bool,
+    /// Host folder behind the guest's shared picture folders (camera photos; see `bhpc_vfs::VfsConfig::pictures`).
+    pub pictures: Option<PathBuf>,
 }
 
 /// Whether guest threads run in parallel when nothing says otherwise (`--serial-guest` / `BHPC_PARALLEL_GUEST=0`
@@ -90,6 +92,7 @@ impl InitConfig {
             pc_trace: None,
             screen: None,
             parallel_guest: DEFAULT_PARALLEL_GUEST,
+            pictures: None,
         }
     }
 }
@@ -298,6 +301,7 @@ pub type Setup<'a> = dyn FnMut(&mut Cpu, &Shared) -> Result<HostHooks, RunError>
 pub struct HostHooks {
     pub gfx: Option<std::sync::Arc<dyn bhpc_jni::GfxHooks>>,
     pub audio: Option<std::sync::Arc<dyn bhpc_jni::AudioHooks>>,
+    pub system: Option<std::sync::Arc<dyn bhpc_jni::SystemHooks>>,
 }
 
 /// A loaded APK: guest memory, CPU, bionic state and the linked modules.
@@ -347,6 +351,12 @@ impl Session {
         dirs.create_all()?;
         let mut vcfg = VfsConfig::new(&cfg.apk, dirs);
         vcfg.package = cfg.package.clone();
+        if let Some(p) = &cfg.pictures {
+            match std::fs::create_dir_all(p) {
+                Ok(()) => vcfg.pictures = Some(p.clone()),
+                Err(e) => eprintln!("[run] photos stay in the game's storage: cannot create {}: {e}", p.display()),
+            }
+        }
         let storage = Storage::open(&vcfg)?;
         let mut bcfg = bhpc_bionic::Config { stdout: out, log, ..bhpc_bionic::Config::default() };
         bcfg.env.extend(storage.guest.env());
@@ -385,6 +395,9 @@ impl Session {
         }
         if let Some(a) = hooks.audio {
             jcfg.audio = a;
+        }
+        if let Some(s) = hooks.system {
+            jcfg.system = s;
         }
         let jni = bhpc_jni::install(&cpu, mem, Box::new(BionicHeap(st.clone())), jcfg)?;
         jni.set_trace(cfg.trace_jni);

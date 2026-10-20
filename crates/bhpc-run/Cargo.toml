@@ -30,6 +30,7 @@ bhpc-loader.workspace = true
 bhpc-bionic.workspace = true
 bhpc-jni.workspace = true
 bhpc-vfs.workspace = true
+dirs = "6"
 
 [dev-dependencies]
 bhpc-loader = { workspace = true, features = ["test-elf"] }

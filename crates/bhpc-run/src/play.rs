@@ -100,6 +100,8 @@ pub struct PlayConfig {
     /// driver is forced to SDL's offscreen one, input arrives as `bhpc_launcher::embed::Cmd` lines on stdin and the
     /// run ends when stdin closes.
     pub embed: Option<PathBuf>,
+    /// A link to hand the game once it runs (`--open-uri`; `VerdeActivity.nativeHandleUri`, e.g. a join link).
+    pub open_uri: Option<String>,
 }
 
 impl PlayConfig {
@@ -133,6 +135,7 @@ impl PlayConfig {
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
             embed: None,
+            open_uri: None,
         }
     }
 }
@@ -224,6 +227,8 @@ struct Flags {
     fail: Mutex<Option<(String, [u32; 16])>>,
     /// The controller cursor and the host's messages, drawn over the frame.
     pad_view: Mutex<crate::overlay::PadView>,
+    /// Text the game copied, for the host main thread to put on the clipboard (SDL's clipboard is main-thread only).
+    clipboard: Mutex<Option<String>>,
 }
 
 /// A failure to get a window or GL context: in-window mode reports that it cannot work here (the launcher falls back
@@ -535,6 +540,11 @@ impl Backend for Watched {
         if let Some((w, h)) = self.flags.resize.lock().unwrap_or_else(PoisonError::into_inner).take() {
             eprintln!("[play] resizing the window to {w}x{h}: {}", self.inner.set_size(w, h));
         }
+        if let Some(text) = self.flags.clipboard.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            if !self.inner.set_clipboard_text(&text) {
+                eprintln!("[play] cannot set the clipboard");
+            }
+        }
         if self.flags.toggle_fullscreen.swap(false, Ordering::SeqCst) {
             let want = !self.fullscreen;
             if self.inner.set_fullscreen(want) {
@@ -781,6 +791,23 @@ struct Parts {
     sles: Arc<Sles>,
 }
 
+/// Links, mail, clipboard and notices for the fake JVM. Copied text goes to SDL's clipboard in a window of our own and
+/// to the launcher (an `@copy` line) in the launcher's window, where SDL's offscreen driver has no clipboard.
+fn desktop_hooks(flags: &Arc<Flags>, embedded: bool, pictures: Option<PathBuf>) -> Arc<dyn bhpc_jni::SystemHooks> {
+    let (f1, f2) = (flags.clone(), flags.clone());
+    let copy: crate::desktop::Sink = if embedded {
+        Box::new(|t| println!("{}", bhpc_launcher::embed::copy_line(t)))
+    } else {
+        Box::new(move |t| *f1.clipboard.lock().unwrap_or_else(PoisonError::into_inner) = Some(t.to_string()))
+    };
+    let notice: crate::desktop::Sink = Box::new(move |t| {
+        f2.pad_view.lock().unwrap_or_else(PoisonError::into_inner).message = Some((t.to_string(), Instant::now()));
+    });
+    let pages = std::env::temp_dir().join("blockheads-pc-pages");
+    let opener = crate::desktop::Opener::from_env(&|k| std::env::var(k).ok());
+    Arc::new(crate::desktop::Desktop::new(opener, pages, pictures, copy, notice))
+}
+
 fn guest_main(
     cfg: &PlayConfig,
     gl: Arc<bhpc_app::sdl::SdlGl>,
@@ -811,6 +838,7 @@ fn boot(
     let screen = if cfg.drawable.0 > 0 && cfg.drawable.1 > 0 { cfg.drawable } else { cfg.window };
     icfg.screen = Some((screen.0 as i32, screen.1 as i32));
     let hooks_flags = flags.clone();
+    let (embedded, pictures) = (cfg.embed.is_some(), cfg.init.pictures.clone());
     let embed_cfg = cfg.clone();
     let embed_out: Mutex<Option<EmbedOut>> = Mutex::new(match &cfg.embed {
         Some(path) => {
@@ -892,7 +920,11 @@ fn boot(
         parts = Some(Parts { gles, sles });
         let gfx: Arc<dyn GfxHooks> = hooks;
         let audio: Arc<dyn bhpc_jni::AudioHooks> = Arc::new(Tracks::new(mixer.clone(), st.clone()));
-        Ok(HostHooks { gfx: Some(gfx), audio: Some(audio) })
+        Ok(HostHooks {
+            gfx: Some(gfx),
+            audio: Some(audio),
+            system: Some(desktop_hooks(&hooks_flags, embedded, pictures.clone())),
+        })
     })?;
     let Parts { gles, sles } = parts.ok_or_else(|| other("setup did not run"))?;
     let st = sess.st.clone();
@@ -1135,6 +1167,12 @@ impl UiThread {
         for s in [Stage::ContextValid, Stage::SurfaceChanged, Stage::WillEnterForeground, Stage::DidBecomeActive] {
             run_stage(c, vm, s)?;
             self.flags.launch_step();
+        }
+        if let Some(uri) = &self.cfg.open_uri {
+            eprintln!("[play] handing the game {uri}");
+            if let Err(e) = vm.handle_uri(c, uri) {
+                eprintln!("[play] nativeHandleUri failed: {e:?}");
+            }
         }
         let rx = self.rx.lock().unwrap_or_else(PoisonError::into_inner).take();
         let mut mapper = InputMapper::new(InputConfig {

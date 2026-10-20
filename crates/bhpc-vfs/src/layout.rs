@@ -239,6 +239,9 @@ pub struct VfsConfig {
     pub dirs: DataDirs,
     /// `/proc` and `/sys` facts.
     pub system: SystemInfo,
+    /// Host folder behind the shared picture folders (`/sdcard/Pictures`, `/sdcard/DCIM`): where the game's camera
+    /// photos land. `None` keeps them in the emulated external storage.
+    pub pictures: Option<PathBuf>,
 }
 
 impl VfsConfig {
@@ -249,6 +252,7 @@ impl VfsConfig {
             package: DEFAULT_PACKAGE.to_string(),
             dirs,
             system: SystemInfo::default(),
+            pictures: None,
         }
     }
 }
@@ -324,6 +328,9 @@ pub fn build(cfg: &VfsConfig, apk: Arc<ApkArchive>) -> Storage {
     for ext in ["/sdcard", "/mnt/sdcard", "/storage/emulated/0", "/storage/emulated/legacy"] {
         mount(ext, rw(&d.external));
         mount(&format!("{ext}/Android/obb/{}", cfg.package), ro(&d.obb));
+        for dir in cfg.pictures.iter().flat_map(|p| [("Pictures", p), ("DCIM", p)]) {
+            mount(&format!("{ext}/{}", dir.0), rw(dir.1));
+        }
     }
 
     Storage { vfs: Arc::new(vfs), assets: AssetManager::android(apk), guest }

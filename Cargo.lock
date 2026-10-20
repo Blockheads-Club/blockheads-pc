@@ -152,6 +152,7 @@ dependencies = [
  "bhpc-loader",
  "bhpc-mem",
  "bhpc-vfs",
+ "dirs",
  "libc",
 ]
 

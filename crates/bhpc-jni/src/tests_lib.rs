@@ -1098,12 +1098,12 @@ fn verde_activity() {
     ] {
         assert_eq!(int(e.call(a, m, "()I", &[])), want, "{m}");
     }
-    for (m, want) in [("canSendEmail", 0), ("hasWindowFocus", 1), ("isFinishing", 0)] {
+    for (m, want) in [("canSendEmail", 1), ("hasWindowFocus", 1), ("isFinishing", 0)] {
         assert_eq!(int(e.call(a, m, "()Z", &[])).min(1), want, "{m}");
     }
     assert_eq!(
         e.call(a, "hasActivityForAction", "(Ljava/lang/String;)Z", &[e.string("android.intent.action.VIEW")]),
-        Ok(Value::Int(0))
+        Ok(Value::Int(1))
     );
     assert_eq!(
         int(e.call(a, "hasSystemFeature", "(Ljava/lang/String;)I", &[e.string("android.hardware.touchscreen")])),

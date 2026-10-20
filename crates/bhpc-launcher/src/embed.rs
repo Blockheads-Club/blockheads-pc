@@ -359,6 +359,51 @@ impl FrameWriter {
 }
 
 /// Modifier bits of [`Cmd::Button`], [`Cmd::Wheel`] and [`Cmd::Key`].
+/// Runner -> launcher (stdout): the game copied text. The in-window game has no clipboard of its own (SDL's offscreen
+/// driver), so the launcher puts it on the desktop clipboard. `%`, CR, LF and other control characters are
+/// `%XX`-escaped so the text stays on one line.
+pub const COPY_PREFIX: &str = "@copy ";
+
+/// The `@copy` line for `text`.
+pub fn copy_line(text: &str) -> String {
+    let mut out = String::from(COPY_PREFIX);
+    for c in text.chars() {
+        if c == '%' || c.is_control() {
+            let mut b = [0u8; 4];
+            for byte in c.encode_utf8(&mut b).bytes() {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The text of an `@copy` line (`None` for any other line).
+pub fn parse_copy(line: &str) -> Option<String> {
+    let rest = line.trim_end_matches(['\r', '\n']).strip_prefix(COPY_PREFIX)?.as_bytes();
+    let mut out = Vec::with_capacity(rest.len());
+    let mut i = 0;
+    while i < rest.len() {
+        let hex = rest
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (rest[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
 pub const MOD_CTRL: u8 = 1;
 pub const MOD_SHIFT: u8 = 2;
 pub const MOD_ALT: u8 = 4;

@@ -228,3 +228,26 @@ fn real_apk_smoke() {
     let mut dir = s.assets.open_dir("GameResources/Fonts").unwrap();
     assert!(dir.next_file_name().is_some());
 }
+
+#[test]
+fn camera_photos_go_to_the_host_pictures_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let dirs = DataDirs::new(d.path().join("data"));
+    dirs.create_all().unwrap();
+    let pics = d.path().join("Pictures");
+    std::fs::create_dir(&pics).unwrap();
+    let apk_path = d.path().join("game.apk");
+    std::fs::write(&apk_path, fake_apk()).unwrap();
+    let mut cfg = VfsConfig::new(&apk_path, dirs.clone());
+    cfg.pictures = Some(pics.clone());
+    let v = Storage::open(&cfg).unwrap().vfs;
+    let w = OpenFlags { write: true, create: true, ..Default::default() };
+    // What `UIImageWriteToSavedPhotosAlbum` does: mkdir the public folder, then its own album, then the PNG.
+    assert_eq!(v.mkdir("/sdcard/Pictures").err(), Some(VfsError::Exists));
+    v.mkdir("/sdcard/Pictures/The Blockheads").unwrap();
+    v.open("/sdcard/Pictures/The Blockheads/1.png", w).unwrap().write(b"png").unwrap();
+    assert_eq!(std::fs::read(pics.join("The Blockheads/1.png")).unwrap(), b"png");
+    v.open("/storage/emulated/0/DCIM/2.png", w).unwrap();
+    assert!(pics.join("2.png").is_file());
+    assert!(!dirs.external.join("Pictures").exists());
+}

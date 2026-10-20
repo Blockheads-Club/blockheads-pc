@@ -166,6 +166,15 @@ impl Vm {
     }
 
     /// The `VerdeActivity` singleton (the receiver of instance natives and `getActivity()`).
+    /// Hand the game a link it was opened with (`VerdeActivity.nativeHandleUri`, what Android does with the data
+    /// of the launching or a new `VIEW` intent, e.g. a `theblockheads.net/join...` link).
+    pub fn handle_uri(&self, cpu: &mut Cpu, uri: &str) -> Result<(), Throw> {
+        let s = self.new_string(uri);
+        let sig = "(Ljava/lang/String;)V";
+        self.call_static(cpu, "com/apportable/activity/VerdeActivity", "nativeHandleUri", sig, &[Value::Ref(Some(s))])
+            .map(|_| ())
+    }
+
     pub fn activity(&self) -> crate::value::Obj {
         crate::jlib::activity(self)
     }

@@ -141,7 +141,12 @@ pub struct Session {
     history: Option<PathBuf>,
     stall: Duration,
     grace: Duration,
+    /// Called with the text of every `@copy` line of the game (see [`crate::embed::copy_line`]).
+    on_copy: CopyHandler,
 }
+
+/// What the launcher does with text the game copied.
+pub type CopyHandler = Arc<Mutex<Option<Box<dyn Fn(String) + Send>>>>;
 
 impl Default for Session {
     fn default() -> Self {
@@ -149,12 +154,13 @@ impl Default for Session {
     }
 }
 
-/// Reads lines into the log. With `track`, progress lines (see [`progress`]) go to the tracker instead of the log.
+/// Reads lines into the log. With `track`, progress lines (see [`progress`]) go to the tracker and `@copy` lines to the
+/// copy handler instead of the log.
 /// (Not generic, so that stdout and stderr share one instantiation.)
 fn pump(
     source: Box<dyn Read + Send>,
     log: Arc<Mutex<LogBuffer>>,
-    track: Option<(Arc<Mutex<Tracker>>, Instant)>,
+    track: Option<(Arc<Mutex<Tracker>>, Instant, CopyHandler)>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(source);
@@ -162,9 +168,15 @@ fn pump(
         while reader.read_until(b'\n', &mut buf).map(|n| n > 0).unwrap_or(false) {
             let line = String::from_utf8_lossy(&buf).trim_end().to_string();
             buf.clear();
-            if let Some((tracker, began)) = &track {
+            if let Some((tracker, began, copy)) = &track {
                 if let Some(parsed) = progress::parse_line(&line) {
                     tracker.lock().expect("tracker lock").feed(parsed, began.elapsed());
+                    continue;
+                }
+                if let Some(text) = crate::embed::parse_copy(&line) {
+                    if let Some(f) = copy.lock().expect("copy lock").as_ref() {
+                        f(text);
+                    }
                     continue;
                 }
             }
@@ -217,7 +229,13 @@ impl Session {
             history: None,
             stall: progress::STALL,
             grace,
+            on_copy: Arc::default(),
         }
+    }
+
+    /// What to do with text the game copies (in-window mode: put it on the desktop clipboard).
+    pub fn set_copy_handler(&mut self, f: impl Fn(String) + Send + 'static) {
+        *self.on_copy.lock().expect("copy lock") = Some(Box::new(f));
     }
 
     /// Keeps the step durations of every start in this file and derives the next start's weights from it.
@@ -251,7 +269,9 @@ impl Session {
         let started = Instant::now();
         let mut readers = Vec::new();
         readers.extend(
-            child.stdout.take().map(|s| pump(Box::new(s), self.log.clone(), Some((self.tracker.clone(), started)))),
+            child.stdout.take().map(|s| {
+                pump(Box::new(s), self.log.clone(), Some((self.tracker.clone(), started, self.on_copy.clone())))
+            }),
         );
         readers.extend(child.stderr.take().map(|s| pump(Box::new(s), self.log.clone(), None)));
         let input = child.stdin.take().map(|s| feed(Box::new(s)));

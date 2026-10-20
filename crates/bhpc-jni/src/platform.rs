@@ -175,6 +175,37 @@ impl AudioHooks for NoAudio {
     }
 }
 
+/// What the game asks of the desktop outside its own window: links, mail, the clipboard, short notices, saved
+/// pictures and documents. The defaults do nothing, so the fake JVM works headless and in tests.
+pub trait SystemHooks: Send + Sync {
+    /// Open `url` with the user's default program. The Java layer only passes `http`, `https` and `mailto` URLs.
+    /// False if it could not be handed over.
+    fn open_url(&self, _url: &str) -> bool {
+        false
+    }
+    /// Show an HTML page (help, credits) outside the game. `files` are the resources it refers to by relative name
+    /// (pictures, style sheets), found in the APK's assets. False if it could not be shown.
+    fn show_html(&self, _html: &str, _files: &[(String, Vec<u8>)]) -> bool {
+        false
+    }
+    /// Put `text` on the desktop clipboard.
+    fn set_clipboard(&self, _text: &str) {}
+    /// The desktop clipboard's text, if the host can read it.
+    fn clipboard(&self) -> Option<String> {
+        None
+    }
+    /// Show a short notice over the game.
+    fn notify(&self, _text: &str) {}
+    /// The game saved a picture at this guest path (`MediaScannerConnection.scanFile`).
+    fn picture_saved(&self, _path: &str) {}
+}
+
+/// [`SystemHooks`] with every default.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoSystem;
+
+impl SystemHooks for NoSystem {}
+
 /// [`GfxHooks`] with every default.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoGfx;

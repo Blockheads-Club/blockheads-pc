@@ -360,6 +360,25 @@ mod unix {
     }
 
     #[test]
+    fn copy_lines_go_to_the_handler() {
+        let mut s = Session::new(Duration::ZERO);
+        // Without a handler the line is dropped all the same.
+        let (prog, args) = sh("echo '@copy lost'; echo after");
+        s.start(&prog, &args, &[]).unwrap();
+        assert_eq!(until_done(&mut s, true).lines, ["after"]);
+        let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let g = got.clone();
+        s.set_copy_handler(move |t| g.lock().unwrap().push(t));
+        let (prog, args) = sh("echo '@copy a%0Ab'; echo '@copy b' >&2; echo done");
+        s.start(&prog, &args, &[]).unwrap();
+        let snap = until_done(&mut s, true);
+        let mut lines = snap.lines.clone();
+        lines.sort();
+        assert_eq!(lines, ["@copy b", "done"], "stderr is never parsed");
+        assert_eq!(*got.lock().unwrap(), ["a\nb"]);
+    }
+
+    #[test]
     fn progress_lines_drive_the_state_and_leave_the_log() {
         let dir = tempfile::tempdir().unwrap();
         let hist = crate::progress::history_path(dir.path());
@@ -592,6 +611,12 @@ mod ops_tests {
         assert_eq!(plan.args_for(None)[plan.args.len()..], ["--progress"]);
         let embedded = plan.args_for(Some(Path::new("/run/f")));
         assert_eq!(embedded[plan.args.len()..], ["--progress", "--embed", "/run/f"]);
+        let mut linked = plan.clone();
+        linked.open_uri = Some("http://theblockheads.net/join.php?ip=1".into());
+        assert_eq!(
+            linked.args_for(None)[plan.args.len()..],
+            ["--progress", "--open-uri", "http://theblockheads.net/join.php?ip=1"]
+        );
         Prefs { game_sound: false, ..Prefs::default() }.save(&paths.prefs()).unwrap();
         assert_eq!(launch_plan(&paths, exe).unwrap().env, [("SDL_AUDIODRIVER".to_string(), "dummy".to_string())]);
         c.window.width = 1;
@@ -861,4 +886,28 @@ mod embed_tests {
             (0..128).filter_map(hid_from_evdev).filter(|h| (4..=29).contains(h)).collect();
         assert_eq!(letters.len(), 26);
     }
+}
+
+#[test]
+fn launcher_links_and_copy_lines() {
+    let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(crate::ops::open_uri_arg(&a(&["--open-uri", "x://y"])).as_deref(), Some("x://y"));
+    assert_eq!(crate::ops::open_uri_arg(&a(&["--open-uri"])), None);
+    assert_eq!(
+        crate::ops::open_uri_arg(&a(&["-v", "https://theblockheads.net/join"])).as_deref(),
+        Some("https://theblockheads.net/join")
+    );
+    assert_eq!(crate::ops::open_uri_arg(&a(&["http://a"])).as_deref(), Some("http://a"));
+    assert_eq!(crate::ops::open_uri_arg(&a(&["blockheads://join?ip=1"])).as_deref(), Some("blockheads://join?ip=1"));
+    assert_eq!(crate::ops::open_uri_arg(&a(&["file.txt"])), None);
+    use crate::embed::{copy_line, parse_copy};
+    for t in ["", "plain text", "100% sure\nnext\r\tline", "ünïcode ✓"] {
+        let l = copy_line(t);
+        assert!(!l.contains('\n') && !l.contains('\r'), "{l:?}");
+        assert_eq!(parse_copy(&l).as_deref(), Some(t));
+        assert_eq!(parse_copy(&format!("{l}\r\n")).as_deref(), Some(t));
+    }
+    assert_eq!(copy_line("a%\nb"), "@copy a%25%0Ab");
+    assert_eq!(parse_copy("@copy 50% %zz %4"), Some("50% %zz %4".to_string()));
+    assert_eq!(parse_copy("@progress apk 0 1"), None);
 }

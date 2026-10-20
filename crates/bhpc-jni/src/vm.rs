@@ -5,7 +5,7 @@
 //! guest (nested calls) freely.
 
 use crate::mutf8;
-use crate::platform::{Assets, AudioHooks, GfxHooks, NoAudio, NoGfx, Platform};
+use crate::platform::{Assets, AudioHooks, GfxHooks, NoAudio, NoGfx, NoSystem, Platform, SystemHooks};
 use crate::value::{parse_field_ty, parse_sig, ClassId, Obj, Sig, Ty, Value};
 use bhpc_cpu::{Cpu, Stop};
 use bhpc_mem::GuestMemory;
@@ -235,6 +235,8 @@ pub struct VmConfig {
     pub gfx: Arc<dyn GfxHooks>,
     /// `android.media.AudioTrack` back end.
     pub audio: Arc<dyn AudioHooks>,
+    /// Links, mail, clipboard, notices and documents (see [`SystemHooks`]).
+    pub system: Arc<dyn SystemHooks>,
 }
 
 impl VmConfig {
@@ -247,6 +249,7 @@ impl VmConfig {
             clock: Arc::new(move || start.elapsed().as_millis() as u64),
             gfx: Arc::new(NoGfx),
             audio: Arc::new(NoAudio),
+            system: Arc::new(NoSystem),
         }
     }
 }
@@ -261,6 +264,7 @@ pub(crate) struct Inner {
     pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     pub gfx: Arc<dyn GfxHooks>,
     pub audio: Arc<dyn AudioHooks>,
+    pub system: Arc<dyn SystemHooks>,
     pub layout: OnceLock<crate::jni::Layout>,
     /// The display size the game sees (`getScreenWidth/Height`, display metrics); follows the host window.
     screen: [AtomicI32; 2],
@@ -287,6 +291,7 @@ impl Vm {
             clock: cfg.clock,
             gfx: cfg.gfx,
             audio: cfg.audio,
+            system: cfg.system,
             layout: OnceLock::new(),
             screen: [AtomicI32::new(0), AtomicI32::new(0)],
             content: [AtomicU32::new(0), AtomicU32::new(0)],
