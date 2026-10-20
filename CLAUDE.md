@@ -20,6 +20,9 @@ Umbrella rules: `../AGENTS.md`.
 - Before merging into `dev`: `scripts/check-full.sh` (workspace fmt/clippy with `play`, `scripts/coverage.sh`, doctests,
   app check + vitest + Playwright in parallel, then `scripts/smoke-game.sh`, a ~35 s headless boot -> world -> menu run).
   Never merge with a red full gate; no multi-round benchmarks in gates.
+- Headless game runs: `env -u WAYLAND_DISPLAY -u DISPLAY SDL_VIDEODRIVER=x11 GDK_BACKEND=x11 SDL_AUDIODRIVER=dummy`
+  under `dbus-run-session` + `xvfb-run`, temp HOME. `SDL_VIDEODRIVER=x11` is required: without it SDL falls back to
+  `$XDG_RUNTIME_DIR/wayland-0` and the window opens on the developer's desktop.
 - Worktrees share build caches: dynarmic archives in `~/.cache/bhpc/dynarmic-<hash>` (reused by every profile and
   checkout, `BHPC_DYNARMIC_CACHE=0` off) and sccache for crates.io deps when installed. Keep one `target/` per
   worktree (no shared `CARGO_TARGET_DIR`: cargo's lock would serialise agents). Run the scripts with `TMPDIR` on a disk

@@ -74,7 +74,7 @@ EOF
 echo "smoke-game: $apk (limit ${limit} s)"
 start=$SECONDS
 set +e
-env -u WAYLAND_DISPLAY -u DISPLAY HOME="$run/home" SDL_AUDIODRIVER=dummy \
+env -u WAYLAND_DISPLAY -u DISPLAY HOME="$run/home" SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11 GDK_BACKEND=x11 \
   timeout --kill-after=10 "$limit" dbus-run-session --config-file="$run/bus.conf" -- xvfb-run -a -s "-screen 0 1280x800x24" \
   "$bin" --apk "$apk" --data-dir "$run/data" --script "$run/smoke.script" --shot-dir "$run/shots" \
   --seconds "$((limit - 10))" > "$run/out.log" 2> "$run/err.log"
