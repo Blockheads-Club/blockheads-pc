@@ -244,7 +244,7 @@ mod tests_mktimer;
 mod tests_mmapio;
 #[cfg(test)]
 mod tests_music;
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "linux"))]
 mod tests_net;
 #[cfg(test)]
 mod tests_overlay;

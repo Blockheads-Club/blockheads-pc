@@ -15,7 +15,9 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-#[cfg_attr(not(unix), path = "vfd/net_stub.rs")]
+// net.rs passes Linux socket constants and calls (accept4, MSG_NOSIGNAL, SOCK_NONBLOCK) straight to the host, so it
+// is Linux-only; macOS and Windows keep the stubs until they get their own mapping (docs/m7/windows-sockets.md).
+#[cfg_attr(not(target_os = "linux"), path = "vfd/net_stub.rs")]
 mod net;
 pub use net::host_has_lan;
 pub(crate) mod timerfd;

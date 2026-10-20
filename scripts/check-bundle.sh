@@ -4,7 +4,7 @@
 # (libApplication.so, libv.so, ...) or an assets/ folder. Also lists what the bundles hold.
 # Usage: scripts/check-bundle.sh <bundle dir>   (the directory `tauri build` writes: deb/, rpm/, appimage/)
 set -euo pipefail
-dir="${1:?bundle directory}"
+dir="$(cd "${1:?bundle directory}" && pwd)"
 bad='(\.apk$|libApplication|/libv\.so|/assets/|\.obb$)'
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

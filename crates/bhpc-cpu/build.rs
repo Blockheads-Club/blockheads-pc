@@ -29,6 +29,11 @@ fn target_var(name: &str) -> String {
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let dynarmic = manifest.join("../../third_party/dynarmic").canonicalize().expect("third_party/dynarmic missing");
+    // Windows canonicalizes to a verbatim `\\?\D:\...` path, which MSBuild cannot open sources from.
+    let dynarmic = match dynarmic.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(plain) if !plain.starts_with("UNC") => PathBuf::from(plain),
+        _ => dynarmic,
+    };
     let shim = manifest.join("shim");
     println!("cargo:rerun-if-changed={}", shim.display());
     println!("cargo:rerun-if-changed={}", manifest.join("cmake/CMakeLists.txt").display());

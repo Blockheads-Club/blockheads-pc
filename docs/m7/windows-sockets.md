@@ -1,7 +1,8 @@
 # Guest sockets on Windows (plan, not implemented)
 
 `crates/bhpc-run/src/vfd/net.rs` serves the guest's BSD socket calls with non-blocking host sockets through `libc`
-(unix only). On other hosts `vfd/net_stub.rs` is compiled instead: bionic's failing stubs stay, so there is no
+(Linux only: it passes Linux constants and `accept4` through unchanged). On other hosts, macOS included,
+`vfd/net_stub.rs` is compiled instead: bionic's failing stubs stay, so there is no
 online play, and `host_has_lan()` is false. `ci-crossplat.yml` builds only `bhpc-mem`/`bhpc-cpu` on Windows, so
 `bhpc-run` itself is not built there yet; that comes first.
 
