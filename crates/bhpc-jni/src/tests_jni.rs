@@ -143,6 +143,32 @@ fn install_reports_a_full_thunk_table() {
 }
 
 #[test]
+fn install_reports_a_thunk_table_that_fills_up_at_the_bitmap_functions() {
+    let fresh = || {
+        let mem = Arc::new(bhpc_mem::GuestMemory::new().unwrap());
+        let heap = bhpc_mem::GuestHeap::new(mem.clone(), 0x4000_0000, 1 << 20).unwrap();
+        let cpu = bhpc_cpu::Cpu::new(mem.clone()).unwrap();
+        let vm = new_vm(mem, Box::new(heap), VmConfig::new(Platform::default(), Box::new(NoAssets)));
+        (cpu, vm)
+    };
+    // Count the JNI table thunks: everything install registers except the three libjnigraphics functions.
+    let (probe, vm) = fresh();
+    let before = probe.thunk_count();
+    vm.install(&probe).unwrap();
+    const BITMAP: [&str; 3] = ["AndroidBitmap_getInfo", "AndroidBitmap_lockPixels", "AndroidBitmap_unlockPixels"];
+    assert!(BITMAP.iter().all(|n| probe.thunk_addr(n).is_some()));
+    let tables = probe.thunk_count() - before - BITMAP.len();
+    // Leave exactly enough room for the tables: the first bitmap function no longer fits.
+    let (cpu, vm) = fresh();
+    for i in 0..(bhpc_cpu::MAX_THUNKS as usize - cpu.thunk_count() - tables) {
+        cpu.register_shared_thunk(&format!("filler{i}"), Arc::new(|_: &mut bhpc_cpu::Cpu| {})).unwrap();
+    }
+    assert!(vm.install(&cpu).unwrap_err().contains("TooManyThunks"));
+    assert!(cpu.thunk_addr("JNI:GetVersion").is_some(), "the tables were built");
+    assert!(cpu.thunk_addr(BITMAP[0]).is_none());
+}
+
+#[test]
 fn guest_code_calls_through_the_table() {
     let mut e = Env::new();
     // jint f(JNIEnv *env, ...) { return (*env)->GetVersion(env); } as a tail call through the table.
