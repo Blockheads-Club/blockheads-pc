@@ -390,6 +390,12 @@ fn embed_layout(window: WebviewWindow, top: i32) -> Res<()> {
     embed::layout(&window, top)
 }
 
+/// The page's loading screen is done: the in-window game may fade in (see `embed::reveal`).
+#[tauri::command]
+fn embed_reveal(window: WebviewWindow) -> Res<()> {
+    embed::reveal(&window)
+}
+
 #[tauri::command]
 fn embed_fullscreen(window: WebviewWindow, handle: AppHandle, on: bool) -> Res<()> {
     embed::set_fullscreen(&window, &handle, on)
@@ -480,6 +486,7 @@ pub fn run() {
             game_stop,
             game_poll,
             embed_layout,
+            embed_reveal,
             embed_fullscreen,
             save_log,
             update_check,

@@ -16,6 +16,8 @@
     version: string;
     /** The start failed: show the error with the step it stopped at. */
     failed?: boolean;
+    /** The game is ready: the bar shows 100 % and every step done, before the hand-over. */
+    complete?: boolean;
     /** The first frame is up: the loader fades out (instantly with reduced motion). */
     handover?: boolean;
     /** Fullscreen: no strip, so a small chip keeps Cancel reachable. */
@@ -28,38 +30,39 @@
     onhome: () => void;
   }
   let {
-    progress, version, failed = false, handover = false, fullscreen = false, logTail = [],
+    progress, version, failed = false, complete = false, handover = false, fullscreen = false, logTail = [],
     oncancel, onretry, oncopylog, onhome
   }: Props = $props();
 
   const STEPS = 6;
   const label = (n: number) => t(`load.step${n}` as Key);
   const step = $derived(Math.min(STEPS, Math.max(1, progress?.step ?? 1)));
-  const percent = $derived(handover ? 100 : Math.floor(Math.min(100, Math.max(0, progress?.percent ?? 0))));
-  const slow = $derived(!failed && !handover && !!progress?.slow);
-  const current = $derived(handover ? label(STEPS) : label(step));
+  const done = $derived(handover || complete);
+  const percent = $derived(done ? 100 : Math.floor(Math.min(100, Math.max(0, progress?.percent ?? 0))));
+  const slow = $derived(!failed && !done && !!progress?.slow);
+  const current = $derived(done ? label(STEPS) : label(step));
   const eta = $derived.by(() => {
-    if (handover) return '';
+    if (done) return '';
     if (slow) return t('load.etaSlow');
     const secs = progress?.eta_secs;
     return secs === null || secs === undefined ? t('load.etaWait') : etaText(secs);
   });
   const valueText = $derived(
-    eta && !handover
+    eta && !done
       ? t('load.valueEta', { p: percent, step: current, eta })
       : t('load.valueText', { p: percent, step: current })
   );
   const rows = $derived(
     Array.from({ length: STEPS }, (_, i) => {
       const n = i + 1;
-      const done = handover || n < step;
-      const cur = !handover && !failed && n === step;
+      const ok = done || n < step;
+      const cur = !done && !failed && n === step;
       const fail = failed && n === step;
       const secs = progress?.step_secs?.[i];
       return {
-        n, label: label(n), done, cur, fail,
-        cls: done ? 'done' : cur ? (slow ? 'cur slow' : 'cur') : fail ? 'fail' : '',
-        time: done && typeof secs === 'number' ? `${secs.toFixed(1)} s` : ''
+        n, label: label(n), done: ok, cur, fail,
+        cls: ok ? 'done' : cur ? (slow ? 'cur slow' : 'cur') : fail ? 'fail' : '',
+        time: ok && typeof secs === 'number' ? `${secs.toFixed(1)} s` : ''
       };
     })
   );
@@ -81,11 +84,11 @@
     {#if !failed}
       <div class="pbox">
         <div class="prow">
-          <span class="lbl"><strong>{current}</strong><small>{t('load.stepOf', { a: handover ? STEPS : step, b: STEPS })}</small></span>
+          <span class="lbl"><strong>{current}</strong><small>{t('load.stepOf', { a: done ? STEPS : step, b: STEPS })}</small></span>
           <span class="num"><span class="pct">{`${percent} %`}</span><small class:warn={slow}>{`${eta}`}</small></span>
         </div>
         <div
-          class={['bar', slow && 'slow', handover && 'done']}
+          class={['bar', slow && 'slow', done && 'done']}
           role="progressbar"
           aria-label={t('load.title')}
           aria-valuemin="0"
@@ -147,7 +150,7 @@
     background-color: var(--bg);
     background-image: repeating-conic-gradient(from -3deg at 50% 125%, var(--ray) 0deg 7deg, transparent 7deg 22deg);
     color: var(--text);
-    transition: opacity var(--dur-move) ease;
+    transition: opacity 150ms ease;
   }
   :global(:root[data-theme='dark']) .ld { --ray: rgba(255, 122, 69, 0.09); }
   .ld.hand { opacity: 0; pointer-events: none; }
@@ -166,7 +169,7 @@
   .bar { height: 18px; border-radius: 999px; background: var(--surface-3); border: 2px solid var(--line-strong); overflow: hidden; box-shadow: var(--edge); }
   .bar > span { display: block; height: 100%; border-radius: 999px; background: var(--primary); transition: width 0.3s ease; }
   .bar.slow > span { background: repeating-linear-gradient(-45deg, var(--warn) 0 10px, color-mix(in oklab, var(--warn), #fff 25%) 10px 20px); }
-  .bar.done > span { background: var(--ok); }
+  .bar.done > span { background: var(--ok); transition-duration: 0.1s; }
   .note { width: 100%; display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; text-align: left; font-size: 14.5px; color: var(--text); }
   .note p { margin: 0; }
   .warnbox { background: var(--warn-soft); }

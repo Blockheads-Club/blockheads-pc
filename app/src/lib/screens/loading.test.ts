@@ -152,7 +152,11 @@ describe('Playing while the game boots', () => {
     unmount();
     cleanup();
 
-    // The loader hands over on ready and is gone 240 ms later.
+    // On ready the loader shows 100 %, holds 150 ms, reveals the game (a failing reveal is harmless) and is gone
+    // 150 ms later.
+    mock.api.embedReveal = vi.fn(async () => {
+      throw new Error('no view');
+    });
     store.game = makeSnap({ state: 'starting', running_secs: 0, progress: prog() });
     render(Playing);
     await tick();
@@ -161,7 +165,11 @@ describe('Playing while the game boots', () => {
     store.game = makeSnap({ state: 'running', running_secs: 5, progress: prog({ ready: true, percent: 100 }) });
     await vi.advanceTimersByTimeAsync(50);
     expect(bar()).toHaveAttribute('aria-valuenow', '100');
-    await vi.advanceTimersByTimeAsync(300);
+    expect(mock.api.embedReveal).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(mock.api.embedReveal).toHaveBeenCalledTimes(1);
+    expect(bar()).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(150);
     expect(bar()).toBeNull();
     expect(document.getElementById('main')).toHaveFocus();
   });

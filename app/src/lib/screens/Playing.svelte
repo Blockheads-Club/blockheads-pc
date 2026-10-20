@@ -16,14 +16,17 @@
   const embedded = $derived(store.embedded);
   const hideBars = $derived(embedded && store.fullscreen);
 
-  /** The loader fades out over this long once the first frame is up (the CSS transition has the same length). */
-  const HANDOVER_MS = 240;
+  /** Once the game is ready the loader holds at 100 % this long, then hands over. */
+  const HOLD_MS = 150;
+  /** The loader fades out over this long (the CSS transition has the same length); the game fades in meanwhile. */
+  const HANDOVER_MS = 150;
   const starting = $derived(store.starting);
   const failed = $derived(store.bootFailed);
   const ready = $derived(store.state === 'running' && !!store.game.progress?.ready);
   let shown = $state(false);
+  let complete = $state(false);
   let handover = $state(false);
-  const loader = $derived((shown && starting) || failed || handover);
+  const loader = $derived((shown && starting) || failed || complete || handover);
   const logTail = $derived(store.log.slice(-3));
 
   $effect(() => {
@@ -31,20 +34,33 @@
     if (starting) shown = true;
     else if (!ready) shown = false;
   });
-  // First frame: the loader fades out, the game (already rendering behind it) takes the focus.
+  // First frame: the loader shows 100 %, holds briefly, then fades out while the in-window game (held back until
+  // now, see `embed::reveal`) fades in; the game takes the focus.
   $effect(() => {
     if (!ready) {
+      complete = false;
       handover = false;
       return;
     }
-    if (!shown) return;
-    handover = true;
-    const id = setTimeout(() => {
+    if (!shown) {
+      void api.embedReveal().catch(() => {});
+      return;
+    }
+    complete = true;
+    const fade = setTimeout(() => {
+      handover = true;
+      void api.embedReveal().catch(() => {});
+    }, HOLD_MS);
+    const done = setTimeout(() => {
+      complete = false;
       handover = false;
       shown = false;
       view?.focus();
-    }, HANDOVER_MS);
-    return () => clearTimeout(id);
+    }, HOLD_MS + HANDOVER_MS);
+    return () => {
+      clearTimeout(fade);
+      clearTimeout(done);
+    };
   });
 
   function onkey(e: KeyboardEvent) {
@@ -103,6 +119,7 @@
         progress={store.game.progress}
         version={store.version}
         {failed}
+        {complete}
         {handover}
         fullscreen={hideBars}
         {logTail}

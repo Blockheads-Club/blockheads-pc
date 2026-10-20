@@ -63,6 +63,7 @@ export function makeApi(over: Record<string, unknown> = {}) {
     openPath: vi.fn(async () => {}),
     gameStart: vi.fn(async () => ({ embedded: false })),
     embedLayout: vi.fn(async () => {}),
+    embedReveal: vi.fn(async () => {}),
     embedFullscreen: vi.fn(async () => {}),
     gameStop: vi.fn(async () => {}),
     gamePoll: vi.fn(async () => makeSnap()),

@@ -40,6 +40,7 @@ export const api = {
   gameStop: () => invoke<void>('game_stop'),
   /** The page tells the backend where the in-window game stage starts (pixels from the top; 0 none, -1 hide it). */
   embedLayout: (top: number) => invoke<void>('embed_layout', { top }),
+  embedReveal: () => invoke<void>('embed_reveal'),
   embedFullscreen: (on: boolean) => invoke<void>('embed_fullscreen', { on }),
   gamePoll: (since: number) => invoke<Snapshot>('game_poll', { since }),
   saveLog: (path: string) => invoke<void>('save_log', { path }),

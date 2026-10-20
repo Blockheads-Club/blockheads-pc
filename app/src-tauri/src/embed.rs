@@ -14,7 +14,7 @@ pub fn supported() -> bool {
     imp::SUPPORTED && std::env::var("BHPC_EMBED").map_or(true, |v| v != "0")
 }
 
-pub use imp::{close, layout, open, set_fullscreen, Opts};
+pub use imp::{close, layout, open, reveal, set_fullscreen, Opts};
 
 /// How close (logical pixels) to the window's side or bottom edge a press on the game view resizes the window.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -74,7 +74,9 @@ mod imp {
     pub const SUPPORTED: bool = true;
 
     /// How long the game fades in over the loading screen.
-    const FADE: Duration = Duration::from_millis(240);
+    const FADE: Duration = Duration::from_millis(150);
+    /// If the page never says it is ready to hand over (`reveal`), the game shows this long after its first frame.
+    const REVEAL_FALLBACK: Duration = Duration::from_secs(3);
 
     /// What the view needs from the launcher.
     pub struct Opts {
@@ -98,9 +100,14 @@ mod imp {
     }
 
     struct Paint {
-        /// When the first game frame arrived: before it the view draws nothing (the page's loading screen shows
-        /// through and gets the mouse), then it fades in over [`FADE`].
+        /// When the game became visible: once its first frame arrived and the page let it (`reveal`, after its
+        /// loading screen reached 100 %). Before it the view draws nothing (the loading screen shows through and gets
+        /// the mouse), then it fades in over [`FADE`].
         first: Option<Instant>,
+        /// When the first game frame arrived.
+        arrived: Option<Instant>,
+        /// The page is done with its loading screen (or [`REVEAL_FALLBACK`] passed).
+        revealed: bool,
         reader: Option<FrameReader>,
         buf: Vec<u8>,
         surface: Option<ImageSurface>,
@@ -194,6 +201,8 @@ mod imp {
             let stats = std::env::var("BHPC_EMBED_STATS").is_ok_and(|v| v == "1");
             let paint = Rc::new(RefCell::new(Paint {
                 first: None,
+                arrived: None,
+                revealed: false,
                 reader: Some(opts.frame),
                 buf: Vec::new(),
                 surface: None,
@@ -304,9 +313,21 @@ mod imp {
         }
     }
 
-    /// The first frame is there: the view takes the mouse and the keyboard from the page.
-    fn first_frame(w: &gtk::DrawingArea, first: &mut Option<Instant>) {
-        if first.is_none() {
+    /// A game frame arrived: the game shows once the page has also let it.
+    fn frame_arrived(w: &gtk::DrawingArea, p: &mut Paint) {
+        p.arrived.get_or_insert_with(Instant::now);
+        show_if_ready(w, p);
+    }
+
+    /// The page never answered: show the game anyway.
+    fn reveal_overdue(p: &Paint) -> bool {
+        !p.revealed && p.arrived.is_some_and(|a| a.elapsed() >= REVEAL_FALLBACK)
+    }
+
+    /// First frame there and the page done: the view fades in and takes the mouse and the keyboard from the page.
+    fn show_if_ready(w: &gtk::DrawingArea, p: &mut Paint) {
+        let first = &mut p.first;
+        if first.is_none() && p.revealed && p.arrived.is_some() {
             *first = Some(Instant::now());
             if let Some(o) = w.parent().and_then(|p| p.downcast::<gtk::Overlay>().ok()) {
                 o.set_overlay_pass_through(w, false);
@@ -324,7 +345,11 @@ mod imp {
                 let seq = p.reader.as_ref().and_then(|r| r.seq().ok()).unwrap_or(0);
                 if seq != 0 && seq != p.gl_seq {
                     p.gl_seq = seq;
-                    first_frame(w, &mut p.first);
+                    frame_arrived(w, &mut p);
+                    g.queue_render();
+                } else if reveal_overdue(&p) {
+                    p.revealed = true;
+                    show_if_ready(w, &mut p);
                     g.queue_render();
                 } else if p.first.is_some_and(|f| f.elapsed() < FADE) {
                     g.queue_render();
@@ -332,6 +357,12 @@ mod imp {
                 return glib::ControlFlow::Continue;
             }
             let began = Instant::now();
+            if reveal_overdue(&p) {
+                p.revealed = true;
+                show_if_ready(w, &mut p);
+                w.queue_draw();
+            }
+            let mut arrived = false;
             let Paint { first, reader, buf, surface, stats, .. } = &mut *p;
             let fresh = reader.as_mut().and_then(|r| r.read(buf).ok().flatten());
             // A frame in the GL layout (sent before the runner heard that GL is off) is skipped; the next is cairo's.
@@ -349,11 +380,14 @@ mod imp {
                         data.copy_from_slice(buf);
                     }
                 }
-                first_frame(w, first);
+                arrived = true;
                 w.queue_draw();
                 Stats::add(stats, began, "cairo");
             } else if first.is_some_and(|f| f.elapsed() < FADE) {
                 w.queue_draw();
+            }
+            if arrived {
+                frame_arrived(w, &mut p);
             }
             glib::ControlFlow::Continue
         });
@@ -593,6 +627,23 @@ mod imp {
         })
     }
 
+    /// The page's loading screen has shown 100 %: the game may fade in over it.
+    pub fn reveal(win: &WebviewWindow) -> Result<(), String> {
+        on_main(win, move |_| {
+            VIEW.with(|v| {
+                let v = v.borrow();
+                let Some(v) = v.as_ref() else { return };
+                let mut p = v.paint.borrow_mut();
+                p.revealed = true;
+                show_if_ready(&v.area, &mut p);
+                if let Some(g) = &v.gl {
+                    g.queue_render();
+                }
+                v.area.queue_draw();
+            });
+        })
+    }
+
     fn close_now() {
         VIEW.with(|v| {
             if let Some(v) = v.borrow_mut().take() {
@@ -637,6 +688,9 @@ mod imp {
         Err("the game view is not available on this platform yet".into())
     }
     pub fn layout(_: &WebviewWindow, _: i32) -> Result<(), String> {
+        Ok(())
+    }
+    pub fn reveal(_: &WebviewWindow) -> Result<(), String> {
         Ok(())
     }
     pub fn set_fullscreen(win: &WebviewWindow, _: &AppHandle, on: bool) -> Result<(), String> {

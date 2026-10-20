@@ -241,10 +241,15 @@ describe('Playing inside the window', () => {
     mock.api.embedLayout = vi.fn(async () => {
       throw new Error('no view');
     });
+    mock.api.embedReveal = vi.fn(async () => {
+      throw new Error('no view');
+    });
     store.screen = 'playing';
-    store.game = makeSnap({ state: 'running', running_secs: 5, embedded: true });
+    // Already running when shown (no loader): the game is revealed at once.
+    store.game = makeSnap({ state: 'running', running_secs: 5, embedded: true, progress: { ready: true } as never });
     const { unmount } = render(Playing);
     await waitFor(() => expect(mock.api.embedLayout).toHaveBeenCalled());
+    await waitFor(() => expect(mock.api.embedReveal).toHaveBeenCalled());
     unmount();
     expect(mock.api.embedLayout).toHaveBeenCalledTimes(2);
   });
