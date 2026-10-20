@@ -119,6 +119,9 @@ fn run_apk(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn st
     // Start-up progress lines for the launcher; a plain run prints none.
     if args.iter().any(|a| a == "--progress" || a == "--embed") {
         bhpc_launcher::progress::enable();
+        // At once: video, audio and controller setup come first and take seconds, and the loading screen should
+        // show the start has begun.
+        bhpc_launcher::progress::report(bhpc_launcher::progress::Phase::Apk, 0, 1);
     }
     cfg.force = args.iter().any(|a| a == "--force");
     cfg.trace_thunks = args.iter().any(|a| a == "--trace-thunks");
