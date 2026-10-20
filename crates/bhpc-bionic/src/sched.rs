@@ -1626,9 +1626,8 @@ mod tests {
             assert!(s2.leave());
         });
         // Hold the lock until it gave up spinning and parked.
-        while s.host.parked.load(Ordering::SeqCst) == 0 {
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        std::iter::repeat_with(|| std::thread::sleep(Duration::from_millis(1)))
+            .find(|()| s.host.parked.load(Ordering::SeqCst) != 0);
         s.yield_now();
         order.lock().unwrap().push("me");
         other.join().unwrap();
@@ -1639,9 +1638,7 @@ mod tests {
             assert!(s2.enter());
             assert!(s2.leave());
         });
-        while s.host.contenders.load(Ordering::SeqCst) == 0 {
-            std::hint::spin_loop();
-        }
+        std::iter::repeat_with(std::hint::spin_loop).find(|()| s.host.contenders.load(Ordering::SeqCst) != 0);
         assert!(s.leave());
         other.join().unwrap();
         assert!(s.enter());
