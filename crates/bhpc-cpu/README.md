@@ -56,9 +56,13 @@ generic (no-op) handler is linked, and `CpuOptions::default()` turns fastmem off
 to the callbacks instead of crashing. Fastmem on macOS is therefore slower and untested; enabling it
 would need the Mach handler built out of tree (a vendored-code change).
 
-**Windows fastmem** relies on dynarmic's `exception_handler_windows.cpp` (vectored exception handler).
-Fault-on-`PAGE_NOACCESS` for reserved-but-uncommitted pages is the same mechanism as POSIX
-`PROT_NONE`; unverified.
+**Windows fastmem** uses our own `shim/exception_handler_windows.cpp`, a vectored exception handler
+(x86_64 and arm64), which `cmake/CMakeLists.txt` builds into dynarmic in place of the vendored
+`backend/exception_handler_windows.cpp`. The vendored one is an SEH language handler in generated code
+that calls a C++ lambda without the 32 bytes of shadow space the Windows x64 ABI requires: the lambda
+spills its arguments over the handler's return address, so the first guest fault (an access to a
+reserved-but-uncommitted `PAGE_NOACCESS` page) ended in `STATUS_ACCESS_VIOLATION`. On arm64 Windows
+the vendored build has no handler at all (no fastmem).
 
 ### Build requirements
 
