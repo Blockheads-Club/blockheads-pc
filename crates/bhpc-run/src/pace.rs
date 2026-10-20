@@ -125,7 +125,9 @@ mod tests {
         // The first frame starts the schedule; 35 more at 50 Hz take 700 ms.
         let took = start.elapsed();
         assert!(took >= Duration::from_millis(695), "{took:?}");
-        assert!(!huds.is_empty() && huds.len() <= 2, "about one update per 500 ms: {}", huds.len());
+        // A loaded CI machine oversleeps, so the bound follows the time the frames really took.
+        let most = took.as_millis() as usize / 500 + 1;
+        assert!(!huds.is_empty() && huds.len() <= most, "about one update per 500 ms: {} in {took:?}", huds.len());
         assert_eq!(huds[0].overlay.serial, 1);
         assert_eq!((huds[0].margin, huds[0].corner), (12, Corner::BottomRight));
         // No counter, no cap: returns at once with nothing to draw.
