@@ -425,10 +425,10 @@ fn get_integerv_counts_overrides_and_compressed_formats() {
     assert!(e.rec.names().is_empty());
     assert!(fault(e.try_call("glGetIntegerv", &[GL_NUM_SHADER_BINARY_FORMATS, BAD])));
     // COMPRESSED_TEXTURE_FORMATS asks the driver for the count first.
+    let base = e.mem().base() as usize;
     e.rec.on_call(move |n, a| {
         if let ("glGetIntegerv", [Arg::I(0x86A2), Arg::P(out)]) = (n, a) {
-            // (Where the local lives relative to the guest window differs between hosts; it is only non-null.)
-            assert_ne!(*out, 0);
+            assert!(*out >= base);
             // SAFETY: the thunk passes a pointer to a local i32.
             unsafe { *(*out as *mut i32) = 3 };
         }
