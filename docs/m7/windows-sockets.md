@@ -1,4 +1,12 @@
-# Guest sockets on Windows (plan, not implemented)
+# Guest sockets on Windows and macOS
+
+**Status: implemented.** `crates/bhpc-run/src/vfd/net/abi.rs` holds the guest (Linux) to host tables (families,
+`sockaddr` header, option numbers, `MSG_*` flags, `errno`) for Linux, macOS and Windows, tested on every host;
+`net/sys_unix.rs` (Linux, macOS) and `net/sys_windows.rs` (Winsock) are the thin host layers. Beyond the plan
+below: Windows UDP sockets get `SIO_UDP_CONNRESET` off (an ICMP port-unreachable must not fail the next
+`recvfrom`), `WSAEMSGSIZE` on a datagram larger than the buffer reads as a truncated datagram (Linux
+semantics), readiness uses `select` (older `WSAPoll` misses failed connects), macOS sets `SO_NOSIGPIPE` and
+`O_NONBLOCK`/`FD_CLOEXEC` with `fcntl` (no `SOCK_*` flags, no `accept4`). The original plan follows.
 
 `crates/bhpc-run/src/vfd/net.rs` serves the guest's BSD socket calls with non-blocking host sockets through `libc`
 (Linux only: it passes Linux constants and `accept4` through unchanged). On other hosts, macOS included,

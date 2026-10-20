@@ -1,21 +1,31 @@
 //! BSD sockets for the guest, backed by non-blocking host sockets.
 //!
-//! The ARM EABI and the host share the Linux socket ABI (family, option and flag numbers, `sockaddr_in` and
-//! `sockaddr_in6` layouts), so addresses and option values pass through as bytes; what is rebuilt in guest memory
-//! are the `msghdr`/`iovec` records and the resolver results (`addrinfo`, `hostent`) whose layouts differ.
+//! The guest speaks the Linux socket ABI. [`abi`] maps family, option and flag numbers, `errno` values and the
+//! `sockaddr` header to the host's (the same table on Linux, translations on macOS and Windows); [`sys`] is the
+//! host socket itself (POSIX or Winsock). What is rebuilt in guest memory are the `msghdr`/`iovec` records and the
+//! resolver results (`addrinfo`, `hostent`) whose layouts differ.
 //!
 //! Host descriptors are always non-blocking. A blocking guest call retries in slices of [`SLICE`] and gives the
 //! baton to other guest threads in between (`sched::block`), so it honours `SO_RCVTIMEO`/`SO_SNDTIMEO`. Readiness
 //! for epoll/poll/select comes from a zero-timeout host `poll`; waiters on such descriptors wake every [`SLICE`].
 
+mod abi;
+#[cfg(unix)]
+#[path = "net/sys_unix.rs"]
+mod sys;
+#[cfg(windows)]
+#[path = "net/sys_windows.rs"]
+mod sys;
+
 use super::{Entry, Kind, Vfd, EMFILE, EPOLLERR, EPOLLHUP, EPOLLIN, EPOLLOUT};
+use abi::linux::{AF_INET, AF_INET6, SOL_SOCKET, SO_ERROR};
+use abi::HOST;
 use bhpc_bionic::guest::{cstr, rd, rd32, wr, wr32, wr_cstr};
 use bhpc_bionic::layout::errno::{EBADF, EINTR, EINVAL};
 use bhpc_bionic::misc::{fail, get_errno};
 use bhpc_bionic::{lock, sched, Shared};
 use bhpc_cpu::{Cpu, Stop};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -24,8 +34,6 @@ use std::time::{Duration, Instant};
 /// Wake-up period of blocked socket calls and of epoll/poll/select over host sockets.
 pub(super) const SLICE: Duration = Duration::from_millis(5);
 
-const AF_INET: u32 = 2;
-const AF_INET6: u32 = 10;
 const SOCK_NONBLOCK: u32 = 0x800;
 const SOCK_CLOEXEC: u32 = 0x80000;
 const EFAULT: u32 = 14;
@@ -33,20 +41,14 @@ const ENOTSOCK: u32 = 88;
 const EAFNOSUPPORT: u32 = 97;
 const EINPROGRESS: u32 = 115;
 const EAGAIN: u32 = 11;
-const SOL_SOCKET: u32 = 1;
 const SO_RCVTIMEO: u32 = 20;
 const SO_SNDTIMEO: u32 = 21;
-const MSG_DONTWAIT: u32 = 0x40;
-/// `MSG_OOB | MSG_PEEK | MSG_TRUNC | MSG_DONTWAIT`: the flags passed on to the host.
-const MSG_KEEP: u32 = 0x1 | 0x2 | 0x20 | 0x40;
-const MSG_NOSIGNAL: i32 = 0x4000;
+const MSG_DONTWAIT: u32 = abi::linux::MSG_DONTWAIT;
 /// Largest single transfer.
 const MAX_IO: u32 = 1 << 22;
 const MAX_IOV: u32 = 1024;
 const MAX_OPT: u32 = 256;
 const STORAGE: u32 = 128;
-const POLLIN: i16 = 1;
-const POLLOUT: i16 = 4;
 const EAI_FAMILY: u32 = 5;
 const EAI_MEMORY: u32 = 6;
 const EAI_NONAME: u32 = 8;
@@ -67,21 +69,9 @@ type Msg = ([u32; 7], Vec<(u32, u32)>);
 
 /// A host socket owned by one or more descriptors (`dup`).
 pub(super) struct HostSock {
-    fd: OwnedFd,
+    sock: sys::Sock,
     /// Receive and send timeouts in microseconds; 0 is "none".
     timeouts: [AtomicU64; 2],
-}
-
-fn errno() -> u32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32
-}
-
-fn cvt(r: isize) -> Res {
-    if r < 0 {
-        Err(errno())
-    } else {
-        Ok(r as u32)
-    }
 }
 
 /// Finish a call: the value, or -1 with `errno`.
@@ -100,10 +90,6 @@ macro_rules! args {
 }
 
 impl HostSock {
-    fn raw(&self) -> i32 {
-        self.fd.as_raw_fd()
-    }
-
     fn timeout(&self, write: bool) -> Option<Duration> {
         match self.timeouts[usize::from(write)].load(Ordering::Relaxed) {
             0 => None,
@@ -111,37 +97,14 @@ impl HostSock {
         }
     }
 
-    /// Zero-timeout host `poll` for `events`.
-    fn poll(&self, events: i16) -> i16 {
-        let mut p = libc::pollfd { fd: self.raw(), events, revents: 0 };
-        unsafe { libc::poll(&mut p, 1, 0) };
-        p.revents
-    }
-
-    /// Readiness as epoll bits (the `poll` and `epoll` flag values coincide).
+    /// Readiness as epoll bits.
     pub(super) fn ready(&self) -> u32 {
-        self.poll(POLLIN | POLLOUT) as u32 & (EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP)
+        self.sock.poll(true, true) & (EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP)
     }
 
     /// Bytes waiting to be read (`FIONREAD`).
     pub(super) fn pending(&self) -> u32 {
-        let mut n: libc::c_int = 0;
-        unsafe { libc::ioctl(self.raw(), libc::FIONREAD as _, &mut n) };
-        n.max(0) as u32
-    }
-
-    fn so_error(&self) -> u32 {
-        let (mut v, mut len) = (0 as libc::c_int, 4 as libc::socklen_t);
-        unsafe {
-            libc::getsockopt(
-                self.raw(),
-                libc::SOL_SOCKET,
-                libc::SO_ERROR,
-                (&mut v as *mut libc::c_int).cast(),
-                &mut len,
-            )
-        };
-        v as u32
+        self.sock.pending()
     }
 }
 
@@ -175,19 +138,6 @@ fn pause(c: &mut Cpu, st: &Shared, until: Instant, what: &str) -> Res {
     sched::block(c, st, Some(until), what).map(|_| 0).ok_or(EINTR)
 }
 
-fn storage() -> (libc::sockaddr_storage, libc::socklen_t) {
-    (unsafe { std::mem::zeroed() }, std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t)
-}
-
-fn storage_bytes(ss: &libc::sockaddr_storage, len: libc::socklen_t) -> Vec<u8> {
-    let n = (len as usize).min(STORAGE as usize);
-    unsafe { std::slice::from_raw_parts((ss as *const libc::sockaddr_storage).cast::<u8>(), n) }.to_vec()
-}
-
-fn sockaddr_ptr(ss: &mut libc::sockaddr_storage) -> *mut libc::sockaddr {
-    (ss as *mut libc::sockaddr_storage).cast()
-}
-
 impl Vfd {
     /// The host socket behind `fd` and the guest's `O_NONBLOCK` flag for it.
     pub(super) fn sock(&self, fd: u32) -> Result<(Arc<HostSock>, bool), u32> {
@@ -217,8 +167,8 @@ impl Vfd {
         }
     }
 
-    fn insert_sock(&self, fd: OwnedFd, nonblock: bool, cloexec: bool) -> Res {
-        let s = Arc::new(HostSock { fd, timeouts: [AtomicU64::new(0), AtomicU64::new(0)] });
+    fn insert_sock(&self, sock: sys::Sock, nonblock: bool, cloexec: bool) -> Res {
+        let s = Arc::new(HostSock { sock, timeouts: [AtomicU64::new(0), AtomicU64::new(0)] });
         self.t().insert(Kind::Net(s), nonblock, cloexec).ok_or(EMFILE)
     }
 
@@ -228,9 +178,8 @@ impl Vfd {
             if domain != AF_INET && domain != AF_INET6 {
                 return Err(EAFNOSUPPORT);
             }
-            let kind = (ty & 0xf) as i32 | SOCK_NONBLOCK as i32 | SOCK_CLOEXEC as i32;
-            let h = cvt(unsafe { libc::socket(domain as i32, kind, proto as i32) } as isize)?;
-            self.insert_sock(unsafe { OwnedFd::from_raw_fd(h as i32) }, ty & SOCK_NONBLOCK != 0, ty & SOCK_CLOEXEC != 0)
+            let sock = sys::Sock::open(HOST.family(domain), (ty & 0xf) as i32, proto as i32)?;
+            self.insert_sock(sock, ty & SOCK_NONBLOCK != 0, ty & SOCK_CLOEXEC != 0)
         })();
         done(c, st, r);
     }
@@ -240,14 +189,14 @@ impl Vfd {
         let r = (|| -> Res {
             let (s, _) = self.sock(fd)?;
             let a = guest_addr(c, addr, len)?;
-            cvt(unsafe { libc::bind(s.raw(), a.as_ptr().cast(), a.len() as u32) } as isize)
+            s.sock.bind(&HOST.addr_to_host(&a)).map(|()| 0)
         })();
         done(c, st, r);
     }
 
     pub(super) fn listen(&self, c: &mut Cpu, st: &Shared) {
         args!(c; fd, backlog);
-        let r = self.sock(fd).and_then(|(s, _)| cvt(unsafe { libc::listen(s.raw(), backlog as i32) } as isize));
+        let r = self.sock(fd).and_then(|(s, _)| s.sock.listen(backlog as i32).map(|()| 0));
         done(c, st, r);
     }
 
@@ -259,15 +208,13 @@ impl Vfd {
             if self.t().trace_net {
                 eprintln!("[net] connect to {a:?}");
             }
-            if unsafe { libc::connect(s.raw(), a.as_ptr().cast(), a.len() as u32) } == 0 {
-                return Ok(0);
+            match s.sock.connect(&HOST.addr_to_host(&a)) {
+                Ok(()) => return Ok(0),
+                Err(e) if e != EINPROGRESS || nb => return Err(e),
+                Err(_) => {}
             }
-            let e = errno();
-            if e != EINPROGRESS || nb {
-                return Err(e);
-            }
-            self.io(c, st, &s, false, true, &mut || if s.poll(POLLOUT) != 0 { Ok(0) } else { Err(EAGAIN) })?;
-            match s.so_error() {
+            self.io(c, st, &s, false, true, &mut || if s.sock.poll(false, true) != 0 { Ok(0) } else { Err(EAGAIN) })?;
+            match s.sock.so_error() {
                 0 => Ok(0),
                 e => Err(e),
             }
@@ -290,16 +237,14 @@ impl Vfd {
 
     fn accept_in(&self, c: &mut Cpu, st: &Shared, fd: u32, addr: u32, alen: u32, flags: u32) -> Res {
         let (s, nb) = self.sock(fd)?;
-        let (mut ss, mut sl) = storage();
-        let h = self.io(c, st, &s, nb, false, &mut || {
-            cvt(
-                unsafe { libc::accept4(s.raw(), sockaddr_ptr(&mut ss), &mut sl, (SOCK_NONBLOCK | SOCK_CLOEXEC) as i32) }
-                    as isize,
-            )
+        let mut got = None;
+        self.io(c, st, &s, nb, false, &mut || {
+            got = Some(s.sock.accept()?);
+            Ok(0)
         })?;
-        let owned = unsafe { OwnedFd::from_raw_fd(h as i32) };
-        put_addr(c, addr, alen, &storage_bytes(&ss, sl))?;
-        self.insert_sock(owned, flags & SOCK_NONBLOCK != 0, flags & SOCK_CLOEXEC != 0)
+        let (sock, peer) = got.expect("accept succeeded");
+        put_addr(c, addr, alen, &HOST.addr_to_guest(&peer))?;
+        self.insert_sock(sock, flags & SOCK_NONBLOCK != 0, flags & SOCK_CLOEXEC != 0)
     }
 
     /// Send `data` (all of it on a blocking stream socket), to `to` when given.
@@ -309,14 +254,12 @@ impl Vfd {
             eprintln!("[net] send {} bytes to {to:?}: {:02x?}", data.len(), &data[..data.len().min(64)]);
         }
         let nb = nb || flags & MSG_DONTWAIT != 0;
-        let fl = (flags & MSG_KEEP) as i32 | MSG_NOSIGNAL;
-        let (dest, dlen) = to.as_ref().map_or((std::ptr::null(), 0), |a| (a.as_ptr().cast(), a.len() as u32));
+        let fl = HOST.msg_flags(flags);
+        let dest = to.as_ref().map(|a| HOST.addr_to_host(a));
         let (mut off, mut more, mut last) = (0usize, true, Ok(0));
         while more {
             let rest = &data[off..];
-            last = self.io(c, st, &s, nb, true, &mut || {
-                cvt(unsafe { libc::sendto(s.raw(), rest.as_ptr().cast(), rest.len(), fl, dest, dlen) })
-            });
+            last = self.io(c, st, &s, nb, true, &mut || s.sock.send_to(rest, fl, dest.as_deref()).map(|n| n as u32));
             if let Ok(n) = last {
                 off += n as usize;
             }
@@ -334,13 +277,14 @@ impl Vfd {
         let (s, nb) = self.sock(fd)?;
         let nb = nb || flags & MSG_DONTWAIT != 0;
         let mut data = vec![0u8; max.min(MAX_IO) as usize];
-        let (mut ss, mut sl) = storage();
+        let mut from = Vec::new();
         let n = self.io(c, st, &s, nb, false, &mut || {
-            let (p, l) = (data.as_mut_ptr().cast(), data.len());
-            cvt(unsafe { libc::recvfrom(s.raw(), p, l, (flags & MSG_KEEP) as i32, sockaddr_ptr(&mut ss), &mut sl) })
+            let (n, a) = s.sock.recv_from(&mut data, HOST.msg_flags(flags))?;
+            from = a;
+            Ok(n as u32)
         })?;
         data.truncate(n as usize);
-        Ok((data, storage_bytes(&ss, sl)))
+        Ok((data, HOST.addr_to_guest(&from)))
     }
 
     /// `send`, `sendto` (`to` is the address argument position) share this.
@@ -475,8 +419,8 @@ impl Vfd {
                 s.timeouts[usize::from(name == SO_SNDTIMEO)].store(us, Ordering::Relaxed);
                 return Ok(0);
             }
-            cvt(unsafe { libc::setsockopt(s.raw(), level as i32, name as i32, v.as_ptr().cast(), v.len() as u32) }
-                as isize)
+            let (lv, nm) = HOST.opt(level, name)?;
+            s.sock.set_opt(lv, nm, &v).map(|()| 0)
         })();
         done(c, st, r);
     }
@@ -492,7 +436,7 @@ impl Vfd {
             let (s, _) = self.sock(fd)?;
             let room = rd32(c, lenp).ok_or(EFAULT)?.min(MAX_OPT);
             let mut out = vec![0u8; room as usize];
-            let mut got = room;
+            let got;
             if level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO) {
                 let us = s.timeouts[usize::from(name == SO_SNDTIMEO)].load(Ordering::Relaxed);
                 let tv = [(us / 1_000_000) as u32, (us % 1_000_000) as u32];
@@ -500,11 +444,13 @@ impl Vfd {
                 for (i, w) in tv.iter().enumerate().take(got as usize / 4) {
                     out[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
                 }
+            } else if level == SOL_SOCKET && name == SO_ERROR {
+                // The host's error code, as a guest errno.
+                got = room.min(4);
+                out[..got as usize].copy_from_slice(&s.sock.so_error().to_le_bytes()[..got as usize]);
             } else {
-                cvt(
-                    unsafe { libc::getsockopt(s.raw(), level as i32, name as i32, out.as_mut_ptr().cast(), &mut got) }
-                        as isize,
-                )?;
+                let (lv, nm) = HOST.opt(level, name)?;
+                got = s.sock.get_opt(lv, nm, &mut out)? as u32;
             }
             if !wr(c, val, &out[..got as usize]) || !wr32(c, lenp, got) {
                 return Err(EFAULT);
@@ -518,17 +464,8 @@ impl Vfd {
         args!(c; fd, addr, lenp);
         let r = (|| -> Res {
             let (s, _) = self.sock(fd)?;
-            let (mut ss, mut sl) = storage();
-            let p = sockaddr_ptr(&mut ss);
-            let res = unsafe {
-                if peer {
-                    libc::getpeername(s.raw(), p, &mut sl)
-                } else {
-                    libc::getsockname(s.raw(), p, &mut sl)
-                }
-            };
-            cvt(res as isize)?;
-            put_addr(c, addr, lenp, &storage_bytes(&ss, sl)).map(|()| 0)
+            let a = s.sock.name(peer)?;
+            put_addr(c, addr, lenp, &HOST.addr_to_guest(&a)).map(|()| 0)
         })();
         done(c, st, r);
     }
@@ -544,7 +481,7 @@ impl Vfd {
     pub(super) fn shutdown(&self, c: &mut Cpu, st: &Shared) {
         args!(c; fd, how);
         let r = match self.sock(fd) {
-            Ok((s, _)) => cvt(unsafe { libc::shutdown(s.raw(), how as i32) } as isize),
+            Ok((s, _)) => s.sock.shutdown(how as i32).map(|()| 0),
             Err(_) if self.is_pair(fd) => Ok(0),
             Err(e) => Err(e),
         };
@@ -841,29 +778,14 @@ pub fn host_has_lan() -> bool {
     lan_in(&host_ipv4())
 }
 
-/// Whether one of `(flags, address)` is an up, non-loopback interface.
-fn lan_in(list: &[(u32, Ipv4Addr)]) -> bool {
-    let (up, lo) = (libc::IFF_UP as u32, libc::IFF_LOOPBACK as u32);
-    list.iter().any(|(flags, ip)| flags & up != 0 && flags & lo == 0 && !ip.is_loopback())
+/// Whether one of `(up, loopback, address)` is an up, non-loopback interface.
+fn lan_in(list: &[(bool, bool, Ipv4Addr)]) -> bool {
+    list.iter().any(|(up, lo, ip)| *up && !*lo && !ip.is_loopback())
 }
 
-/// The host's IPv4 interface addresses as `(flags, address)`; empty when they cannot be listed.
-fn host_ipv4() -> Vec<(u32, Ipv4Addr)> {
-    let mut out = Vec::new();
-    let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
-    let ok = unsafe { libc::getifaddrs(&mut list) } == 0;
-    let mut p = if ok { list } else { std::ptr::null_mut() };
-    while let Some(ifa) = unsafe { p.as_ref() } {
-        let sa = ifa.ifa_addr as *const libc::sockaddr_in;
-        if let Some(sin) = unsafe { sa.as_ref() }.filter(|a| i32::from(a.sin_family) == libc::AF_INET) {
-            out.push((ifa.ifa_flags, Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr))));
-        }
-        p = ifa.ifa_next;
-    }
-    if ok {
-        unsafe { libc::freeifaddrs(list) };
-    }
-    out
+/// The host's IPv4 interface addresses as `(up, loopback, address)`.
+fn host_ipv4() -> Vec<(bool, bool, Ipv4Addr)> {
+    sys::ipv4_interfaces()
 }
 
 type NetFn = fn(&Vfd, &mut Cpu, &Shared);
@@ -929,15 +851,15 @@ mod lan_tests {
 
     #[test]
     fn lan_needs_an_up_non_loopback_ipv4_interface() {
-        let (up, lo) = (libc::IFF_UP as u32, libc::IFF_LOOPBACK as u32);
         let wlan = Ipv4Addr::new(192, 168, 1, 2);
-        assert!(lan_in(&[(up | lo, Ipv4Addr::LOCALHOST), (up, wlan)]));
-        assert!(!lan_in(&[(up | lo, Ipv4Addr::LOCALHOST)]));
-        assert!(!lan_in(&[(0, wlan)]));
-        assert!(!lan_in(&[(up, Ipv4Addr::LOCALHOST)]));
+        assert!(lan_in(&[(true, true, Ipv4Addr::LOCALHOST), (true, false, wlan)]));
+        assert!(!lan_in(&[(true, true, Ipv4Addr::LOCALHOST)]));
+        assert!(!lan_in(&[(false, false, wlan)]));
+        assert!(!lan_in(&[(true, true, wlan)]));
+        assert!(!lan_in(&[(true, false, Ipv4Addr::LOCALHOST)]));
         assert!(!lan_in(&[]));
         // The host always lists its loopback interface.
-        assert!(host_ipv4().iter().any(|(_, ip)| ip.is_loopback()));
+        assert!(host_ipv4().iter().any(|(_, lo, ip)| *lo && ip.is_loopback()));
         assert_eq!(host_has_lan(), lan_in(&host_ipv4()));
     }
 }

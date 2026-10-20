@@ -178,6 +178,11 @@ fn socket_options_and_timeouts() {
     let lenp = r.put(5010, &4u32.to_le_bytes());
     assert_eq!(r.call("getsockopt", &[s, 1, 2, r.scratch + 5020, lenp]), 0);
     assert_eq!((r.get(5020, 4), r.get(5010, 4)), (1u32.to_le_bytes().to_vec(), 4u32.to_le_bytes().to_vec()));
+    // SO_ERROR reads the pending error as a guest errno (none here), truncated to the room given.
+    let lenp = r.put(5010, &4u32.to_le_bytes());
+    assert_eq!(r.call("getsockopt", &[s, 1, 4, r.scratch + 5020, lenp]), 0);
+    assert_eq!(r.get(5020, 4), 0u32.to_le_bytes());
+    let lenp = r.put(5010, &4u32.to_le_bytes());
     assert_eq!(r.call("setsockopt", &[s, 1, 9999, one, 4]), NEG1);
     assert_eq!(r.call("getsockopt", &[s, 1, 9999, r.scratch + 5020, lenp]), NEG1);
     // Receive timeout: stored, read back, and honoured by a blocking receive.
