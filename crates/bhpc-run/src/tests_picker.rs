@@ -40,6 +40,14 @@ fn macos_asks_through_applescript() {
 }
 
 #[test]
+#[cfg(windows)]
+fn windows_asks_through_powershell() {
+    let c = candidates("KDE");
+    assert_eq!(c.iter().map(|c| c.program.as_str()).collect::<Vec<_>>(), ["powershell"]);
+    assert!(c[0].args.iter().any(|a| a.contains("*.png")));
+}
+
+#[test]
 fn a_fixed_choice_replaces_the_dialog() {
     let never = [sh("echo /not/asked")];
     assert_eq!(pick_image(Some("/x/y.jpg".into()), &never), Pick::File(PathBuf::from("/x/y.jpg")));

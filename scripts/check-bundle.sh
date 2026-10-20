@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Checks every bundle `tauri build` made: it must contain the game runner sidecar (bhpc-run) and nothing of the game
 # (an APK, its libraries libApplication.so / libv.so, an assets/ folder). Lists what each bundle holds.
-#   Linux: deb, rpm, AppImage   Windows: NSIS installer (7-Zip lists it), MSI (administrative install)   macOS: dmg
+#   Linux: deb, rpm, AppImage   Windows: NSIS installer (7-Zip lists it), MSI (administrative install)
+#   macOS: the .app and the dmg (mounted read-only)
 # Usage: scripts/check-bundle.sh <bundle dir>   (the directory `tauri build` writes: deb/, rpm/, appimage/, nsis/, ...)
 set -euo pipefail
 dir="$(cd "${1:?bundle directory}" && pwd)"
@@ -49,11 +50,17 @@ for f in "$dir"/msi/*.msi; do
   find "$out" -type f > "$work/list"
   scan "$f"
 done
+for f in "$dir"/macos/*.app; do
+  [ -e "$f" ] || continue
+  find "$f" -type f -o -type l > "$work/list"
+  scan "$f"
+done
 for f in "$dir"/dmg/*.dmg; do
   [ -e "$f" ] || continue
   mnt="$work/dmg-$found"
   mkdir -p "$mnt"
-  hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$f" >/dev/null
+  # The image carries the licence as an agreement, which hdiutil wants accepted first.
+  { yes || true; } | PAGER=cat hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$f" >/dev/null
   find "$mnt" -type f -o -type l > "$work/list"
   scan "$f"
   hdiutil detach "$mnt" >/dev/null
