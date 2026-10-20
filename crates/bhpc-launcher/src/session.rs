@@ -354,7 +354,9 @@ impl Session {
             last_session_secs: self.last.as_ref().map(|f| f.secs),
             exit_code: self.last.as_ref().and_then(|f| f.code),
             signal: self.last.as_ref().and_then(|f| f.signal),
-            progress: tracker.or_else(|| self.last.as_ref().and_then(|f| f.progress.clone())),
+            // While a game runs only its own progress counts: before its first line the screen starts at 0 %, not at
+            // where the previous session ended.
+            progress: if self.run.is_some() { tracker } else { self.last.as_ref().and_then(|f| f.progress.clone()) },
             lines,
             next,
         }

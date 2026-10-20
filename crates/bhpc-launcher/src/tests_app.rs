@@ -381,6 +381,12 @@ mod unix {
         s.poll(0, true);
         assert_eq!(crate::progress::History::load(&hist).starts.len(), 1, "learned once");
         s.stop();
+        assert!(s.poll(0, true).progress.unwrap().ready, "the last session's end is kept while stopped");
+        // Play again: before the new game's first line the old session's 100 % is not shown.
+        let (prog, args) = sh("exec sleep 30");
+        s.start(&prog, &args, &[]).unwrap();
+        assert_eq!(s.poll(0, true).progress, None);
+        s.stop();
         // Without a history file nothing is written, and a new start has a fresh tracker.
         let mut plain = Session::new(Duration::ZERO);
         plain.start(&prog, &args, &[]).unwrap();
