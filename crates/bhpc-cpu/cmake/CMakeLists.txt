@@ -26,8 +26,9 @@ if (APPLE)
 endif()
 
 if (MSVC)
-    # Keep the shim's flags in line with the dynarmic ones (conformance, big objects, no min/max macros).
-    add_compile_options(/permissive- /Zc:__cplusplus /bigobj /DNOMINMAX)
+    # Keep the shim's flags in line with the dynarmic ones (conformance, big objects, no min/max macros);
+    # fmt needs UTF-8 source and execution charsets.
+    add_compile_options(/permissive- /Zc:__cplusplus /bigobj /DNOMINMAX /utf-8)
 endif()
 
 # dynarmic's headers include Boost (variant, icl) and dynarmic links Boost::boost only PRIVATE, so the shim needs it

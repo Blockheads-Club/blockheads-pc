@@ -16,8 +16,8 @@ case "$triple" in *windows*) ext=".exe" ;; esac
 # SDL2 2.28 declares an old cmake_minimum_required, which CMake 4 refuses without this.
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 # ...and its PipeWire backend does not compile against recent PipeWire headers with GCC 14+ (a pointer type warning
-# that became an error). Keep it a warning.
-export CFLAGS="${CFLAGS:-} -Wno-error=incompatible-pointer-types"
+# that became an error). Keep it a warning (Linux only: MSVC rejects the flag).
+case "$triple" in *linux*) export CFLAGS="${CFLAGS:-} -Wno-error=incompatible-pointer-types" ;; esac
 
 # A separate target dir: the static-SDL feature set must not thrash the everyday build in target/.
 # Release builds ship without debug info (the workspace profile keeps it for profiling).
