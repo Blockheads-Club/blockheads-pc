@@ -4,7 +4,7 @@
 //! | Controller | Effect |
 //! |---|---|
 //! | left stick | walks: a finger (pointer 2) held on the game's D-pad, moved in the stick's direction |
-//! | right stick | moves the cursor (speed grows with the tilt); it snaps to the tile under it when released |
+//! | right stick | moves the cursor (speed grows with the tilt); it snaps to the tile under it when released. With [`PadConfig::tile_cursor`] it steps tile by tile in a world instead (see below) |
 //! | D-pad | moves the cursor one tile (or [`PadConfig::step`]) per press, repeating while held |
 //! | A | touch at the cursor (pointer 0): a tap, or hold to dig / drag |
 //! | B | Android back key |
@@ -15,9 +15,17 @@
 //! | R3 | cursor back to the middle of the picture |
 //!
 //! The first controller connected drives the game; others are ignored until it is unplugged.
+//!
+//! **Tile by tile** ([`PadConfig::tile_cursor`], `bhpc-run --pad-tile-cursor`): while the game's tile grid is known
+//! (in a world), the cursor always sits on the centre of one world tile. Tilting the right stick steps it one tile in
+//! the stick's direction (eight directions), at once, then again after [`PadConfig::tile_delay_ms`] and every
+//! [`PadConfig::tile_repeat_ms`] while held; both shrink from their first value (barely tilted) to their second (full
+//! tilt). The cursor stays on its tile when the camera moves or zooms (it is placed again with every new grid),
+//! except while A holds a finger down, so a drag never chases the view it moves. Without a grid (menus) the stick
+//! moves the cursor freely as usual.
 
 use crate::event::{EventSink, GuestEvent, HostAction, KEYCODE_BACK};
-use crate::grid::{Grid, Pt};
+use crate::grid::{Grid, Pt, Tile};
 
 /// Controller buttons (SDL `GameController` layout: A is the bottom face button).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +117,12 @@ pub struct PadConfig {
     pub repeat_ms: i64,
     /// How far the walking finger moves from the D-pad's centre at full tilt.
     pub walk_reach: f32,
+    /// The cursor moves tile by tile in a world (see the module documentation).
+    pub tile_cursor: bool,
+    /// Tile by tile: the right stick's first repeat comes this long after the first step, and then a step every
+    /// `tile_repeat_ms`; `[barely tilted, full tilt]`, linear in between.
+    pub tile_delay_ms: [i64; 2],
+    pub tile_repeat_ms: [i64; 2],
 }
 
 impl Default for PadConfig {
@@ -121,6 +135,9 @@ impl Default for PadConfig {
             repeat_delay_ms: 320,
             repeat_ms: 90,
             walk_reach: 60.0,
+            tile_cursor: false,
+            tile_delay_ms: [350, 150],
+            tile_repeat_ms: [250, 50],
         }
     }
 }
@@ -157,6 +174,10 @@ pub struct PadState {
     grid: Option<Grid>,
     /// The right stick moved the cursor: snap it to a tile once the stick is released.
     snap_due: bool,
+    /// Tile by tile: the world tile the cursor is on (`None`: work it out from the cursor).
+    tile: Option<Tile>,
+    /// Tile by tile: the right stick's direction and when it next steps.
+    rstep: Option<((i32, i32), i64)>,
     last_tick: Option<i64>,
 }
 
@@ -182,6 +203,8 @@ impl PadState {
             dpad_at: None,
             grid: None,
             snap_due: false,
+            tile: None,
+            rstep: None,
             last_tick: None,
         }
     }
@@ -224,9 +247,40 @@ impl PadState {
         self.dpad_at = at;
     }
 
-    /// The game's tile grid on screen (`None`: unknown, no snapping).
+    /// The game's tile grid on screen (`None`: unknown, no snapping). Tile by tile, the cursor goes back onto its
+    /// tile wherever the new grid puts it (not while A holds a finger down: then it keeps its place on screen).
     pub fn set_grid(&mut self, grid: Option<Grid>) {
         self.grid = grid;
+        match self.tile_grid() {
+            None => self.tile = None,
+            Some(_) if self.touching => self.tile = None,
+            Some(g) => self.settle(&g),
+        }
+    }
+
+    /// The grid when the cursor moves tile by tile.
+    fn tile_grid(&self) -> Option<Grid> {
+        self.grid.filter(|_| self.cfg.tile_cursor)
+    }
+
+    fn inside(&self, (x, y): Pt) -> bool {
+        (0.0..=self.bounds.0).contains(&x) && (0.0..=self.bounds.1).contains(&y)
+    }
+
+    /// Put the cursor on the centre of its tile (or of the tile under it). A tile that left the picture gives way
+    /// to the one under the nearest point of the picture.
+    fn settle(&mut self, g: &Grid) {
+        let Some(t) = self.tile.or_else(|| g.tile(self.cursor)) else { return };
+        let (t, at) = match g.centre(t) {
+            Some(p) if self.inside(p) => (t, p),
+            p => {
+                let Some(t) = g.tile(self.clamp(p.unwrap_or(self.cursor))) else { return };
+                let Some(p) = g.centre(t) else { return };
+                (t, self.clamp(p))
+            }
+        };
+        self.cursor = at;
+        self.tile = Some(t);
     }
 
     /// The window gained or lost the focus. Without it buttons and sticks are ignored (a launcher that shows the
@@ -265,6 +319,7 @@ impl PadState {
         self.left = (0.0, 0.0);
         self.right = (0.0, 0.0);
         self.dpad = None;
+        self.rstep = None;
         self.held = [false; 4];
     }
 
@@ -341,7 +396,11 @@ impl PadState {
             PadButton::RightStick => {
                 if pressed {
                     let c = (self.bounds.0 / 2.0, self.bounds.1 / 2.0);
-                    self.move_cursor(c, now_ms, sink);
+                    let tile = self.tile_grid().and_then(|g| Some((g.tile(c)?, g)));
+                    match tile.and_then(|(t, g)| Some((t, g.centre(t)?))) {
+                        Some((t, p)) => self.move_to_tile(t, p, now_ms, sink),
+                        None => self.move_cursor(c, now_ms, sink),
+                    }
                 }
                 None
             }
@@ -375,11 +434,25 @@ impl PadState {
     }
 
     fn step_cursor(&mut self, (dx, dy): (i32, i32), now_ms: i64, sink: &mut dyn EventSink) {
+        if let Some(g) = self.tile_grid() {
+            // Tile by tile: onto the centre of the next tile, or nowhere when that is off the picture.
+            let next = self.tile.or_else(|| g.tile(self.cursor)).map(|t| g.neighbour(t, dx, dy));
+            if let Some((t, p)) = next.and_then(|t| Some((t, g.centre(t)?))).filter(|(_, p)| self.inside(*p)) {
+                self.move_to_tile(t, p, now_ms, sink);
+            }
+            return;
+        }
         let to = match &self.grid {
             Some(g) => g.step(self.cursor, dx, dy),
             None => (self.cursor.0 + dx as f32 * self.cfg.step, self.cursor.1 + dy as f32 * self.cfg.step),
         };
         self.move_cursor(to, now_ms, sink);
+    }
+
+    /// Tile by tile: the cursor onto tile `t`, whose centre is at `p`.
+    fn move_to_tile(&mut self, t: Tile, p: Pt, now_ms: i64, sink: &mut dyn EventSink) {
+        self.move_cursor(p, now_ms, sink);
+        self.tile = (!self.touching).then_some(t);
     }
 
     fn move_cursor(&mut self, to: Pt, now_ms: i64, sink: &mut dyn EventSink) {
@@ -443,6 +516,12 @@ impl PadState {
             return;
         }
         let tilt = len(self.right);
+        if self.tile_grid().is_some() {
+            self.snap_due = false;
+            self.tile_tick(tilt, now_ms, sink);
+            return self.dpad_tick(now_ms, sink);
+        }
+        self.rstep = None;
         if tilt >= self.cfg.deadzone {
             // Quadratic response: fine control near the centre, speed at full tilt.
             let k = ((tilt - self.cfg.deadzone) / (1.0 - self.cfg.deadzone)).min(1.0);
@@ -457,11 +536,51 @@ impl PadState {
                 self.move_cursor(to, now_ms, sink);
             }
         }
+        self.dpad_tick(now_ms, sink);
+    }
+
+    /// A held D-pad direction repeats.
+    fn dpad_tick(&mut self, now_ms: i64, sink: &mut dyn EventSink) {
         if let Some((dir, next)) = self.dpad {
             if now_ms >= next {
                 self.step_cursor(dir, now_ms, sink);
                 self.dpad = Some((dir, now_ms + self.cfg.repeat_ms));
             }
         }
+    }
+}
+
+/// The stick's direction in one of eight: a step on an axis counts when the tilt is within 67.5 degrees of it.
+pub fn octant((x, y): Pt) -> (i32, i32) {
+    const TAN_22_5: f32 = 0.414_213_57;
+    let part = |a: f32, b: f32| if a.abs() > TAN_22_5 * b.abs() { a.signum() as i32 } else { 0 };
+    (part(x, y), part(y, x))
+}
+
+/// `ms[0]` at `k = 0`, `ms[1]` at `k = 1`, linear in between.
+fn lerp_ms(ms: [i64; 2], k: f32) -> i64 {
+    ms[0] + ((ms[1] - ms[0]) as f32 * k.clamp(0.0, 1.0)).round() as i64
+}
+
+impl PadState {
+    /// Tile by tile: the right stick steps the cursor once on tilt, then repeats faster the more it is tilted.
+    fn tile_tick(&mut self, tilt: f32, now_ms: i64, sink: &mut dyn EventSink) {
+        if tilt < self.cfg.deadzone {
+            self.rstep = None;
+            return;
+        }
+        let k = (tilt - self.cfg.deadzone) / (1.0 - self.cfg.deadzone);
+        let dir = octant(self.right);
+        self.rstep = match self.rstep {
+            None => {
+                self.step_cursor(dir, now_ms, sink);
+                Some((dir, now_ms + lerp_ms(self.cfg.tile_delay_ms, k)))
+            }
+            Some((_, next)) if now_ms >= next => {
+                self.step_cursor(dir, now_ms, sink);
+                Some((dir, now_ms + lerp_ms(self.cfg.tile_repeat_ms, k)))
+            }
+            Some((_, next)) => Some((dir, next)),
+        };
     }
 }

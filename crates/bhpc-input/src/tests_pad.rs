@@ -408,3 +408,179 @@ fn the_hide_buttons_key_is_a_host_action_but_not_while_typing() {
     m.handle(h(true, false), 4, &mut r);
     assert_eq!(r.actions, vec![HostAction::ToggleGameButtons, HostAction::StartTextInput]);
 }
+
+/// Like [`grid`], with the camera over world point `(cx, cy)` at `dist` tiles (20 px tiles at 48.28).
+fn grid_at(cx: f32, cy: f32, dist: f32) -> Grid {
+    let mut mv = ID;
+    (mv[12], mv[13], mv[14]) = (-cx, -cy, -dist);
+    let f = 2.414_213_5;
+    let mut pj: Mat4 = [0.0; 16];
+    (pj[0], pj[5], pj[10], pj[11], pj[14]) = (f / 1.25, f, -1.002, -1.0, -2.002);
+    Grid::from_gl(&mv, &pj, [0, 0, 1000, 800], (1000.0, 800.0)).unwrap()
+}
+
+/// A mapper whose cursor moves tile by tile, in a world with [`grid`].
+fn tile_mapper() -> (InputMapper, Recorder) {
+    let mut m = InputMapper::new(Config { pad: PadConfig { tile_cursor: true, ..PadConfig::default() }, ..cfg() });
+    let mut r = Recorder::new();
+    m.handle(added(7), 0, &mut r);
+    m.pad_mut().set_grid(Some(grid()));
+    (m, r)
+}
+
+fn at(m: &InputMapper) -> (f32, f32) {
+    m.pad().cursor().unwrap_or((f32::NAN, f32::NAN))
+}
+
+#[test]
+fn stick_directions_in_eight() {
+    assert_eq!(octant((1.0, 0.0)), (1, 0));
+    assert_eq!(octant((1.0, -0.3)), (1, 0));
+    assert_eq!(octant((0.7, 0.7)), (1, 1));
+    assert_eq!(octant((-0.5, -1.0)), (-1, -1));
+    assert_eq!(octant((-0.3, -1.0)), (0, -1));
+    assert_eq!(octant((0.0, 0.9)), (0, 1));
+    assert!(!PadConfig::default().tile_cursor, "free cursor unless switched on");
+}
+
+#[test]
+fn tile_by_tile_steps_on_tilt_then_repeats_with_the_tilt() {
+    let (mut m, mut r) = tile_mapper();
+    // Full tilt right: a step at once, the first repeat after 150 ms, then every 50 ms.
+    m.handle(axis(7, PadAxis::RightX, 1.0), 0, &mut r);
+    m.tick(0, &mut r);
+    assert!(near(at(&m), (520.0, 400.0)), "{:?}", at(&m));
+    m.tick(16, &mut r);
+    m.tick(149, &mut r);
+    assert!(near(at(&m), (520.0, 400.0)), "one step per tilt, not per frame");
+    m.tick(150, &mut r);
+    assert!(near(at(&m), (540.0, 400.0)));
+    m.tick(199, &mut r);
+    assert!(near(at(&m), (540.0, 400.0)));
+    m.tick(200, &mut r);
+    assert!(near(at(&m), (560.0, 400.0)));
+    // Released: nothing more, and the cursor stays on its tile centre.
+    m.handle(axis(7, PadAxis::RightX, 0.1), 210, &mut r);
+    m.tick(260, &mut r);
+    m.tick(400, &mut r);
+    assert!(near(at(&m), (560.0, 400.0)));
+    // Half tilt (k = 0.5): first repeat after 250 ms, then every 150 ms; leftwards.
+    m.handle(axis(7, PadAxis::RightX, -0.625), 500, &mut r);
+    m.tick(500, &mut r);
+    assert!(near(at(&m), (540.0, 400.0)));
+    m.tick(749, &mut r);
+    assert!(near(at(&m), (540.0, 400.0)));
+    m.tick(750, &mut r);
+    assert!(near(at(&m), (520.0, 400.0)));
+    m.tick(899, &mut r);
+    assert!(near(at(&m), (520.0, 400.0)));
+    m.tick(900, &mut r);
+    assert!(near(at(&m), (500.0, 400.0)));
+    // A new direction while held keeps the timing.
+    m.handle(axis(7, PadAxis::RightX, 0.0), 901, &mut r);
+    m.handle(axis(7, PadAxis::RightY, 0.625), 902, &mut r);
+    m.tick(950, &mut r);
+    assert!(near(at(&m), (500.0, 400.0)));
+    m.tick(1050, &mut r);
+    assert!(near(at(&m), (500.0, 420.0)), "down the screen: {:?}", at(&m));
+    // Diagonal, up and right.
+    m.handle(axis(7, PadAxis::RightY, 0.0), 1100, &mut r);
+    m.tick(1100, &mut r);
+    m.handle(axis(7, PadAxis::RightX, 0.7), 1200, &mut r);
+    m.handle(axis(7, PadAxis::RightY, -0.7), 1200, &mut r);
+    m.tick(1200, &mut r);
+    assert!(near(at(&m), (520.0, 400.0)), "{:?}", at(&m));
+    assert!(r.events.is_empty(), "moving without A sends nothing");
+    // Focus lost: the stick lets go, and a new tilt steps at once.
+    m.handle(HostEvent::FocusLost, 1210, &mut r);
+    m.handle(HostEvent::FocusGained, 1211, &mut r);
+    m.handle(axis(7, PadAxis::RightX, 1.0), 1212, &mut r);
+    m.tick(1212, &mut r);
+    assert!(near(at(&m), (540.0, 400.0)), "{:?}", at(&m));
+}
+
+#[test]
+fn tile_by_tile_stays_on_its_tile_when_the_camera_moves() {
+    let (mut m, mut r) = tile_mapper();
+    m.handle(btn(7, PadButton::Right, true), 0, &mut r);
+    m.handle(btn(7, PadButton::Right, false), 1, &mut r);
+    assert!(near(at(&m), (520.0, 400.0)), "the D-pad steps a tile too");
+    // The camera moves 2 tiles right and 1 up: tile (101, 50) is now 2 left and 1 down on screen.
+    m.pad_mut().set_grid(Some(grid_at(102.5, 51.5, 48.284_27)));
+    assert!(near(at(&m), (480.0, 420.0)), "{:?}", at(&m));
+    // Zoomed in twice as close: tiles are 40 px.
+    let g = grid_at(102.5, 51.5, 24.142_136);
+    m.pad_mut().set_grid(Some(g));
+    assert!(near(at(&m), (460.0, 440.0)), "{:?}", at(&m));
+    assert!((m.pad().tile_size().unwrap() - 40.0).abs() < 0.2);
+    assert_eq!(g.tile(at(&m)), Some((101, 50)));
+    // The tile leaves the picture: the cursor goes onto the tile at the edge.
+    m.pad_mut().set_grid(Some(grid_at(130.5, 50.5, 48.284_27)));
+    let (x, y) = at(&m);
+    assert!(x.abs() < 0.05 && (y - 400.0).abs() < 0.05, "{:?}", at(&m));
+    // There, a step off the picture goes nowhere; back in is fine.
+    m.handle(btn(7, PadButton::Left, true), 2, &mut r);
+    m.handle(btn(7, PadButton::Left, false), 3, &mut r);
+    assert!(x.abs() < 0.05 && near(at(&m), (x, y)), "{:?}", at(&m));
+    m.handle(btn(7, PadButton::Right, true), 4, &mut r);
+    m.handle(btn(7, PadButton::Right, false), 5, &mut r);
+    assert!(near(at(&m), (x + 20.0, 400.0)), "{:?}", at(&m));
+    // R3: the tile in the middle of the picture.
+    m.handle(btn(7, PadButton::RightStick, true), 6, &mut r);
+    assert!(near(at(&m), (500.0, 400.0)), "{:?}", at(&m));
+    assert!(r.events.is_empty());
+}
+
+#[test]
+fn tile_by_tile_while_touching_and_outside_a_world() {
+    let (mut m, mut r) = tile_mapper();
+    m.handle(btn(7, PadButton::A, true), 0, &mut r);
+    // A finger is down: the camera moving (maybe by that drag) does not move it.
+    m.pad_mut().set_grid(Some(grid_at(100.75, 50.5, 48.284_27)));
+    assert!(near(at(&m), (500.0, 400.0)));
+    assert_eq!(r.events.len(), 1, "{:?}", r.events);
+    // The stick still drags it a tile at a time: onto the centre of the next tile under the current camera.
+    m.handle(axis(7, PadAxis::RightX, 1.0), 1, &mut r);
+    m.tick(1, &mut r);
+    assert!(near(at(&m), (515.0, 400.0)), "{:?}", at(&m));
+    assert!(matches!(r.events.last(), Some(GuestEvent::TouchMove { .. })), "{:?}", r.events);
+    m.handle(axis(7, PadAxis::RightX, 0.0), 2, &mut r);
+    m.tick(2, &mut r);
+    m.handle(btn(7, PadButton::A, false), 3, &mut r);
+    // Lifted: the cursor follows its tile again.
+    m.pad_mut().set_grid(Some(grid()));
+    assert!(near(at(&m), (520.0, 400.0)), "{:?}", at(&m));
+    // Menus (no grid): the stick moves the cursor freely, by fractions of a tile.
+    m.pad_mut().set_grid(None);
+    m.handle(axis(7, PadAxis::RightX, 1.0), 10, &mut r);
+    m.tick(10, &mut r);
+    m.tick(20, &mut r);
+    assert!(near(at(&m), (532.6, 400.0)), "18 ms at 700 px/s: {:?}", at(&m));
+    m.handle(axis(7, PadAxis::RightX, 0.0), 21, &mut r);
+    m.tick(30, &mut r);
+    assert!(near(at(&m), (532.6, 400.0)), "no tile to snap to");
+    m.handle(btn(7, PadButton::RightStick, true), 31, &mut r);
+    assert!(near(at(&m), (500.0, 400.0)));
+    // Back in a world: onto the tile under the cursor.
+    m.handle(btn(7, PadButton::Right, true), 32, &mut r);
+    assert!(near(at(&m), (532.0, 400.0)), "D-pad without a grid: fixed steps");
+    m.pad_mut().set_grid(Some(grid()));
+    assert!(near(at(&m), (540.0, 400.0)), "{:?}", at(&m));
+}
+
+#[test]
+fn tile_helpers_of_the_grid() {
+    let g = grid();
+    assert_eq!(g.tile((500.0, 400.0)), Some((100, 50)));
+    assert_eq!(g.tile((f32::NAN, 0.0)), None);
+    assert!(near(g.centre((101, 49)).unwrap(), (520.0, 420.0)));
+    assert_eq!(g.neighbour((100, 50), 1, 1), (101, 49), "down the screen is down the world");
+    let mut mv = ID;
+    (mv[0], mv[5]) = (0.1, -0.1);
+    let flipped = Grid::from_gl(&mv, &ID, [0, 0, 1000, 800], (1000.0, 800.0)).unwrap();
+    assert_eq!(flipped.neighbour((0, 0), -1, 1), (-1, 1));
+    let mut tilt = ID;
+    (tilt[3], tilt[15]) = (1.0, 0.5); // w = x + 0.5
+    let horizon = Grid::from_gl(&ID, &tilt, [0, 0, 1000, 800], (1000.0, 800.0)).unwrap();
+    assert_eq!(horizon.centre((-1, 0)), None, "x = -0.5 is on the horizon");
+}

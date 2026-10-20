@@ -28,6 +28,9 @@ pub struct LaunchConfig {
     /// controller already move the blockhead (`bhpc-run --hide-dpad` when off).
     #[serde(default)]
     pub show_dpad: bool,
+    /// The controller cursor moves tile by tile in a world instead of gliding (`bhpc-run --pad-tile-cursor`).
+    #[serde(default)]
+    pub pad_tile_cursor: bool,
 }
 
 fn on() -> bool {
@@ -71,6 +74,7 @@ impl LaunchConfig {
             keys: KeyBindings::default(),
             controller: true,
             show_dpad: false,
+            pad_tile_cursor: false,
         }
     }
 
@@ -133,6 +137,7 @@ impl LaunchConfig {
     /// (always: the FPS limit is the only cap), `--force`, `--fullscreen`, `--no-vsync`, `--show-fps`,
     /// `--fps-position P` (when the counter is shown and not top-left), `--game-speed F` (when not 1),
     /// `--no-controller` (when controllers are off), `--hide-dpad` (when the game's D-pad is not to show),
+    /// `--pad-tile-cursor` (when the controller cursor moves tile by tile),
     /// `--serial-guest` (when the game's threads may not run in parallel) and a `--bind ACTION=BINDING` for every key binding that is not the default.
     pub fn run_args(&self) -> Vec<String> {
         let mut a = vec![
@@ -154,6 +159,7 @@ impl LaunchConfig {
             (!self.controller, "--no-controller"),
             (!self.show_dpad, "--hide-dpad"),
             (!self.window.parallel_threads, "--serial-guest"),
+            (self.pad_tile_cursor, "--pad-tile-cursor"),
         ] {
             if on {
                 a.push(flag.to_string());

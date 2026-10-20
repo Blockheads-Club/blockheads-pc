@@ -183,7 +183,7 @@ fade when GTK animations are off), takes the mouse and the keyboard focus.
 - **Fullscreen, vsync, key bindings, window size, sound.** Applied by `bhpc-run` (`--fullscreen`, `--no-vsync`,
   `--bind ACTION=BINDING` for every non-default binding, `--window`, `--title`; sound off sets
   `SDL_AUDIODRIVER=dummy`). The bindings reach the `bhpc-input` mapper (`Bindings`): touch, pan, zoom, pinch, back,
-  fullscreen, hide game buttons. "Use a game controller" off adds `--no-controller`; under "On-screen controls", "Show the game's on-screen D-pad" (off by default on PC) off adds `--hide-dpad` (the D-pad neither draws nor takes clicks; the controller's walking finger still reaches it); "Run game threads in parallel" (Window & graphics, on by default) off adds `--serial-guest`; the controller layout is fixed and
+  fullscreen, hide game buttons. "Use a game controller" off adds `--no-controller`; under "On-screen controls", "Show the game's on-screen D-pad" (off by default on PC) off adds `--hide-dpad` (the D-pad neither draws nor takes clicks; the controller's walking finger still reaches it); "Move the controller cursor tile by tile" (gamepad section, off by default) on adds `--pad-tile-cursor` (`pad_tile_cursor` in launcher.toml); "Run game threads in parallel" (Window & graphics, on by default) off adds `--serial-guest`; the controller layout is fixed and
   shown read-only (`bhpc-input`'s `pad`). In the in-window view the launcher itself handles the fullscreen binding (it owns the window).
 - **Mute in background** is shown disabled ("not available yet"); **Game sound** off starts the game with
   `SDL_AUDIODRIVER=dummy`.

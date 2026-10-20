@@ -24,7 +24,8 @@ fn flags_default_to_the_plain_desktop_window() {
             unlock_fps: false,
             game_speed: 1.0,
             controller: true,
-            hide_dpad: false
+            hide_dpad: false,
+            pad_tile_cursor: false
         }
     );
 }
@@ -58,6 +59,7 @@ fn flags_carry_the_launcher_settings() {
     assert!(f.fullscreen && !f.vsync && f.show_fps && f.unlock_fps);
     assert!(!parse_play_flags(&s(&["--no-controller"])).unwrap().controller);
     assert!(parse_play_flags(&s(&["--hide-dpad"])).unwrap().hide_dpad);
+    assert!(parse_play_flags(&s(&["--pad-tile-cursor"])).unwrap().pad_tile_cursor);
     assert_eq!(f.game_speed, 1.5);
     assert!(parse_play_flags(&s(&["--game-speed", "9"])).unwrap_err().contains("0.25 to 4"));
     assert!(parse_play_flags(&s(&["--game-speed"])).is_err());

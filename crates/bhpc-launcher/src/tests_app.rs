@@ -169,6 +169,7 @@ fn run_args_and_config_expansion() {
     c.controller = false;
     c.window.parallel_threads = false;
     c.show_dpad = true;
+    c.pad_tile_cursor = true;
     assert_eq!(
         c.run_args()[4..],
         [
@@ -182,12 +183,14 @@ fn run_args_and_config_expansion() {
             "--no-vsync",
             "--show-fps",
             "--no-controller",
-            "--serial-guest"
+            "--serial-guest",
+            "--pad-tile-cursor"
         ]
     );
     c.controller = true;
     c.window.parallel_threads = true;
     c.show_dpad = false;
+    c.pad_tile_cursor = false;
     use crate::window::FpsPosition;
     for (p, flag) in [(FpsPosition::TopRight, "tr"), (FpsPosition::BottomLeft, "bl"), (FpsPosition::BottomRight, "br")]
     {

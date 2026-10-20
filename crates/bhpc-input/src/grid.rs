@@ -8,6 +8,9 @@
 /// A point in content pixels.
 pub type Pt = (f32, f32);
 
+/// A tile: whole world coordinates (the tile spans `x..x + 1`, `y..y + 1`).
+pub type Tile = (i32, i32);
+
 /// Column-major 4x4 matrix (OpenGL / GLKit order).
 pub type Mat4 = [f32; 16];
 
@@ -92,6 +95,21 @@ impl Grid {
                 self.screen((x.floor() + 0.5 + dx as f32, y.floor() + 0.5 + if up { -dy } else { dy } as f32))
             })
             .unwrap_or(p)
+    }
+
+    /// The tile under the content pixel `p`.
+    pub fn tile(&self, p: Pt) -> Option<Tile> {
+        self.world(p).filter(|(x, y)| x.is_finite() && y.is_finite()).map(|(x, y)| (x.floor() as i32, y.floor() as i32))
+    }
+
+    /// Where the centre of tile `t` is on screen.
+    pub fn centre(&self, t: Tile) -> Option<Pt> {
+        self.screen((t.0 as f32 + 0.5, t.1 as f32 + 0.5))
+    }
+
+    /// The tile `(dx, dy)` tiles from `t` on screen (`dy` positive goes down the screen).
+    pub fn neighbour(&self, t: Tile, dx: i32, dy: i32) -> Tile {
+        (t.0.saturating_add(dx), t.1.saturating_add(if self.screen_up() { -dy } else { dy }))
     }
 
     /// Size of one tile on screen around `p` (content pixels), 0 when unknown.

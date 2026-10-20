@@ -34,6 +34,8 @@ pub struct PlayFlags {
     pub controller: bool,
     /// The game's D-pad stays hidden (`--hide-dpad`).
     pub hide_dpad: bool,
+    /// The controller cursor moves tile by tile in a world (`--pad-tile-cursor`).
+    pub pad_tile_cursor: bool,
 }
 
 /// Reads the flags above from a command line.
@@ -73,6 +75,7 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             .unwrap_or(1.0),
         controller: !args.iter().any(|a| a == "--no-controller"),
         hide_dpad: args.iter().any(|a| a == "--hide-dpad"),
+        pad_tile_cursor: args.iter().any(|a| a == "--pad-tile-cursor"),
     })
 }
 

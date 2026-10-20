@@ -90,6 +90,8 @@ pub struct PlayConfig {
     pub controller: bool,
     /// The game's D-pad stays hidden (`gameui`).
     pub hide_dpad: bool,
+    /// The controller cursor moves tile by tile in a world (`bhpc_input::pad`).
+    pub pad_tile_cursor: bool,
     /// Window title.
     pub title: String,
     /// What the buttons, wheel and keys do.
@@ -127,6 +129,7 @@ impl PlayConfig {
             game_speed: 1.0,
             controller: true,
             hide_dpad: false,
+            pad_tile_cursor: false,
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
             embed: None,
@@ -1122,7 +1125,11 @@ impl UiThread {
         let mut mapper = InputMapper::new(InputConfig {
             window: self.cfg.window,
             bindings: self.cfg.bindings,
-            pad: bhpc_input::PadConfig { enabled: self.cfg.controller, ..bhpc_input::PadConfig::default() },
+            pad: bhpc_input::PadConfig {
+                enabled: self.cfg.controller,
+                tile_cursor: self.cfg.pad_tile_cursor,
+                ..bhpc_input::PadConfig::default()
+            },
             ..InputConfig::default()
         });
         Ok(self.ui_loop(c, &mut mapper, rx.as_ref()))

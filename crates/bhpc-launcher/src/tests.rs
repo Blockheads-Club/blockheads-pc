@@ -163,6 +163,7 @@ fn old_window_tables_get_the_new_defaults() {
     assert!(c.window.parallel_threads, "game threads run in parallel unless switched off");
     assert!(c.controller, "controllers are on unless switched off");
     assert!(!c.show_dpad, "the game's D-pad is hidden unless switched on");
+    assert!(!c.pad_tile_cursor, "the controller cursor glides unless switched on");
     assert_eq!(c.keys.hide_ui.to_string(), "H");
     assert_eq!(crate::window::FpsPosition::TopLeft.flag(), "tl");
     let mut c = LaunchConfig::new("a", "d");
@@ -172,7 +173,9 @@ fn old_window_tables_get_the_new_defaults() {
     c.window.game_speed = 0.75;
     c.controller = false;
     c.show_dpad = true;
+    c.pad_tile_cursor = true;
     let text = c.to_toml();
+    assert!(text.contains("pad_tile_cursor = true"), "{text}");
     assert!(text.contains("controller = false"), "{text}");
     assert!(text.contains("show_dpad = true") && !text.contains("show_game_buttons"), "{text}");
     assert!(text.contains("game_speed = 0.75"), "{text}");
