@@ -6,9 +6,16 @@ name: ci-crossplat
 
 on:
   push:
-    branches: [dev, main, "m*/**", "port/**"]
+    branches: [dev, main]
   pull_request:
+  # Porting branches run by hand, only on the platforms being worked on (the runners are shared and scarce):
+  #   gh workflow run ci-crossplat.yml --ref <branch> -f platforms="macos-arm64 linux-arm64"
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Space-separated job names to run (empty: all)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -23,20 +30,34 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.pick.outputs.include }}
+    steps:
+      - id: pick
+        env:
+          ONLY: ${{ inputs.platforms }}
+        run: |
+          all='[
+            {"name": "linux-arm64", "os": "ubuntu-24.04-arm"},
+            {"name": "windows-x86_64", "os": "windows-latest"},
+            {"name": "windows-arm64", "os": "windows-11-arm"},
+            {"name": "macos-x86_64", "os": "macos-15-intel"},
+            {"name": "macos-arm64", "os": "macos-14"},
+            {"name": "macos15-arm64", "os": "macos-15"}
+          ]'
+          echo "include=$(jq -c --arg only "$ONLY" '[.[] | select(.name as $n | $only == "" or ($only | split(" ") | index($n)))]' <<< "$all")" >> "$GITHUB_OUTPUT"
+
   test:
     name: ${{ matrix.name }}
+    needs: matrix
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: linux-arm64, os: ubuntu-24.04-arm }
-          - { name: windows-x86_64, os: windows-latest }
-          - { name: windows-arm64, os: windows-11-arm }
-          - { name: macos-x86_64, os: macos-15-intel }
-          - { name: macos-arm64, os: macos-14 }
-          - { name: macos15-arm64, os: macos-15 }
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
     steps:
       - uses: actions/checkout@v4
 

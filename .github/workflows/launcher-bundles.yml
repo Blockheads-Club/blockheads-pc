@@ -10,7 +10,7 @@ name: launcher-bundles
 
 on:
   push:
-    branches: [dev, main, "port/**"]
+    branches: [dev, main]
     paths: ["app/**", "crates/**", "Cargo.lock", "scripts/build-sidecar.sh", "scripts/ensure-sidecar.mjs", "scripts/check-bundle.sh", ".github/workflows/launcher-bundles.yml"]
   pull_request:
     paths: ["app/**", "scripts/build-sidecar.sh", "scripts/check-bundle.sh", ".github/workflows/launcher-bundles.yml"]
