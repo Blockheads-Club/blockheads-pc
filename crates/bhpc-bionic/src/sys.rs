@@ -493,6 +493,10 @@ fn getrusage(c: &mut Cpu, _: &Shared) {
 // ---------- memory mappings ----------
 
 const MAP_SHARED: u32 = 0x01;
+const MAP_PRIVATE: u32 = 0x02;
+const MAP_SHARED_VALIDATE: u32 = 0x03;
+/// The sharing type bits: Linux refuses a mapping that is neither shared nor private (`EINVAL`).
+const MAP_TYPE: u32 = 0x0f;
 const MAP_ANONYMOUS: u32 = 0x20;
 const PROT_WRITE: u32 = 0x2;
 const MAP_FAILED: u32 = u32::MAX;
@@ -501,6 +505,14 @@ fn mmap(c: &mut Cpu, st: &Shared) {
     args!(c; _addr, len, prot, flags, fd, off);
     let len = len.div_ceil(PAGE_SIZE).max(1) * PAGE_SIZE;
     let anonymous = flags & MAP_ANONYMOUS != 0;
+    // libv's `__wrap_open` maps every file it opens with `mmap(PROT_READ, MAP_FILE)` (0: a Darwin habit). The
+    // kernel refuses that, so on a device libv falls back to a plain descriptor. Accepting it sent libv into its
+    // in-memory file cache, whose `fstat` reports an empty file: CoreFoundation then read every preferences
+    // plist as empty, and the settings were lost at each start.
+    if !matches!(flags & MAP_TYPE, MAP_SHARED | MAP_PRIVATE | MAP_SHARED_VALIDATE) {
+        set_errno(c, st, errno::EINVAL);
+        return c.ret_u32(MAP_FAILED);
+    }
     // File mappings are private copies; a writable shared mapping could not be written back.
     if !anonymous && (flags & MAP_SHARED != 0 && prot & PROT_WRITE != 0) {
         set_errno(c, st, errno::ENODEV);
@@ -1274,6 +1286,14 @@ mod tests {
         assert_eq!(e.errno(), errno::ENODEV);
         assert_eq!(call(&mut e, "mmap", &[0, 4096, 1, 2, 99, 0]), MAP_FAILED);
         assert_eq!(e.errno(), errno::EBADF);
+        // Neither shared nor private (Darwin's `MAP_FILE` alone): Linux refuses it, and libv then reads the file
+        // instead of serving it from its in-memory file cache.
+        for flags in [0, 0x20, 0x0f] {
+            e.set_errno(0);
+            assert_eq!(call(&mut e, "mmap", &[0, 4096, 1, flags, fd, 0]), MAP_FAILED);
+            assert_eq!(e.errno(), errno::EINVAL);
+        }
+        assert_ne!(call(&mut e, "mmap", &[0, 4096, 1, 3, fd, 0]), MAP_FAILED, "MAP_SHARED_VALIDATE");
         // No memory left.
         let mut s = Env::small();
         assert_eq!(call(&mut s, "mmap", &[0, 1 << 30, 3, 0x22, NEG1, 0]), MAP_FAILED);
