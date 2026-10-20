@@ -93,6 +93,8 @@ fn desktop_hooks() {
     let lines = wait_lines(&log, 2);
     assert!(lines.iter().any(|l| l == "mailto:a@b?subject=x"), "{lines:?}");
     let page = lines.iter().find_map(|l| l.strip_prefix("file://")).unwrap().to_string();
+    // `file:///C:/...` on Windows: the path starts after the third slash.
+    let page = if cfg!(windows) { page.trim_start_matches('/').to_string() } else { page };
     assert!(page.ends_with("/index.html"), "{page}");
     assert_eq!(std::fs::read_to_string(&page).unwrap(), "<img src=\"img/a.png\">");
     assert_eq!(std::fs::read(Path::new(&page).parent().unwrap().join("img/a.png")).unwrap(), b"png");

@@ -223,6 +223,13 @@ fn segments_are_recorded_and_protections_applied() {
     assert_eq!(m.segments[1].start, m.start + 0x1000);
     assert_eq!(m.segments[1].prot, PF_R | PF_W);
     l.apply_protections().unwrap();
+    // The host's view of the pages: Linux lists it in /proc (other hosts only check that the calls succeed).
+    #[cfg(target_os = "linux")]
+    check_maps(&l, &m);
+}
+
+#[cfg(target_os = "linux")]
+fn check_maps(l: &Linker, m: &Module) {
     let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
     let perms_at = |guest: u32| {
         let host = l.mem().base() as u64 + guest as u64;

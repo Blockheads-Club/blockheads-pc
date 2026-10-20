@@ -85,6 +85,8 @@ jobs:
       - name: Test the JIT (serial)
         run: cargo test -p bhpc-cpu --locked -- --test-threads=1
       - name: Test
+        if: ${{ !cancelled() }}
         run: cargo test --workspace --locked --no-fail-fast
       - name: Clippy
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings

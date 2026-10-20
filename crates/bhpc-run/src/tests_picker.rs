@@ -25,8 +25,15 @@ fn the_first_dialog_that_starts_answers() {
 #[test]
 fn kde_gets_its_own_dialog_first() {
     let names = |d: &str| candidates(d).into_iter().map(|c| c.program).collect::<Vec<_>>();
-    assert_eq!(names("GNOME"), ["zenity", "kdialog"]);
-    assert_eq!(names("KDE"), ["kdialog", "zenity"]);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        assert_eq!(names("GNOME"), ["zenity", "kdialog"]);
+        assert_eq!(names("KDE"), ["kdialog", "zenity"]);
+    }
+    #[cfg(target_os = "macos")]
+    assert_eq!(names("KDE"), ["osascript"]);
+    #[cfg(windows)]
+    assert_eq!(names("KDE"), ["powershell"]);
     assert!(candidates("").iter().all(|c| c.args.iter().any(|a| a.contains("png"))));
 }
 
