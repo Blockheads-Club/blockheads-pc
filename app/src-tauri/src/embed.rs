@@ -90,8 +90,6 @@ mod imp {
 
     struct View {
         area: gtk::DrawingArea,
-        webview: gtk::Widget,
-        vbox: gtk::Box,
         /// Holds the webview with the game view laid over its stage.
         overlay: gtk::Overlay,
         /// The GL picture under `area` (when GL is on).
@@ -144,6 +142,9 @@ mod imp {
 
     thread_local! {
         static VIEW: RefCell<Option<View>> = const { RefCell::new(None) };
+        /// The overlay that holds the webview, made once and kept: moving the webview in and out of it on every
+        /// start made WebKit repaint from black (a black flash on the loading screen).
+        static HOST: RefCell<Option<gtk::Overlay>> = const { RefCell::new(None) };
     }
 
     /// Runs `f` on the GTK main thread and returns its result.
@@ -178,13 +179,8 @@ mod imp {
     pub fn open(win: &WebviewWindow, opts: Opts) -> Result<(), String> {
         on_main(win, move |win| {
             close_now();
-            let vbox = win.default_vbox().map_err(|e| e.to_string())?;
+            let overlay = host_overlay(win)?;
             let area = gtk::DrawingArea::new();
-            let webview = vbox
-                .children()
-                .into_iter()
-                .find(|c| c.type_().name().contains("WebView"))
-                .ok_or("the webview is not in the window box")?;
             area.set_can_focus(true);
             area.set_hexpand(true);
             area.set_vexpand(true);
@@ -216,9 +212,6 @@ mod imp {
             area.set_halign(gtk::Align::Fill);
             area.set_valign(gtk::Align::Fill);
             // The webview keeps the whole window; the game view is laid over the part of it below the bars.
-            let overlay = gtk::Overlay::new();
-            vbox.remove(&webview);
-            overlay.add(&webview);
             if let Some(g) = &gl {
                 overlay.add_overlay(g);
                 overlay.set_overlay_pass_through(g, true);
@@ -228,11 +221,9 @@ mod imp {
             overlay.add_overlay(&area);
             // Until the first frame the page shows its loading screen and must get the mouse (Cancel).
             overlay.set_overlay_pass_through(&area, true);
-            vbox.pack_start(&overlay, true, true, 0);
-            overlay.show();
             // Hidden until the page has reported where the stage starts (`layout`): the runner sizes its first frame
             // by the first size it hears, which must be the real one.
-            VIEW.with(|v| *v.borrow_mut() = Some(View { area, webview, vbox, overlay, gl, paint }));
+            VIEW.with(|v| *v.borrow_mut() = Some(View { area, overlay, gl, paint }));
             Ok(())
         })?
     }
@@ -648,17 +639,33 @@ mod imp {
         })
     }
 
+    /// The overlay around the webview: the first call moves the webview into it, later calls reuse it.
+    fn host_overlay(win: &WebviewWindow) -> Result<gtk::Overlay, String> {
+        if let Some(o) = HOST.with(|h| h.borrow().clone()) {
+            return Ok(o);
+        }
+        let vbox = win.default_vbox().map_err(|e| e.to_string())?;
+        let webview = vbox
+            .children()
+            .into_iter()
+            .find(|c| c.type_().name().contains("WebView"))
+            .ok_or("the webview is not in the window box")?;
+        let overlay = gtk::Overlay::new();
+        vbox.remove(&webview);
+        overlay.add(&webview);
+        vbox.pack_start(&overlay, true, true, 0);
+        overlay.show();
+        HOST.with(|h| *h.borrow_mut() = Some(overlay.clone()));
+        Ok(overlay)
+    }
+
     fn close_now() {
         VIEW.with(|v| {
             if let Some(v) = v.borrow_mut().take() {
-                v.overlay.remove(&v.webview);
                 v.overlay.remove(&v.area);
                 if let Some(g) = &v.gl {
                     v.overlay.remove(g);
                 }
-                v.vbox.remove(&v.overlay);
-                v.vbox.pack_start(&v.webview, true, true, 0);
-                v.webview.show();
                 if let Some(r) = v.paint.borrow_mut().reader.take() {
                     r.remove();
                 }
