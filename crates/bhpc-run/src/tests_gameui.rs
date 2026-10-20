@@ -107,6 +107,25 @@ fn hiding_toggles_and_the_dpad_keeps_the_walking_finger() {
 }
 
 #[test]
+fn the_dpad_can_stay_hidden_and_the_buttons_can_start_hidden() {
+    // The D-pad alone: the other buttons show, the D-pad neither draws nor takes touches, except the walking finger.
+    let g = GameUi::default().start_hidden(false, true);
+    assert!(!g.hidden() && !g.off(false) && g.off(true));
+    assert!(!g.suppress(false) && g.suppress(true));
+    g.set_walking(true);
+    assert!(!g.suppress(true) && g.off(true), "the walking finger reaches the D-pad, which still does not draw");
+    g.set_walking(false);
+    // Toggling hides the rest too; showing again leaves the D-pad hidden.
+    assert!(g.toggle() && g.off(false) && g.off(true));
+    assert!(!g.toggle() && !g.off(false) && g.off(true));
+    // All hidden at the start, the D-pad with them until the buttons are shown.
+    let g = GameUi::default().start_hidden(true, false);
+    assert!(g.hidden() && g.off(false) && g.off(true) && g.suppress(true));
+    assert!(!g.toggle() && !g.off(true) && !g.suppress(true));
+    assert_eq!(message(false), "GAME BUTTONS SHOWN");
+}
+
+#[test]
 fn objects_grid_pause_and_dpad_of_a_world() {
     let m = memory();
     // No game view yet, or one without a world: nothing.

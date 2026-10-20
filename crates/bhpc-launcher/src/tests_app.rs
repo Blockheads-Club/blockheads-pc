@@ -146,7 +146,18 @@ fn run_args_and_config_expansion() {
     let mut c = LaunchConfig::new("/x/game.apk", "/data");
     assert_eq!(
         c.run_args(),
-        ["--apk", "/x/game.apk", "--data-dir", "/data", "--window", "1024x768", "--fps-limit", "60", "--unlock-fps"]
+        [
+            "--apk",
+            "/x/game.apk",
+            "--data-dir",
+            "/data",
+            "--window",
+            "1024x768",
+            "--fps-limit",
+            "60",
+            "--unlock-fps",
+            "--hide-dpad"
+        ]
     );
     c.force = true;
     c.window.fullscreen = true;
@@ -157,6 +168,8 @@ fn run_args_and_config_expansion() {
     c.window.fps_limit = 0;
     c.controller = false;
     c.window.parallel_threads = false;
+    c.show_dpad = true;
+    c.show_game_buttons = false;
     assert_eq!(
         c.run_args()[4..],
         [
@@ -170,16 +183,19 @@ fn run_args_and_config_expansion() {
             "--no-vsync",
             "--show-fps",
             "--no-controller",
+            "--hide-ui",
             "--serial-guest"
         ]
     );
     c.controller = true;
     c.window.parallel_threads = true;
+    c.show_dpad = false;
+    c.show_game_buttons = true;
     use crate::window::FpsPosition;
     for (p, flag) in [(FpsPosition::TopRight, "tr"), (FpsPosition::BottomLeft, "bl"), (FpsPosition::BottomRight, "br")]
     {
         c.window.fps_position = p;
-        assert_eq!(c.run_args()[13..], ["--fps-position", flag]);
+        assert_eq!(c.run_args()[14..], ["--fps-position", flag]);
     }
     // The position only matters with the counter on; top-left is bhpc-run's default.
     c.window.show_fps = false;
@@ -190,7 +206,7 @@ fn run_args_and_config_expansion() {
     // The game speed only when it is not normal (1 leaves the game untouched).
     assert!(!c.run_args().contains(&"--game-speed".to_string()));
     c.window.game_speed = 1.5;
-    assert_eq!(c.run_args()[13..], ["--game-speed", "1.5"]);
+    assert_eq!(c.run_args()[14..], ["--game-speed", "1.5"]);
 
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     assert_eq!(expand_args(&s(&["--init-only"])).unwrap(), s(&["--init-only"]));

@@ -10,7 +10,12 @@
 //!
 //! * **Hide game buttons** hooks the render and touch methods of `WorldUI` and `DPad` (see `play.rs`): while hidden,
 //!   rendering returns at once and the touch methods answer "not mine", so taps go to the world. The pop-ups, the
-//!   pause menu and the game's alerts are other classes and stay. Showing again just lets the methods run.
+//!   pause menu and the game's alerts are other classes and stay. Showing again just lets the methods run. The
+//!   launcher's "Show the game's buttons" setting off (`--hide-ui`) starts every world with them hidden.
+//! * **The D-pad alone** ("Show the game's on-screen D-pad" off, `--hide-dpad`): the same hooks keep only the `DPad`
+//!   hidden for the whole run. The game's own "BLOCKHEAD D-PAD" option (`dpadDirectControlDisabled` in its
+//!   defaults) is not used for this: with it off the game stops displaying the D-pad altogether, and the
+//!   controller's walking, which holds a finger on the D-pad's centre, would stop working with it.
 //! * **Cursor grid**: the world's tap matrices (`World.tapModelviewMatrix`, `tapProjectionMatrix`, `tapViewport`)
 //!   give the tile grid on screen ([`bhpc_input::Grid`]).
 //! * **Zoom**: `GameView.pinchScale` (a double, 1 = normal, smaller is closer) is what the game's pinch gesture
@@ -241,6 +246,8 @@ pub fn message(hidden: bool) -> &'static str {
 pub struct GameUi {
     pub ivars: Ivars,
     hidden: AtomicBool,
+    /// The D-pad stays hidden whether the other buttons show or not (`--hide-dpad`).
+    dpad_off: AtomicBool,
     /// The controller's walking finger is on the D-pad: the hidden D-pad still takes that touch.
     walking: AtomicBool,
     game_view: AtomicU32,
@@ -265,6 +272,14 @@ fn flag(mem: &GuestMemory, at: u32) -> bool {
 impl GameUi {
     pub fn new(ivars: Ivars) -> GameUi {
         GameUi { ivars, ..GameUi::default() }
+    }
+
+    /// The hidden state a run starts with: all the game's buttons (`ui`, until toggled) and the D-pad alone
+    /// (`dpad`, for the whole run).
+    pub fn start_hidden(self, ui: bool, dpad: bool) -> GameUi {
+        self.hidden.store(ui, Ordering::SeqCst);
+        self.dpad_off.store(dpad, Ordering::SeqCst);
+        self
     }
 
     /// The game's buttons are hidden.
@@ -292,10 +307,15 @@ impl GameUi {
         }
     }
 
-    /// Whether a hooked method of the game's buttons should do nothing now: always while they are hidden, except
-    /// the D-pad's (`dpad`) while the controller walks with it.
+    /// The D-pad (`dpad`) or the other buttons are hidden now: the D-pad also while it is to stay hidden.
+    pub fn off(&self, dpad: bool) -> bool {
+        self.hidden() || (dpad && self.dpad_off.load(Ordering::SeqCst))
+    }
+
+    /// Whether a hooked touch method of the game's buttons should answer "not mine" now: always while they are
+    /// hidden ([`GameUi::off`]), except the D-pad's (`dpad`) while the controller walks with it.
     pub fn suppress(&self, dpad: bool) -> bool {
-        self.hidden() && !(dpad && self.walking.load(Ordering::SeqCst))
+        self.off(dpad) && !(dpad && self.walking.load(Ordering::SeqCst))
     }
 
     /// `-[GameView render:]` ran on `view`.

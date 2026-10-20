@@ -88,6 +88,10 @@ pub struct PlayConfig {
     pub game_speed: f64,
     /// Game controllers drive the game (`bhpc_input::pad`).
     pub controller: bool,
+    /// The game's buttons start hidden (`gameui`; the hide-buttons binding shows them).
+    pub hide_ui: bool,
+    /// The game's D-pad stays hidden (`gameui`).
+    pub hide_dpad: bool,
     /// Window title.
     pub title: String,
     /// What the buttons, wheel and keys do.
@@ -124,6 +128,8 @@ impl PlayConfig {
             unlock_fps: false,
             game_speed: 1.0,
             controller: true,
+            hide_ui: false,
+            hide_dpad: false,
             title: "The Blockheads".into(),
             bindings: Bindings::default(),
             embed: None,
@@ -911,8 +917,16 @@ fn boot(
             Err(e) => eprintln!("[play] cannot change the game speed: {e}"),
         }
     }
-    let game = match install_game_ui(&mut sess) {
-        Ok(g) => Some(g),
+    let game = match install_game_ui(&mut sess, cfg.hide_ui, cfg.hide_dpad) {
+        Ok(g) => {
+            if cfg.hide_ui || cfg.hide_dpad {
+                eprintln!(
+                    "[play] the game's buttons start hidden: {}, its D-pad stays hidden: {}",
+                    cfg.hide_ui, cfg.hide_dpad
+                );
+            }
+            Some(g)
+        }
         Err(e) => {
             eprintln!("[play] the game's buttons cannot be hidden and the controller cannot walk or zoom: {e}");
             None
@@ -1679,24 +1693,25 @@ struct GameHooks {
     pinch: Option<(u32, u32)>,
 }
 
-/// The methods "Hide game buttons" stops while the buttons are hidden: class, selector, whether it is the D-pad's
-/// touch handling (the controller's walking finger still goes there) and what it answers then (`NO` for the
-/// touch questions, nothing for the renderers).
+/// The methods "Hide game buttons" stops while the buttons are hidden: class, selector and whether it is the
+/// D-pad's (hidden on its own with `--hide-dpad`; its touch handling still takes the controller's walking finger).
+/// While stopped a method answers `NO` (the touch questions) or does nothing (the renderers).
 const HIDDEN_METHODS: [(&str, &str, bool); 9] = [
     ("WorldUI", "render:translation:pinchScale:paused:", false),
     ("WorldUI", "touchIsInUI:", false),
     ("WorldUI", "tap:", false),
     ("WorldUI", "startTouch:tapCount:index:", false),
     ("WorldUI", "startTouch:tapCount:paused:index:", false),
-    ("DPad", "render:", false),
+    ("DPad", "render:", true),
     ("DPad", "touchIsInUI:", true),
     ("DPad", "touchIsInViewAtAll:", true),
     ("DPad", "startTouch:tapCount:index:", true),
 ];
 
 /// Hook the game's controls (see `gameui`): remember the `GameView` it renders, stop the buttons' rendering and
-/// touch handling while they are hidden, and find the pause actions.
-fn install_game_ui(sess: &mut Session) -> Result<Arc<GameHooks>, String> {
+/// touch handling while they are hidden, and find the pause actions. `hide_ui` and `hide_dpad` are the hidden state
+/// at the start (`GameUi::start_hidden`).
+fn install_game_ui(sess: &mut Session, hide_ui: bool, hide_dpad: bool) -> Result<Arc<GameHooks>, String> {
     use crate::fpsunlock::methods;
     let mem = sess.cpu.mem().clone();
     let export = |name: &str| sess.linker.modules().iter().find_map(|m| m.export(name));
@@ -1722,14 +1737,14 @@ fn install_game_ui(sess: &mut Session) -> Result<Arc<GameHooks>, String> {
     let pinch = method("GameView", crate::gameui::PINCH_SELECTOR)
         .inspect_err(|e| eprintln!("[play] the wheel zooms around the centre: {e}"))
         .ok();
-    let ui = Arc::new(crate::gameui::GameUi::new(ivars));
+    let ui = Arc::new(crate::gameui::GameUi::new(ivars).start_hidden(hide_ui, hide_dpad));
     let g = ui.clone();
     hook_at(sess, render, "-[GameView render:]", move |c| g.saw_game_view(c.reg(0)))?;
     for (imp, cls, sel, dpad) in hidden {
         let g = ui.clone();
         let renders = sel.starts_with("render:");
         hook_or_skip(sess, imp, &format!("-[{cls} {sel}]"), move |_| {
-            let off = if renders { g.hidden() } else { g.suppress(dpad) };
+            let off = if renders { g.off(dpad) } else { g.suppress(dpad) };
             off.then_some(0)
         })?;
     }
