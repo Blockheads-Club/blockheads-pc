@@ -975,6 +975,7 @@ fn boot(
         let q = main_q.clone();
         gles.set_frame_hook(Arc::new(move |c| q.drain(c)));
     }
+    kick_main_queue(&mut sess, &main_q);
     let ui = UiThread {
         main: Some(main_q),
         game,
@@ -1183,7 +1184,12 @@ impl UiThread {
             alert.title, alert.message, alert.buttons, alert.cancel
         );
         c.set_ticks(4_000_000_000);
-        if let Err(Throw::Stop(s)) = self.vm.alert_click(c, alert, pick) {
+        // The buttons' delegate callbacks are the game's UIKit code: they run on the main thread like a control's
+        // events. The start-up alert's answer creates the `GameView`; on the UI thread it raced the main thread's
+        // `initOpenGL` (see `mainq`).
+        let (vm, alert) = (self.vm.clone(), alert.clone());
+        let answered = crate::input::on_main(self.main.as_ref(), c, move |c| vm.alert_click(c, &alert, pick));
+        if let Err(Throw::Stop(s)) = answered {
             let msg = format!("alert: guest stopped: {s}");
             *self.flags.fail.lock().unwrap_or_else(PoisonError::into_inner) =
                 Some((msg, c.stop_regs().unwrap_or([0; 16])));
@@ -1353,6 +1359,22 @@ impl UiThread {
             }
         }
     }
+}
+
+/// While the main thread presents no frames (start-up), a job waiting in `queue` for 20 ms asks libdispatch to run
+/// the queue from the main run loop: `dispatch_async_f(&_dispatch_main_q, 0, drain)`. Without libdispatch the poster
+/// keeps waiting and finally runs the job itself, as before.
+fn kick_main_queue(sess: &mut Session, queue: &Arc<crate::mainq::MainQueue>) {
+    let export = |n: &str| sess.linker.modules().iter().find_map(|m| m.export(n));
+    let (Some(async_f), Some(main_q)) = (export("dispatch_async_f"), export("_dispatch_main_q")) else { return };
+    let q = queue.clone();
+    let drain: bhpc_cpu::SharedThunkFn = Arc::new(move |c: &mut Cpu| q.drain(c));
+    let Ok(drain) = sess.cpu.register_shared_thunk("bhpc:main_queue_drain", drain) else { return };
+    queue.set_kick(20, move |c| {
+        if let Err(e) = c.call(async_f, &[main_q, 0, drain]) {
+            eprintln!("[play] main queue kick: guest stopped: {e}");
+        }
+    });
 }
 
 /// Create the guest thread of the Android UI thread (a thunk as the start routine, a small stack).

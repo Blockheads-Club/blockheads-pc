@@ -119,7 +119,10 @@ Umbrella rules: `../AGENTS.md`.
 - Touch, key and text natives (`Window.nativeTouches*`, `nativeKey*`, `TextField.*`) must run on the guest main thread
   (t0, the only one with a GL context: shader/texture creation from `tap:`/`updatePreviewView` fails elsewhere). The UI
   thread posts them to `bhpc-run/src/mainq.rs`; `Gles::set_frame_hook` drains the queue inside `eglSwapBuffers` on t0.
-  Lifecycle/surface/focus natives stay on the UI thread.
+  Lifecycle/surface/focus natives stay on the UI thread. Java control events (`Control.event`, button presses) and alert
+  answers (`nativeOnClick`) run the game's UIKit actions, so they go through the same queue; before the first frame a
+  waiting poster kicks the main run loop (`dispatch_async_f` on the main queue). On the UI thread the start-up alert's
+  `loadGameView` raced `initOpenGL` (NaN projection, black world; `docs/perf/parallel-guest-threads.md`).
 - A world that looks frozen headlessly is usually the game's modal tutorial popup ("WELCOME TO THE BLOCKHEADS", built
   from `com.apportable.ui` Java views that the port does not draw): it calls `setPaused:`, hides the HUD and stops the
   simulation. `--script` `clicktext OK` dismisses it; use `dumpviews` to see such invisible views.

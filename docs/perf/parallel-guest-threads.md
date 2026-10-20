@@ -193,6 +193,25 @@ serial). `bhpc-run/src/mktimer.rs` patches the receive in guest memory to delive
 deadline armed, like the Mach kernel (CoreFoundation re-arms after an early wake-up). After the fix: no UI-thread sleep
 over 1.5 s and no run-loop pass over 1 s in 4 parallel sessions of the same script.
 
+## Found after turning it on: the black world after the tutorial popup
+
+In about one session in 20-30 (one in five on a loaded host) the main menu looked normal, but after creating a world
+and pressing OK on the welcome popup the screen stayed black for the whole session (60 fps, no HUD, the game logged
+`GLKMathUnproject returning NO, no invertSucess`). Logging the matrices the game uploads (`glUniformMatrix4fv`) showed
+NaN in the projection from the very first frame of such a session, long before the popup: `GameView.projectionMatrix`
+had been computed from a zero view size (aspect 0/0), and the menu's 2D drawing did not show it.
+
+The harness answers the start-up alert ("Enable multiplayer and free crystals?") on the Android UI thread. Its
+delegate (`gdprCheckComplete` -> `loadGameView`) creates the `GameView` and calls `resize:insets:` there, while the main
+thread already runs the `initOpenGL` that work schedules: with the baton the UI thread finished first, in parallel the
+two interleaved. The fix runs alert answers and the Java controls' `Control.event` (button presses: the popup's OK
+calls `pauseResumeButtonTapped` and friends, which ran on the UI thread too) on the main thread through
+`bhpc-run/src/mainq.rs`, like touches. At start-up the main thread presents no frames yet, so the queue is not drained
+by `eglSwapBuffers`; a poster that waited 20 ms asks libdispatch to drain it from the main run loop
+(`dispatch_async_f(&_dispatch_main_q, 0, drain)`). Start-up sessions (embed mode, offscreen SDL, busy host) with a NaN
+projection: 9 of 51 before, 0 of 20 after (3 of 20 for the old build in the same batch); full menu -> new world -> OK
+sessions after the fix: 15 of 15 embed and 3 of 3 SDL-window sessions show the world.
+
 ## Remaining work
 
 * Make more of the hot gated host functions gate-free: GL draw calls (the `Gles` state has its own lock; EGL swap must
