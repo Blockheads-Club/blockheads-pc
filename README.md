@@ -32,14 +32,17 @@ known issues (see [Known issues](#known-issues)). Architecture and milestones: [
 
 ## Build and run
 
-Build prerequisites (only x86_64 Linux is verified so far; arm64, Windows and macOS are planned for M8):
+Supported hosts: Linux, macOS and Windows, each on x86_64 and arm64 (built and tested in CI: `ci.yml` for Linux
+x86_64 with the coverage gate, `ci-crossplat.yml` for the other five; `launcher-bundles.yml` makes the installers).
+Build prerequisites:
 
 | Tool | Needed for | Notes |
 |---|---|---|
 | rustup, stable toolchain (>= 1.86) | everything | `rustup component add llvm-tools-preview` for coverage |
 | CMake >= 3.16 | building dynarmic from `third_party/` | driven by `crates/bhpc-cpu/build.rs` |
 | C++20 compiler (clang or gcc) | dynarmic and the shim in `crates/bhpc-cpu/shim` | |
-| Boost headers | dynarmic (header-only use) | Arch `boost`, Debian/Ubuntu `libboost-dev`, Fedora `boost-devel` |
+| Boost headers | dynarmic (header-only use) | Arch `boost`, Debian/Ubuntu `libboost-dev`, Fedora `boost-devel`, macOS `brew install boost`; elsewhere point `BHPC_BOOST_ROOT` at a tree with `include/boost` |
+| Visual Studio 2022 Build Tools (C++, plus the ARM64 tools on arm64) | Windows only | MSVC builds dynarmic and the shim |
 | `cargo-llvm-cov` | `scripts/coverage.sh` only | `cargo install cargo-llvm-cov` |
 
 dynarmic and the shim are built once per machine: `crates/bhpc-cpu/build.rs` keeps the archives in
@@ -171,7 +174,8 @@ BHPC_APK="$HOME/Downloads/The Blockheads_1.7.4_APKPure.apk" cargo test -p bhpc-r
 
 ### Known issues
 
-- Verified on x86_64 Linux only (Windows, macOS and arm64 are planned).
+- The game itself has been played on x86_64 Linux; the other hosts pass the same build and test suites in CI (which
+  has no game APK), so their first real sessions may still find host-specific problems.
 - Only the 1.7.4, 1.7.5 and 1.7.6 builds are known to boot.
 - Performance is that of a JIT plus host re-implementations: expect the frame rate to be well below a phone's on
   busy scenes, and the first seconds of a start to be slow.

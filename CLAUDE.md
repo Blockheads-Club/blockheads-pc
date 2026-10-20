@@ -106,12 +106,14 @@ Umbrella rules: `../AGENTS.md`.
 - Parallel threads expose guest races the baton hid. Apportable's mk_timer receive slept until a re-armed deadline
   (seconds of input lag on the UI thread); `bhpc-run/src/mktimer.rs` patches it. To find such stalls, time the
   blocking thunks (`watch_blocking` in play.rs) per thread and look at the caller's stack for `usleep`/cond waits.
-- `localtime`/`mktime`/`tzset` use the host zone via `HostClock::local_zone` (libc `localtime_r` on unix, UTC on
-  Windows for now); `TZ=UTC` in the guest environment forces UTC.
+- `localtime`/`mktime`/`tzset` use the host zone via `HostClock::local_zone` (libc `localtime_r` on unix, the CRT's
+  `localtime_s` on Windows); `TZ=UTC` in the guest environment forces UTC.
 
 ## Gotchas learned in M7 (networking)
-- Guest sockets live in `bhpc-run/src/vfd/net.rs` over non-blocking host sockets (unix only); details and the online
-  join recipe in `docs/m7/net-bringup.md`. `BHPC_TRACE_NET=1` logs socket calls and datagram heads.
+- Guest sockets live in `bhpc-run/src/vfd/net.rs` over non-blocking host sockets on every host; details and the
+  online join recipe in `docs/m7/net-bringup.md`. `BHPC_TRACE_NET=1` logs socket calls and datagram heads. The guest
+  speaks the Linux ABI: never pass its numbers to the host directly, translate through `vfd/net/abi.rs` (tables for
+  Linux, macOS and Windows, tested on every host); `net/sys_unix.rs` / `net/sys_windows.rs` are the only host calls.
 - Anything that rebinds `read`/`poll`/`select` after `vfd::install` silently bypasses the descriptor table
   (`watch_blocking` did): register wrappers first, the table last.
 - The game runs input handlers on the Android UI guest thread; its CFRunLoop is only serviced by the UI loop's
@@ -173,3 +175,16 @@ Umbrella rules: `../AGENTS.md`.
   `a32_a<PC>_...`), usable with `perf report` or any sampler that records host RIPs. libc/libm/malloc are already host
   thunks; guest-side hot spots are diffuse (objc_msgSend ~3%, zlib/png/Skia during loading), and a thunk round trip
   (~25 ns) costs more than objc_msgSend's cache-hit path, so it stays guest code.
+
+## Gotchas learned porting to Windows (and every non-Linux host)
+- CI for the other five targets is `.github/workflows/ci-crossplat.yml` (whole workspace, JIT tests serially first);
+  nothing local runs Windows. `BHPC_SKIP_NATIVE=1 cargo check --workspace --all-targets --target
+  x86_64-pc-windows-msvc` (or `aarch64-apple-darwin`) type-checks the foreign `cfg` code without its C++ toolchain.
+- dynarmic's own Windows fastmem handler crashes (no x64 shadow space before its C++ call); the shim builds
+  `shim/exception_handler_windows.cpp` (a vectored handler, x64 + arm64) into dynarmic instead (cmake/CMakeLists.txt).
+- Page protection is `GuestMemory::protect` (mprotect / VirtualProtect); never call `libc::mprotect` elsewhere.
+- No OpenGL ES on the host (macOS, some Windows drivers): `bhpc-app/src/sdl.rs` falls back to a desktop
+  compatibility context and `bhpc_gles::glsl::to_desktop` translates the shaders. `BHPC_GL=desktop` forces that path
+  on Linux too (the headless smoke run passes with it).
+- Tests must not assume Linux paths or layouts: `/proc`, `/bin/sh` (Git's `sh` is on the Windows runners' PATH),
+  `file:///C:/...` URLs, host pointers above the guest window, `\` separators in displayed paths.

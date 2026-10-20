@@ -59,8 +59,8 @@ for f in "$dir"/dmg/*.dmg; do
   [ -e "$f" ] || continue
   mnt="$work/dmg-$found"
   mkdir -p "$mnt"
-  # The image carries the licence as an agreement, which hdiutil wants accepted first.
-  { yes || true; } | PAGER=cat hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$f" >/dev/null
+  # The dmg carries the GPL as a license agreement: attach asks to accept it on stdin.
+  { yes || true; } | hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$f" >/dev/null
   find "$mnt" -type f -o -type l > "$work/list"
   scan "$f"
   hdiutil detach "$mnt" >/dev/null
