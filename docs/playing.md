@@ -59,10 +59,11 @@ files under `DIR/tmp`; they persist between runs. Delete the directory to start 
 - Some Java services are still stubs and answer 0/null (notifications, news client, in-app purchases, ad and
   analytics SDKs); the end-of-run report lists the ones the game called.
 - The on-screen keyboard is replaced by host text input.
-- The game picks its render size itself (for example 1024x768 in a 1280x960 window, 1334x750 in 1600x900) and the
-  window scales that picture, keeping its aspect ratio (bars at the sides or top and bottom), also on high-DPI
-  displays and in fullscreen. It chooses the size once at start-up: resizing the window afterwards scales and
-  letterboxes the same picture instead of re-laying the game out.
+- The game's screen follows the window's size and aspect (no bars). How big the world and interface are is the
+  launcher's "Game zoom" (`--zoom`): `phone` (default) gives the game a phone's 375 points on the short side (667x375
+  at 16:9, what the Android game gets on a 1080p phone), `close` the older, ~17 % bigger iPhone 5 size (568x320) and
+  `tablet` an iPad's 768 points (more world, small interface, the game's iPad layout). A bigger window shows the same
+  picture bigger; the zoom is chosen once at start-up (`crates/bhpc-run/src/aspect.rs`).
 - `bhpc-run --config` applies the launcher's APK, data directory, forced build and window size only; fullscreen, vsync
   and key bindings are saved by the launcher but not used yet (see `docs/launcher.md`).
 - Gameplay has been exercised only briefly; expect rough edges and report what you find.

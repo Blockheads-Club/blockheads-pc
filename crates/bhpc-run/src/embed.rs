@@ -30,6 +30,8 @@ pub struct PlayFlags {
     pub unlock_fps: bool,
     /// World speed multiplier (`--game-speed F`, default 1: untouched; see `gamespeed`).
     pub game_speed: f64,
+    /// How many points the game gets for the window (`--zoom phone|close|tablet`, default phone; see `aspect`).
+    pub zoom: crate::aspect::GameZoom,
     /// Game controllers drive the game (off with `--no-controller`).
     pub controller: bool,
     /// The game's D-pad stays hidden (`--hide-dpad`).
@@ -75,6 +77,10 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             })
             .transpose()?
             .unwrap_or(1.0),
+        zoom: value("--zoom")
+            .map(|v| v.as_deref().and_then(crate::aspect::GameZoom::parse).ok_or("--zoom needs phone, close or tablet"))
+            .transpose()?
+            .unwrap_or_default(),
         controller: !args.iter().any(|a| a == "--no-controller"),
         hide_dpad: args.iter().any(|a| a == "--hide-dpad"),
         pad_tile_cursor: args.iter().any(|a| a == "--pad-tile-cursor"),

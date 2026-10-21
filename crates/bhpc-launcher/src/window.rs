@@ -40,6 +40,36 @@ impl FpsPosition {
     }
 }
 
+/// How big the game draws its world and interface: how many points (the game's logical pixels) the window gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GameZoom {
+    /// Like a phone: 375 points on the short side, what the Android game gets on a 1080p phone (667x375 points at
+    /// 16:9), the game's phone layout.
+    #[default]
+    Phone,
+    /// Closer, the old desktop default: an iPhone 5's 568x320 points (everything about 17 % bigger).
+    Close,
+    /// Like a tablet: an iPad's 768 points on the short side (more world, smaller interface; the game's iPad layout).
+    Tablet,
+}
+
+impl GameZoom {
+    /// The `bhpc-run --zoom` value.
+    pub fn flag(self) -> &'static str {
+        match self {
+            GameZoom::Phone => "phone",
+            GameZoom::Close => "close",
+            GameZoom::Tablet => "tablet",
+        }
+    }
+
+    /// The zoom of a `--zoom` value.
+    pub fn parse(s: &str) -> Option<GameZoom> {
+        [GameZoom::Phone, GameZoom::Close, GameZoom::Tablet].into_iter().find(|z| z.flag() == s)
+    }
+}
+
 /// Window / graphics settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -54,6 +84,8 @@ pub struct WindowOptions {
     pub show_fps: bool,
     /// Corner of the game picture the counter sits in.
     pub fps_position: FpsPosition,
+    /// How big the game draws its world and interface.
+    pub zoom: GameZoom,
     /// Present at most this many frames per second (0 = no cap; with vsync on, the lower of the two applies). The
     /// game's own 30 FPS cap is always lifted (`--unlock-fps`), so this is the only cap; its simulation runs on
     /// measured time, so it does not run faster.
@@ -75,6 +107,7 @@ impl Default for WindowOptions {
             ui_scale: 1.0,
             show_fps: false,
             fps_position: FpsPosition::TopLeft,
+            zoom: GameZoom::Phone,
             fps_limit: 60,
             game_speed: 1.0,
             parallel_threads: true,

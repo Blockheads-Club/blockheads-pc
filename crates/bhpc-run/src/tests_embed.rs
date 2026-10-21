@@ -23,6 +23,7 @@ fn flags_default_to_the_plain_desktop_window() {
             fps_position: bhpc_app::hud::Corner::TopLeft,
             unlock_fps: false,
             game_speed: 1.0,
+            zoom: crate::aspect::GameZoom::Phone,
             controller: true,
             hide_dpad: false,
             pad_tile_cursor: false,
@@ -66,6 +67,9 @@ fn flags_carry_the_launcher_settings() {
     assert_eq!(f.game_speed, 1.5);
     assert!(parse_play_flags(&s(&["--game-speed", "9"])).unwrap_err().contains("0.25 to 4"));
     assert!(parse_play_flags(&s(&["--game-speed"])).is_err());
+    assert_eq!(parse_play_flags(&s(&["--zoom", "tablet"])).unwrap().zoom, crate::aspect::GameZoom::Tablet);
+    assert!(parse_play_flags(&s(&["--zoom", "huge"])).unwrap_err().contains("phone, close or tablet"));
+    assert!(parse_play_flags(&s(&["--zoom"])).is_err());
     assert_eq!(f.fps_limit, Some(30));
     assert_eq!(f.fps_position, bhpc_app::hud::Corner::BottomRight);
     // The first --fps-limit wins (explicit flags come before the config's); 0 means no cap.

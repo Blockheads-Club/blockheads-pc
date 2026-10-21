@@ -160,6 +160,7 @@ fn old_window_tables_get_the_new_defaults() {
     assert_eq!((c.window.width, c.window.vsync, c.window.show_fps, c.window.fps_limit), (1600, false, false, 60));
     assert_eq!(c.window.fps_position, crate::window::FpsPosition::TopLeft);
     assert_eq!(c.window.game_speed, 1.0);
+    assert_eq!(c.window.zoom, crate::window::GameZoom::Phone);
     assert!(c.window.parallel_threads, "game threads run in parallel unless switched off");
     assert!(c.controller, "controllers are on unless switched off");
     assert!(!c.show_dpad, "the game's D-pad is hidden unless switched on");
@@ -171,6 +172,7 @@ fn old_window_tables_get_the_new_defaults() {
     c.window.fps_limit = 144;
     c.window.fps_position = crate::window::FpsPosition::BottomRight;
     c.window.game_speed = 0.75;
+    c.window.zoom = crate::window::GameZoom::Tablet;
     c.controller = false;
     c.show_dpad = true;
     c.pad_tile_cursor = true;
@@ -179,6 +181,7 @@ fn old_window_tables_get_the_new_defaults() {
     assert!(text.contains("controller = false"), "{text}");
     assert!(text.contains("show_dpad = true") && !text.contains("show_game_buttons"), "{text}");
     assert!(text.contains("game_speed = 0.75"), "{text}");
+    assert!(text.contains("zoom = \"tablet\""), "{text}");
     assert!(text.contains("fps_position = \"bottom-right\""), "{text}");
     assert!(text.contains("show_fps = true") && text.contains("fps_limit = 144"), "{text}");
     assert_eq!(LaunchConfig::from_toml(&text).unwrap(), c);

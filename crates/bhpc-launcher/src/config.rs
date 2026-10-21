@@ -135,7 +135,8 @@ impl LaunchConfig {
 
     /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--fps-limit N` (0 = none), `--unlock-fps`
     /// (always: the FPS limit is the only cap), `--force`, `--fullscreen`, `--no-vsync`, `--show-fps`,
-    /// `--fps-position P` (when the counter is shown and not top-left), `--game-speed F` (when not 1),
+    /// `--fps-position P` (when the counter is shown and not top-left), `--zoom Z` (when not the phone zoom),
+    /// `--game-speed F` (when not 1),
     /// `--no-controller` (when controllers are off), `--hide-dpad` (when the game's D-pad is not to show),
     /// `--pad-tile-cursor` (when the controller cursor moves tile by tile),
     /// `--serial-guest` (when the game's threads may not run in parallel) and a `--bind ACTION=BINDING` for every key binding that is not the default.
@@ -167,6 +168,9 @@ impl LaunchConfig {
         }
         if self.window.show_fps && self.window.fps_position != crate::window::FpsPosition::TopLeft {
             a.extend(["--fps-position".to_string(), self.window.fps_position.flag().to_string()]);
+        }
+        if self.window.zoom != crate::window::GameZoom::Phone {
+            a.extend(["--zoom".to_string(), self.window.zoom.flag().to_string()]);
         }
         if self.window.game_speed != 1.0 {
             a.extend(["--game-speed".to_string(), self.window.game_speed.to_string()]);

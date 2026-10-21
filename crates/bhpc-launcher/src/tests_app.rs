@@ -206,6 +206,19 @@ fn run_args_and_config_expansion() {
     assert!(!c.run_args().contains(&"--game-speed".to_string()));
     c.window.game_speed = 1.5;
     assert_eq!(c.run_args()[14..], ["--game-speed", "1.5"]);
+    // The zoom only when it is not the phone-like default.
+    c.window.game_speed = 1.0;
+    assert!(!c.run_args().contains(&"--zoom".to_string()));
+    use crate::window::GameZoom;
+    for (z, flag) in [(GameZoom::Close, "close"), (GameZoom::Tablet, "tablet")] {
+        c.window.zoom = z;
+        assert_eq!(c.run_args()[14..], ["--zoom", flag]);
+        assert_eq!(GameZoom::parse(flag), Some(z));
+    }
+    assert_eq!(GameZoom::parse("phone"), Some(GameZoom::Phone));
+    assert_eq!(GameZoom::parse("huge"), None);
+    c.window.zoom = GameZoom::Phone;
+    c.window.game_speed = 1.5;
 
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     assert_eq!(expand_args(&s(&["--init-only"])).unwrap(), s(&["--init-only"]));
