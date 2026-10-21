@@ -99,8 +99,13 @@ impl LaunchConfig {
     }
 
     /// Parses TOML (missing option tables take their defaults).
+    /// A game UI scale outside [`crate::window::SCALE_RANGE`] (the old slider went from 75 to 200 % and did nothing)
+    /// comes back at the nearest end of it.
     pub fn from_toml(text: &str) -> Result<Self, LauncherError> {
-        toml::from_str(text).map_err(|e| LauncherError::Parse(e.to_string()))
+        let mut c: Self = toml::from_str(text).map_err(|e| LauncherError::Parse(e.to_string()))?;
+        let (lo, hi) = crate::window::SCALE_RANGE;
+        c.window.ui_scale = c.window.ui_scale.clamp(lo, hi);
+        Ok(c)
     }
 
     /// Reads `path`; `Ok(None)` when it does not exist yet (first run).
@@ -136,7 +141,7 @@ impl LaunchConfig {
     /// Command line for `bhpc-run`: `--apk`, `--data-dir`, `--window WxH`, `--fps-limit N` (0 = none), `--unlock-fps`
     /// (always: the FPS limit is the only cap), `--force`, `--fullscreen`, `--no-vsync`, `--show-fps`,
     /// `--fps-position P` (when the counter is shown and not top-left), `--zoom Z` (when not the phone zoom),
-    /// `--game-speed F` (when not 1),
+    /// `--ui-scale F` (when not 1), `--game-speed F` (when not 1),
     /// `--no-controller` (when controllers are off), `--hide-dpad` (when the game's D-pad is not to show),
     /// `--pad-tile-cursor` (when the controller cursor moves tile by tile),
     /// `--serial-guest` (when the game's threads may not run in parallel) and a `--bind ACTION=BINDING` for every key binding that is not the default.
@@ -171,6 +176,9 @@ impl LaunchConfig {
         }
         if self.window.zoom != crate::window::GameZoom::Phone {
             a.extend(["--zoom".to_string(), self.window.zoom.flag().to_string()]);
+        }
+        if self.window.ui_scale != 1.0 {
+            a.extend(["--ui-scale".to_string(), self.window.ui_scale.to_string()]);
         }
         if self.window.game_speed != 1.0 {
             a.extend(["--game-speed".to_string(), self.window.game_speed.to_string()]);

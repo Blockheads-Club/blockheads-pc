@@ -218,6 +218,11 @@ fn run_args_and_config_expansion() {
     assert_eq!(GameZoom::parse("phone"), Some(GameZoom::Phone));
     assert_eq!(GameZoom::parse("huge"), None);
     c.window.zoom = GameZoom::Phone;
+    // The game UI scale only when it is not 100 %.
+    assert!(!c.run_args().contains(&"--ui-scale".to_string()));
+    c.window.ui_scale = 1.15;
+    assert_eq!(c.run_args()[14..], ["--ui-scale", "1.15"]);
+    c.window.ui_scale = 1.0;
     c.window.game_speed = 1.5;
 
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();

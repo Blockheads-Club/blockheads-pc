@@ -226,10 +226,13 @@ describe('Window and graphics step', () => {
     await fireEvent.click(par);
     expect(store.draft?.window.parallel_threads).toBe(false);
     const scale = screen.getByLabelText('Game UI scale');
-    await fireEvent.change(scale, { target: { value: '150' } });
-    expect(store.draft?.window.ui_scale).toBe(1.5);
-    expect(screen.getByText('150 %')).toBeVisible();
-    expect(scale).toHaveAttribute('aria-valuetext', '150 %');
+    expect(scale).toHaveAttribute('min', '80');
+    expect(scale).toHaveAttribute('max', '130');
+    expect(scale).toHaveAttribute('step', '5');
+    await fireEvent.change(scale, { target: { value: '115' } });
+    expect(store.draft?.window.ui_scale).toBe(1.15);
+    expect(screen.getByText('115 %')).toBeVisible();
+    expect(scale).toHaveAttribute('aria-valuetext', '115 %');
   });
 
   it('sets the FPS limit and the FPS counter', async () => {
@@ -444,7 +447,7 @@ describe('Ready step', () => {
     store.importSummary = { written: 3, skipped_existing: 0, ignored: 0, items: [] };
     render(SetupReady);
     expect(screen.getByRole('heading', { name: 'You’re ready to play!' })).toBeVisible();
-    expect(screen.getByText('Window · 1600 × 900 · VSync on · Max 60 FPS · UI 125 %')).toBeVisible();
+    expect(screen.getByText('Window · 1600 × 900 · VSync on · Max 60 FPS · Zoom: Phone · UI 125 %')).toBeVisible();
     expect(screen.getByText(/1 changed/)).toBeVisible();
     expect(screen.getByText(/Back → Backspace/)).toBeVisible();
     expect(screen.getByText('3 files imported from your phone')).toBeVisible();
@@ -464,10 +467,10 @@ describe('Ready step', () => {
     store.apk = makeReport({ status: 'unknown', version: null });
     store.draft = makeConfig({
       keys: { ...makeConfig().keys, back: 'F11' },
-      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', zoom: 'phone', fps_limit: 0, game_speed: 1.5, parallel_threads: false }
+      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', zoom: 'close', fps_limit: 0, game_speed: 1.5, parallel_threads: false }
     });
     render(SetupReady);
-    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · FPS counter (bottom right) · UI 100 % · Game speed 1.5× · Game threads one at a time')).toBeVisible();
+    expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · FPS counter (bottom right) · Zoom: Close-up · UI 100 % · Game speed 1.5× · Game threads one at a time')).toBeVisible();
     expect(screen.getByText('Two actions share a key. Fix it in Settings.')).toBeVisible();
     expect(screen.getByText('Nothing imported')).toBeVisible();
     expect(screen.getByText('Unknown build · experimental')).toBeVisible();

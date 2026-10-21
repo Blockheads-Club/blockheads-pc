@@ -64,6 +64,14 @@ files under `DIR/tmp`; they persist between runs. Delete the directory to start 
   at 16:9, what the Android game gets on a 1080p phone), `close` the older, ~17 % bigger iPhone 5 size (568x320) and
   `tablet` an iPad's 768 points (more world, small interface, the game's iPad layout). A bigger window shows the same
   picture bigger; the zoom is chosen once at start-up (`crates/bhpc-run/src/aspect.rs`).
+- The launcher's "Game UI scale" (80–130 % in 5 % steps, `--ui-scale F`, passed only when not 100 %) fine-tunes the
+  zoom: the game gets the zoom's points divided by it, so 120 % draws everything 20 % bigger and 80 % smaller, with
+  more world. It is chosen at start-up too and kept when the window is resized. The zoom picks the game's layout and
+  the scale never switches it: the phone layout (phone and close zoom) stays between an iPhone 4's 480x320 points
+  (smaller cuts the pause menu off) and a 414-point short side (from 415 the game uses its iPad layout, whose main
+  menu does not fit that few points). So at 16:9 the phone zoom's 80 % stops at 736x414 points and 130 % at 568x320
+  (the close zoom's size; the close zoom does not grow further there), and on 4:3 the phone zoom spans 552x414 to
+  480x360. The tablet zoom (iPad layout) takes the whole range: at 130 % on 16:9 it still has 1050x591 points.
 - `bhpc-run --config` applies the launcher's APK, data directory, forced build and window size only; fullscreen, vsync
   and key bindings are saved by the launcher but not used yet (see `docs/launcher.md`).
 - Gameplay has been exercised only briefly; expect rough edges and report what you find.

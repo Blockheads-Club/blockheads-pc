@@ -161,6 +161,10 @@ fn old_window_tables_get_the_new_defaults() {
     assert_eq!(c.window.fps_position, crate::window::FpsPosition::TopLeft);
     assert_eq!(c.window.game_speed, 1.0);
     assert_eq!(c.window.zoom, crate::window::GameZoom::Phone);
+    assert_eq!(c.window.ui_scale, 1.25);
+    // The old slider's values outside today's range come back at its ends.
+    let scaled = |v: &str| LaunchConfig::from_toml(&old.replace("1.25", v)).unwrap().window.ui_scale;
+    assert_eq!((scaled("2.0"), scaled("0.75"), scaled("1.1")), (1.3, 0.8, 1.1));
     assert!(c.window.parallel_threads, "game threads run in parallel unless switched off");
     assert!(c.controller, "controllers are on unless switched off");
     assert!(!c.show_dpad, "the game's D-pad is hidden unless switched on");

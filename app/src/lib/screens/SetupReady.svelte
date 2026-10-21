@@ -2,6 +2,7 @@
   import { t } from '../i18n.svelte';
   import { store } from '../store.svelte';
   import type { IconName } from '../icons';
+  import type { GameZoom } from '../types';
   import { conflicts } from '../util';
   import { fpsPositionLabel } from '../fps-position';
   import { gameSpeedLabel } from '../game-speed';
@@ -31,12 +32,18 @@
           d.window.vsync ? t('ready.vsyncOn') : t('ready.vsyncOff'),
           d.window.fps_limit ? t('ready.fpsLimit', { n: d.window.fps_limit }) : t('ready.fpsUnlimited'),
           ...(d.window.show_fps ? [t('ready.showFps', { pos: fpsPositionLabel(d.window.fps_position).toLowerCase() })] : []),
+          t('ready.zoom', { z: zoomName(d.window.zoom) }),
           t('ready.ui', { n: Math.round(d.window.ui_scale * 100) }),
           ...(d.window.game_speed !== 1 ? [t('ready.gameSpeed', { n: gameSpeedLabel(d.window.game_speed) })] : []),
           ...(d.window.parallel_threads ? [] : [t('ready.serial')])
         ].join(' · ')
       : ''
   );
+  /** The zoom's name without its note ("Phone (recommended)" → "Phone"). */
+  function zoomName(z: GameZoom): string {
+    const key = ({ phone: 'gfx.zoomPhone', close: 'gfx.zoomClose', tablet: 'gfx.zoomTablet' } as const)[z];
+    return t(key).replace(/\s*\(.*\)$/, '');
+  }
   const imported = $derived(store.importSummary?.written ?? 0);
 
   const rows = $derived<{ icon: IconName; k: string; step: number; label: string }[]>([

@@ -125,9 +125,9 @@
   <Row id="set-gfx-scale" title={t('gfx.scale')} hint={t('gfx.scaleHint')}>
     <input
       type="range"
-      min="75"
-      max="200"
-      step="25"
+      min="80"
+      max="130"
+      step="5"
       value={scale}
       aria-label={t('gfx.scale')}
       aria-valuetext={t('gfx.percent', { n: scale })}

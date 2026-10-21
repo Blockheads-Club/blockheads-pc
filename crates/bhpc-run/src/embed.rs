@@ -32,6 +32,8 @@ pub struct PlayFlags {
     pub game_speed: f64,
     /// How many points the game gets for the window (`--zoom phone|close|tablet`, default phone; see `aspect`).
     pub zoom: crate::aspect::GameZoom,
+    /// The game UI scale on top of the zoom (`--ui-scale F`, default 1; the zoom's points divided by it, see `aspect`).
+    pub ui_scale: f32,
     /// Game controllers drive the game (off with `--no-controller`).
     pub controller: bool,
     /// The game's D-pad stays hidden (`--hide-dpad`).
@@ -81,6 +83,15 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             .map(|v| v.as_deref().and_then(crate::aspect::GameZoom::parse).ok_or("--zoom needs phone, close or tablet"))
             .transpose()?
             .unwrap_or_default(),
+        ui_scale: value("--ui-scale")
+            .map(|v| {
+                v.as_deref().and_then(crate::aspect::parse_fine).ok_or_else(|| {
+                    let (lo, hi) = crate::aspect::FINE_RANGE;
+                    format!("--ui-scale needs a number from {lo} to {hi}")
+                })
+            })
+            .transpose()?
+            .unwrap_or(1.0),
         controller: !args.iter().any(|a| a == "--no-controller"),
         hide_dpad: args.iter().any(|a| a == "--hide-dpad"),
         pad_tile_cursor: args.iter().any(|a| a == "--pad-tile-cursor"),

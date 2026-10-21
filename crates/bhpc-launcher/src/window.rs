@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 pub const MIN_EDGE: u32 = 320;
 /// Largest accepted window edge in pixels.
 pub const MAX_EDGE: u32 = 16384;
-/// UI scale limits.
-pub const SCALE_RANGE: (f32, f32) = (0.5, 4.0);
+/// Game UI scale limits (`WindowOptions::ui_scale`; the launcher's slider goes through them in 5 % steps).
+pub const SCALE_RANGE: (f32, f32) = (0.8, 1.3);
 /// Frame-rate caps the launcher offers (0 = no cap: vsync, if on, is the only limit).
 pub const FPS_LIMITS: [u32; 5] = [0, 30, 60, 120, 144];
 /// Accepted range of a non-zero frame-rate cap (a hand-edited file may hold any value in it).
@@ -78,7 +78,8 @@ pub struct WindowOptions {
     pub height: u32,
     pub fullscreen: bool,
     pub vsync: bool,
-    /// Multiplier for the launcher and in-window UI.
+    /// Game UI scale on top of `zoom`: the game gets the zoom's points divided by it (1.2: everything 20 % bigger;
+    /// `bhpc-run --ui-scale`).
     pub ui_scale: f32,
     /// Draw a frames-per-second counter in the top-left corner of the game picture.
     pub show_fps: bool,

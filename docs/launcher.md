@@ -193,6 +193,10 @@ fade when GTK animations are off), takes the mouse and the keyboard focus.
   screen may keep it bigger or smaller). A size the user drags the window to (300 ms after the last resize, not
   maximized or fullscreen) becomes the configured size when the configured one does not explain it, and the selector
   shows it as "Custom (W × H)". "Game zoom" (`zoom`: phone, close, tablet) becomes `--zoom` (see `docs/playing.md`).
+  "Game UI scale" (`ui_scale`, 80–130 % in 5 % steps, default 100 %) fine-tunes the zoom and becomes `--ui-scale F`
+  when not 100 % (the game's points are the zoom's divided by it; limits at the edges in `docs/playing.md`); a value
+  outside the range in an older launcher.toml (the slider once went to 200 % and did nothing) loads as the nearest end.
+  The setup's "Ready" summary lists both ("Zoom: Phone · UI 100 %").
 - **Mute in background** is shown disabled ("not available yet"); **Game sound** off starts the game with
   `SDL_AUDIODRIVER=dummy`.
 - **Controls**: seven actions (the backend has one "touch" action for tap and drag, not two).

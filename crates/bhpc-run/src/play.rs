@@ -91,6 +91,8 @@ pub struct PlayConfig {
     pub game_speed: f64,
     /// How many points the game gets for the window (`aspect::ui_scale`).
     pub zoom: crate::aspect::GameZoom,
+    /// The launcher's game UI scale on top of `zoom` (`aspect::ui_scale`; 1: the zoom's points).
+    pub ui_scale: f32,
     /// Game controllers drive the game (`bhpc_input::pad`).
     pub controller: bool,
     /// The game's D-pad stays hidden (`gameui`).
@@ -138,6 +140,7 @@ impl PlayConfig {
             unlock_fps: false,
             game_speed: 1.0,
             zoom: crate::aspect::GameZoom::Phone,
+            ui_scale: 1.0,
             controller: true,
             hide_dpad: false,
             pad_tile_cursor: false,
@@ -963,7 +966,7 @@ fn boot(
             eprintln!("[play] objc trace unavailable: {e}");
         }
     }
-    let screen_modes = follow_window_aspect(&mut sess, cfg.zoom)
+    let screen_modes = follow_window_aspect(&mut sess, cfg.zoom, cfg.ui_scale)
         .inspect(|_| eprintln!("[play] the game's screen follows the window size"))
         .inspect_err(|e| eprintln!("[play] the game keeps its emulated iOS screen size: {e}"))
         .ok();
@@ -1975,7 +1978,11 @@ impl ScreenModeCalls {
 /// The game's screen is the window's size and aspect (see `aspect`): `emulatedMode:` gives the native mode instead
 /// of the best emulated iOS device, and the native mode's scale is [`crate::aspect::ui_scale`] of the display at
 /// `zoom`.
-fn follow_window_aspect(sess: &mut Session, zoom: crate::aspect::GameZoom) -> Result<ScreenModeCalls, String> {
+fn follow_window_aspect(
+    sess: &mut Session,
+    zoom: crate::aspect::GameZoom,
+    fine: f32,
+) -> Result<ScreenModeCalls, String> {
     use crate::aspect::{called_from_native_mode, screen_mode, ui_scale};
     use crate::fpsunlock::find_method;
     let mem = sess.cpu.mem().clone();
@@ -2020,7 +2027,8 @@ fn follow_window_aspect(sess: &mut Session, zoom: crate::aspect::GameZoom) -> Re
     hook_at(sess, init, "-[UIScreenMode initWithScale:]", move |c| {
         if called_from_native_mode(c.reg(14), native_mode) {
             let (w, h) = vm.screen_size();
-            let s = *scale.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(|| ui_scale(w, h, zoom));
+            let s =
+                *scale.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(|| ui_scale(w, h, zoom, fine));
             eprintln!("[play] screen {w}x{h} pixels, {s} pixels per point");
             c.set_reg(2, s.to_bits());
         }
@@ -2031,7 +2039,7 @@ fn follow_window_aspect(sess: &mut Session, zoom: crate::aspect::GameZoom) -> Re
     hook_or_skip(sess, native_size, "-[UINativeScreenMode size]", move |c| {
         let s = (*first.lock().unwrap_or_else(PoisonError::into_inner))?;
         let (w, h) = vm.screen_size();
-        let (cw, ch) = crate::aspect::content_size(w, h, s, zoom);
+        let (cw, ch) = crate::aspect::content_size(w, h, s, zoom, fine);
         let out = c.reg(0);
         let ok = c.mem().write_u32(out, cw.min(ch).to_bits()).is_ok()
             && c.mem().write_u32(out + 4, cw.max(ch).to_bits()).is_ok();

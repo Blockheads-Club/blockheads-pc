@@ -179,6 +179,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             cfg.unlock_fps = f.unlock_fps;
             cfg.game_speed = f.game_speed;
             cfg.zoom = f.zoom;
+            cfg.ui_scale = f.ui_scale;
             cfg.controller = f.controller;
             cfg.hide_dpad = f.hide_dpad;
             cfg.pad_tile_cursor = f.pad_tile_cursor;
