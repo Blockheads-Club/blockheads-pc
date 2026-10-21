@@ -31,6 +31,8 @@ export const api = {
     invoke<LaunchConfig>('use_apk', { path, force, keepCopy }),
   normalizeBinding: (text: string) => invoke<string>('normalize_binding', { text }),
   displayInfo: () => invoke<DisplayInfo | null>('display_info'),
+  /** Size the launcher window so its game stage is `width` x `height` (it leaves maximized; fullscreen stays). */
+  resizeWindow: (width: number, height: number) => invoke<void>('window_resize', { width, height }),
   importSaves: (source: string, overwrite: boolean, dataDir: string) =>
     invoke<ImportSummary>('import_saves', { source, overwrite, dataDir }),
   dataSize: (path: string) => invoke<number>('data_size', { path }),

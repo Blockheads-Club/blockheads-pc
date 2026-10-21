@@ -214,6 +214,19 @@ describe('page', () => {
     expect(frame().classList.contains('round')).toBe(false);
   });
 
+  it('hands real resizes to the store, with the window size and whether it is maximized', async () => {
+    mock.api.boot = vi.fn(async () => makeBoot());
+    const resized = vi.spyOn(store, 'windowResized');
+    render(Page);
+    await waitFor(() => expect(mock.win.isFullscreen).toHaveBeenCalled());
+    // The first look at the window is not a resize.
+    expect(resized).not.toHaveBeenCalled();
+    mock.win.isMaximized = vi.fn(async () => true);
+    hooks.resize?.();
+    await waitFor(() => expect(resized).toHaveBeenCalledWith(window.innerWidth, window.innerHeight, true));
+    resized.mockRestore();
+  });
+
   it('hides the bars of a fullscreen in-window game, F11 toggles it, and the window is square while it is up', async () => {
     mock.api.boot = vi.fn(async () => makeBoot());
     mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'running', running_secs: 1, embedded: true }));

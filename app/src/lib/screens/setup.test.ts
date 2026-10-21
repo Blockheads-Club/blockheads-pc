@@ -210,6 +210,12 @@ describe('Window and graphics step', () => {
     expect([...size.options].map((o) => o.textContent)).toContain('2560 × 1440 (screen)');
     await fireEvent.change(size, { target: { value: '1920x1080' } });
     expect(store.draft?.window).toMatchObject({ width: 1920, height: 1080 });
+    await waitFor(() => expect(mock.api.resizeWindow).toHaveBeenCalledWith(1920, 1080));
+    const zoom = screen.getByLabelText('Game zoom') as HTMLSelectElement;
+    expect([...zoom.options].map((o) => o.textContent)).toEqual(['Phone (recommended)', 'Close-up (bigger)', 'Tablet (more world)']);
+    expect(zoom.value).toBe('phone');
+    await fireEvent.change(zoom, { target: { value: 'tablet' } });
+    expect(store.draft?.window.zoom).toBe('tablet');
     await fireEvent.click(screen.getByRole('radio', { name: 'Fullscreen' }));
     expect(store.draft?.window.fullscreen).toBe(true);
     await fireEvent.click(screen.getByRole('switch', { name: 'VSync' }));
@@ -288,10 +294,10 @@ describe('Window and graphics step', () => {
 
   it('works without a detected display and lists an unusual current size', () => {
     store.display = null;
-    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true } });
+    store.draft = makeConfig({ window: { width: 1111, height: 700, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true } });
     render(SetupGraphics);
     expect(screen.queryByText(/Detected/)).toBeNull();
-    expect([...(screen.getByLabelText('Window size') as HTMLSelectElement).options].map((o) => o.textContent)).toContain('1111 × 700');
+    expect([...(screen.getByLabelText('Window size') as HTMLSelectElement).options].map((o) => o.textContent)).toContain('Custom (1111 × 700)');
   });
 
   it('does not repeat a display size that is already standard', () => {
@@ -434,7 +440,7 @@ describe('Ready step', () => {
 
   it('summarises the choices and starts the launcher', async () => {
     store.apk = makeReport();
-    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true } });
+    store.draft = makeConfig({ keys: { ...makeConfig().keys, back: 'Backspace' }, window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true } });
     store.importSummary = { written: 3, skipped_existing: 0, ignored: 0, items: [] };
     render(SetupReady);
     expect(screen.getByRole('heading', { name: 'You’re ready to play!' })).toBeVisible();
@@ -458,7 +464,7 @@ describe('Ready step', () => {
     store.apk = makeReport({ status: 'unknown', version: null });
     store.draft = makeConfig({
       keys: { ...makeConfig().keys, back: 'F11' },
-      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', fps_limit: 0, game_speed: 1.5, parallel_threads: false }
+      window: { width: 800, height: 600, fullscreen: true, vsync: false, ui_scale: 1, show_fps: true, fps_position: 'bottom-right', zoom: 'phone', fps_limit: 0, game_speed: 1.5, parallel_threads: false }
     });
     render(SetupReady);
     expect(screen.getByText('Fullscreen · 800 × 600 · VSync off · No FPS limit · FPS counter (bottom right) · UI 100 % · Game speed 1.5× · Game threads one at a time')).toBeVisible();

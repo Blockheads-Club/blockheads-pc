@@ -8,7 +8,7 @@ export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
     apk: '/data/game/TheBlockheads.apk',
     data_dir: '/data',
     force: false,
-    window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true },
+    window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true },
     keys: { ...KEYS },
     controller: true,
     show_dpad: false,
@@ -35,7 +35,7 @@ export function makeReport(over: Partial<ApkReport> = {}): ApkReport {
 }
 
 export function makeBoot(over: Partial<BootState> = {}): BootState {
-  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, prefs_saved: true, ...over };
+  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, prefs_saved: true, ...over };
 }
 
 /** A fake of everything `$lib/api` exports. */
@@ -59,6 +59,7 @@ export function makeApi(over: Record<string, unknown> = {}) {
     useApk: vi.fn(async (path: string, force: boolean) => makeConfig({ apk: path, force })),
     normalizeBinding: vi.fn(async (t: string) => t),
     displayInfo: vi.fn(async () => ({ width: 2560, height: 1440, scale: 1.25 })),
+    resizeWindow: vi.fn(async () => {}),
     importSaves: vi.fn(async () => ({ written: 3, skipped_existing: 1, ignored: 2, items: [{ name: 'saves/a', files: 3, bytes: 3000 }] })),
     dataSize: vi.fn(async () => 5_000_000),
     moveDataDir: vi.fn(async (to: string) => makeConfig({ data_dir: to })),

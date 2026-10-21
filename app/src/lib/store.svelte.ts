@@ -7,7 +7,7 @@ import type {
   ActionId, ApkReport, AppInfo, DisplayInfo, GameState, ImportSummary, LaunchConfig, Prefs, Snapshot,
   UpdateInfo, UpdateProgress, UpdateStage
 } from './types';
-import { baseName, copyText, recommendedSize } from './util';
+import { baseName, copyText, MIN_EDGE, recommendedSize, stageMatches, stageSize } from './util';
 
 export type Screen = 'splash' | 'setup' | 'home' | 'playing' | 'settings';
 export type Section = SettingsPage;
@@ -17,6 +17,8 @@ export const MAX_LOG = 5000;
 export const REPO_URL = 'https://github.com/Blockheads-Club/blockheads-pc';
 export const GUIDE_URL = REPO_URL;
 const SEEN_KEY = 'bhpc.setup-seen';
+/** A window resize counts once it has rested this long (dragging a border fires many). */
+const RESIZE_SETTLE_MS = 300;
 
 export const DEFAULT_PREFS: Prefs = {
   language: 'en',
@@ -76,6 +78,7 @@ export class AppStore {
   private timer: ReturnType<typeof setInterval> | undefined;
   private fast: ReturnType<typeof setInterval> | undefined;
   private slow: ReturnType<typeof setTimeout> | undefined;
+  private resizing: ReturnType<typeof setTimeout> | undefined;
   private updTimer: ReturnType<typeof setInterval> | undefined;
 
   /** The configuration being edited: the draft during setup, the saved one afterwards. */
@@ -146,6 +149,9 @@ export class AppStore {
         this.screen = 'setup';
         this.step = 1;
       }
+      // The launcher window is the game window: it starts at the chosen size.
+      const w = this.cfg!.window;
+      void api.resizeWindow(w.width, w.height).catch(() => {});
       await this.poll();
       this.startPolling();
     } catch (e) {
@@ -283,6 +289,32 @@ export class AppStore {
     } catch (e) {
       this.fail(e);
     }
+  }
+
+  /** Settings: the window size. The launcher window takes it at once. */
+  async setWindowSize(width: number, height: number) {
+    await this.patchConfig((c) => {
+      c.window.width = width;
+      c.window.height = height;
+    });
+    await api.resizeWindow(width, height).catch(() => {});
+  }
+
+  /** The launcher window was resized (inside `width` x `height` CSS pixels; `square`: maximized or fullscreen). Once it
+   * rests, a size the configured one does not explain (the user dragged a border) becomes the configured size, so
+   * the settings show it (as a custom size) and the game starts with it. */
+  windowResized(width: number, height: number, square: boolean) {
+    clearTimeout(this.resizing);
+    if (square) return;
+    this.resizing = setTimeout(() => {
+      const cfg = this.cfg;
+      const stage = stageSize(width, height);
+      if (!cfg || this.screen === 'splash' || Math.min(...stage) < MIN_EDGE) return;
+      if (stageMatches([cfg.window.width, cfg.window.height], stage)) return;
+      void this.patchConfig((c) => {
+        [c.window.width, c.window.height] = stage;
+      });
+    }, RESIZE_SETTLE_MS);
   }
 
   async setController(on: boolean) {

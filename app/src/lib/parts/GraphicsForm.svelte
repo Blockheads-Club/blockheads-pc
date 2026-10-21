@@ -6,7 +6,7 @@
   import Segmented from '../ui/Segmented.svelte';
   import SelectField from '../ui/SelectField.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import type { FpsPosition } from '../types';
+  import type { FpsPosition, GameZoom } from '../types';
   import { FPS_POSITIONS, fpsPositionLabel } from '../fps-position';
   import { GAME_SPEEDS, gameSpeedLabel } from '../game-speed';
 
@@ -18,10 +18,20 @@
     const keys = SIZES.map(([a, b]) => `${a}x${b}`);
     for (const extra of [screenKey, sizeKey]) if (extra && !keys.includes(extra)) keys.push(extra);
     return keys.map((k) => {
+      const size = k.replace('x', ' × ');
+      // A size of no preset (the window was resized by hand, or launcher.toml says so).
+      if (k === sizeKey && k !== screenKey && !SIZES.some(([a, b]) => `${a}x${b}` === k)) {
+        return { value: k, label: t('gfx.custom', { size }) };
+      }
       const tags = [k === rec && t('gfx.recommended'), k === screenKey && t('gfx.screen')].filter(Boolean);
-      return { value: k, label: `${k.replace('x', ' × ')}${tags.length ? ` (${tags.join(', ')})` : ''}` };
+      return { value: k, label: `${size}${tags.length ? ` (${tags.join(', ')})` : ''}` };
     });
   });
+  const ZOOMS: { value: GameZoom; key: 'gfx.zoomPhone' | 'gfx.zoomClose' | 'gfx.zoomTablet' }[] = [
+    { value: 'phone', key: 'gfx.zoomPhone' },
+    { value: 'close', key: 'gfx.zoomClose' },
+    { value: 'tablet', key: 'gfx.zoomTablet' }
+  ];
   const scale = $derived(Math.round(store.cfg!.window.ui_scale * 100));
   /** Unlimited, the usual caps, and a hand-edited value from launcher.toml when it is none of those. */
   const fpsLimits = $derived.by(() => {
@@ -41,10 +51,7 @@
 
   function size(v: string) {
     const [a, b] = v.split('x').map(Number);
-    void store.patchConfig((c) => {
-      c.window.width = a;
-      c.window.height = b;
-    });
+    void store.setWindowSize(a, b);
   }
 </script>
 
@@ -62,6 +69,15 @@
   </Row>
   <Row id="set-gfx-size" title={t('gfx.size')} hint={t('gfx.sizeHint')}>
     <SelectField label={t('gfx.size')} hideLabel value={sizeKey} options={sizes} onchange={size} />
+  </Row>
+  <Row id="set-gfx-zoom" title={t('gfx.zoom')} hint={t('gfx.zoomHint')}>
+    <SelectField
+      label={t('gfx.zoom')}
+      hideLabel
+      value={w.zoom}
+      options={ZOOMS.map((z) => ({ value: z.value, label: t(z.key) }))}
+      onchange={(v) => store.patchConfig((c) => (c.window.zoom = v as GameZoom))}
+    />
   </Row>
   <Row id="set-gfx-vsync" title={t('gfx.vsync')} hint={t('gfx.vsyncHint')} titleId="{uid}-v">
     <Toggle label={t('gfx.vsync')} hideLabel checked={w.vsync} onchange={(v) => store.patchConfig((c) => (c.window.vsync = v))} />

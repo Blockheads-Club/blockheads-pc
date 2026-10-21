@@ -14,7 +14,7 @@ export async function mockTauri(page: Page) {
       apk: '',
       data_dir: '/home/mira/.local/share/blockheads-pc',
       force: false,
-      window: { width: 1280, height: 720, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true },
+      window: { width: 1280, height: 720, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true },
       keys: { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H' },
       controller: true,
       show_dpad: false,
@@ -23,7 +23,7 @@ export async function mockTauri(page: Page) {
     const saved = {
       ...defaults,
       apk: '/home/mira/.local/share/blockheads-pc/game/TheBlockheads.apk',
-      window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', fps_limit: 60, game_speed: 1, parallel_threads: true }
+      window: { width: 1600, height: 900, fullscreen: false, vsync: true, ui_scale: 1.25, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true }
     };
     const s: any = {
       config: q.get('first') ? null : structuredClone(saved),
@@ -126,6 +126,7 @@ export async function mockTauri(page: Page) {
         return a.text.replace(/^Escape$/i, 'Esc');
       },
       display_info: () => (q.get('nodisplay') ? null : { width: 2560, height: 1440, scale: 1.25 }),
+      window_resize: () => undefined,
       import_saves: (a) =>
         a.source.includes('empty')
           ? { written: 0, skipped_existing: 0, ignored: 0, items: [] }

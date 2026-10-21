@@ -188,6 +188,11 @@ fade when GTK animations are off), takes the mouse and the keyboard focus.
   `SDL_AUDIODRIVER=dummy`). The bindings reach the `bhpc-input` mapper (`Bindings`): touch, pan, zoom, pinch, back,
   fullscreen, hide game buttons. "Use a game controller" off adds `--no-controller`; under "On-screen controls", "Show the game's on-screen D-pad" (off by default on PC) off adds `--hide-dpad` (the D-pad neither draws nor takes clicks; the controller's walking finger still reaches it); "Move the controller cursor tile by tile" (gamepad section, off by default) on adds `--pad-tile-cursor` (`pad_tile_cursor` in launcher.toml); "Run game threads in parallel" (Window & graphics, on by default) off adds `--serial-guest`; the controller layout is fixed and
   shown read-only (`bhpc-input`'s `pad`). In the in-window view the launcher itself handles the fullscreen binding (it owns the window).
+- **Window size** is also the launcher window's size: the window opens at it and picking a size resizes it at once
+  (`window_resize`: the game stage gets the size, the window adds the 84 px of bars, its 1100x760 minimum and the
+  screen may keep it bigger or smaller). A size the user drags the window to (300 ms after the last resize, not
+  maximized or fullscreen) becomes the configured size when the configured one does not explain it, and the selector
+  shows it as "Custom (W × H)". "Game zoom" (`zoom`: phone, close, tablet) becomes `--zoom` (see `docs/playing.md`).
 - **Mute in background** is shown disabled ("not available yet"); **Game sound** off starts the game with
   `SDL_AUDIODRIVER=dummy`.
 - **Controls**: seven actions (the backend has one "touch" action for tap and drag, not two).

@@ -94,13 +94,15 @@
     initTheme();
     let offRetry: (() => void) | undefined;
     void api.onSplashRetry(() => void store.init()).then((u) => (offRetry = u)).catch(() => {});
-    const sync = () => void Promise.all([win.isMaximized(), win.isFullscreen()]).then(([m, f]) => {
+    // `resized`: a real resize (not the first look), which may change the configured window size.
+    const sync = (resized = false) => void Promise.all([win.isMaximized(), win.isFullscreen()]).then(([m, f]) => {
       square = m || f;
       store.fullscreen = f;
+      if (resized) store.windowResized(window.innerWidth, window.innerHeight, m || f);
     }).catch(() => {});
     sync();
     let offResize: (() => void) | undefined;
-    void win.onResized(sync).then((u) => (offResize = u)).catch(() => {});
+    void win.onResized(() => sync(true)).then((u) => (offResize = u)).catch(() => {});
     const unwatch = watchViewport();
     let off: (() => void) | undefined;
     void api.onQuitRequested(() => store.requestQuit()).then((u) => (off = u)).catch(() => {});

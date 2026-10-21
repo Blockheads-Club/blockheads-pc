@@ -331,15 +331,30 @@ fn start_game(app: &App, window: &WebviewWindow, handle: &AppHandle, allow_embed
     }
     app.embedded.store(true, Ordering::SeqCst);
     if !plan.window.fullscreen && !window.is_maximized().unwrap_or(false) {
-        let _ = window.set_size(tauri::LogicalSize::new(
-            f64::from(plan.window.width),
-            f64::from(plan.window.height) + CHROME_HEIGHT,
-        ));
+        fit_window(window, plan.window.width, plan.window.height);
     }
     if plan.window.fullscreen {
         let _ = embed::set_fullscreen(window, handle, true);
     }
     Ok(Started { embedded: true })
+}
+
+/// Size the launcher window so its game stage is `width` x `height` (logical pixels; the window's minimum size and
+/// the screen may keep it bigger or smaller).
+fn fit_window(window: &WebviewWindow, width: u32, height: u32) {
+    let _ = window.set_size(tauri::LogicalSize::new(f64::from(width), f64::from(height) + CHROME_HEIGHT));
+}
+
+/// Settings: a window size was picked. The launcher window takes it at once (leaving maximized); fullscreen stays.
+#[tauri::command]
+fn window_resize(window: WebviewWindow, width: u32, height: u32) {
+    if window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    if window.is_maximized().unwrap_or(false) {
+        let _ = window.unmaximize();
+    }
+    fit_window(&window, width, height);
 }
 
 /// Takes the in-window view away (the game ended) and leaves fullscreen.
@@ -490,6 +505,7 @@ pub fn run() {
             use_apk,
             normalize_binding,
             display_info,
+            window_resize,
             import_saves,
             data_size,
             move_data_dir,

@@ -106,3 +106,22 @@ export function recommendedSize(screen: { width: number; height: number } | null
   const fit = SIZES.filter(([w, h]) => w <= screen.width * 0.8 && h <= screen.height * 0.8);
   return fit.length ? fit[fit.length - 1] : SIZES[0];
 }
+
+/** Height of the launcher's title bar and control strip above the game stage (`CHROME_HEIGHT` in src-tauri/src/lib.rs). */
+export const CHROME_HEIGHT = 84;
+/** Smallest launcher window (`MIN_SIZE` in src-tauri/src/lib.rs). */
+export const MIN_WINDOW: [number, number] = [1100, 760];
+/** Smallest window edge the launcher config accepts (`MIN_EDGE` in crates/bhpc-launcher/src/window.rs). */
+export const MIN_EDGE = 320;
+
+/** The game stage of a launcher window whose inside is `width` x `height` (CSS pixels). */
+export function stageSize(width: number, height: number): [number, number] {
+  return [Math.round(width), Math.round(height - CHROME_HEIGHT)];
+}
+
+/** The window size `size` explains a stage of `stage`: the launcher window took that size, or the closest its
+ * minimum allows (1024 x 768 gives a 1100 x 768 stage). */
+export function stageMatches(size: [number, number], stage: [number, number]): boolean {
+  const want = [Math.max(size[0], MIN_WINDOW[0]), Math.max(size[1], MIN_WINDOW[1] - CHROME_HEIGHT)];
+  return want[0] === stage[0] && want[1] === stage[1];
+}

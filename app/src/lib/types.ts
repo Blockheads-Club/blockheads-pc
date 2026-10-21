@@ -4,6 +4,8 @@ export type Os = 'windows' | 'macos' | 'linux';
 export type GameState = 'ready' | 'starting' | 'running' | 'stopped' | 'crashed' | 'missing';
 
 export type FpsPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+/** How big the game draws its world and interface (`bhpc-run --zoom`). */
+export type GameZoom = 'phone' | 'close' | 'tablet';
 
 export interface WindowOptions {
   width: number;
@@ -16,6 +18,8 @@ export interface WindowOptions {
   show_fps: boolean;
   /** Corner of the game picture the counter sits in. */
   fps_position: FpsPosition;
+  /** How big the game draws its world and interface; phone is the default. */
+  zoom: GameZoom;
   /** Frames per second at most; 0 = no limit (vsync, when on, still applies). */
   fps_limit: number;
   /** World speed multiplier, 0.25 to 4 (1 = normal; single-player only). */

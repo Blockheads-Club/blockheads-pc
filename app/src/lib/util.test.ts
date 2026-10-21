@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { KEYS } from './mock-api';
 import {
-  baseName, chips, conflicts, copyText, keyToBinding, mouseToBinding, pad2, recommendedSize, sameBinding, SIZES,
+  baseName, chips, conflicts, copyText, keyToBinding, mouseToBinding, pad2, recommendedSize, sameBinding, SIZES, stageMatches, stageSize,
   storage, wheelToBinding
 } from './util';
 
@@ -65,6 +65,14 @@ describe('util', () => {
 
   it('pads, and picks a recommended window size', () => {
     expect(pad2(5)).toBe('05');
+    expect(stageSize(1280, 804)).toEqual([1280, 720]);
+    expect(stageSize(1333.4, 806.2)).toEqual([1333, 722]);
+    expect(stageMatches([1280, 720], [1280, 720])).toBe(true);
+    // The launcher window cannot be narrower than 1100 or lower than 760 pixels.
+    expect(stageMatches([1024, 768], [1100, 768])).toBe(true);
+    expect(stageMatches([800, 600], [1100, 676])).toBe(true);
+    expect(stageMatches([1280, 720], [1333, 720])).toBe(false);
+    expect(stageMatches([1280, 720], [1280, 722])).toBe(false);
     expect(recommendedSize(null)).toEqual([1280, 720]);
     expect(recommendedSize({ width: 2560, height: 1440 })).toEqual([1920, 1080]);
     expect(recommendedSize({ width: 1366, height: 768 })).toEqual([1024, 768]);

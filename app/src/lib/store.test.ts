@@ -38,6 +38,8 @@ describe('start-up', () => {
     expect(store.firstRun).toBe(true);
     expect(store.draft?.window).toMatchObject({ width: 1920, height: 1080 });
     expect(store.cfg).toBe(store.draft);
+    // The launcher window takes the chosen size at once.
+    expect(mock.api.resizeWindow).toHaveBeenCalledWith(1920, 1080);
     // The second start has seen setup before.
     await store.init();
     expect(store.firstRun).toBe(false);
@@ -62,6 +64,11 @@ describe('start-up', () => {
     expect(store.screen).toBe('home');
     expect(store.version).toBe('1.7.6');
     expect(store.cfg).toBe(store.config);
+    expect(mock.api.resizeWindow).toHaveBeenCalledWith(1600, 900);
+    // A window that cannot be resized does not stop the start.
+    mock.api.resizeWindow = vi.fn(async () => { throw 'no window'; });
+    await store.init();
+    expect(store.screen).toBe('home');
     await vi.waitFor(() => expect(store.dataSize).toBe(5_000_000));
     await vi.waitFor(() => expect(store.update.stage).toBe('available'));
     expect(mock.api.gamePoll).toHaveBeenCalled();
@@ -268,6 +275,53 @@ describe('game file', () => {
 });
 
 describe('configuration', () => {
+  it('resizes the launcher window with the window size', async () => {
+    await store.setWindowSize(1280, 720);
+    expect(store.config?.window).toMatchObject({ width: 1280, height: 720 });
+    expect(mock.api.resizeWindow).toHaveBeenCalledWith(1280, 720);
+    // A window that cannot be resized changes nothing else.
+    mock.api.resizeWindow = vi.fn(async () => { throw 'no window'; });
+    await store.setWindowSize(1024, 768);
+    expect(store.config?.window).toMatchObject({ width: 1024, height: 768 });
+    expect(msgs()).toEqual([]);
+  });
+
+  it('takes a size the user dragged the window to once it rests', async () => {
+    // 1600 x 900 is configured: the window with its 84 px of bars explains it, nothing changes.
+    store.windowResized(1600, 984, false);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(mock.api.saveConfig).not.toHaveBeenCalled();
+    // Dragged: only the last size of a burst counts, and it becomes the (custom) window size.
+    store.windowResized(1400, 900, false);
+    store.windowResized(1333, 806, false);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mock.api.saveConfig).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(mock.api.saveConfig).toHaveBeenCalledTimes(1);
+    expect(store.config?.window).toMatchObject({ width: 1333, height: 722 });
+    // Maximized or fullscreen windows, a pending resize that ends in one, the splash, tiny sizes and no
+    // configuration leave the size alone.
+    store.windowResized(1200, 900, false);
+    store.windowResized(2560, 1440, true);
+    await vi.advanceTimersByTimeAsync(400);
+    store.windowResized(300, 300, false);
+    await vi.advanceTimersByTimeAsync(400);
+    store.screen = 'splash';
+    store.windowResized(1200, 900, false);
+    await vi.advanceTimersByTimeAsync(400);
+    store.screen = 'home';
+    store.config = null;
+    store.windowResized(1200, 900, false);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(mock.api.saveConfig).toHaveBeenCalledTimes(1);
+    // During setup the draft follows.
+    store.screen = 'setup';
+    store.draft = makeConfig();
+    store.windowResized(1200, 900, false);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(store.draft.window).toMatchObject({ width: 1200, height: 816 });
+  });
+
   it('edits the draft in memory during setup', async () => {
     store.screen = 'setup';
     store.draft = makeConfig();
