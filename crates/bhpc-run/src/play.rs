@@ -276,6 +276,8 @@ struct Hooks {
     pace: Mutex<crate::pace::SwapPacer>,
     /// Pictures of the controller cursor and the messages.
     sprites: Mutex<crate::overlay::SpriteCache>,
+    /// The audio output, held silent until the first frame is presented.
+    mixer: Mixer,
 }
 
 /// Frame file and scratch buffers of the in-window mode.
@@ -439,6 +441,9 @@ impl Hooks {
         let n = self.flags.swaps.fetch_add(1, Ordering::SeqCst) + 1;
         if n == 1 {
             emit(Line::Ready);
+            // The loading screen goes away now: the sound the game started while loading (its menu music) plays
+            // from here, from its beginning.
+            self.mixer.set_held(false);
         }
         self.flags.swap_times.lock().unwrap_or_else(PoisonError::into_inner).push(Instant::now());
         let wanted: Vec<PathBuf> =
@@ -631,6 +636,8 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
     }
     let cfg = &cfg;
     let mixer = Mixer::new(44100);
+    // Silent until the game presents its first frame (`Hooks::before_swap`): it starts its music while loading.
+    mixer.set_held(true);
     let m = mixer.clone();
     if let Err(e) = backend.open_audio(44100, move |out| m.fill(out)) {
         // No audio device: drain the mixer in real time so the game's writers still make progress.
@@ -907,6 +914,7 @@ fn boot(
             pace: Mutex::new(crate::pace::SwapPacer::new(lock(st).sched.clone(), fps_limit, fps_hud)),
             sprites: Mutex::new(crate::overlay::SpriteCache::new(lang)),
             embed: embed_out.lock().unwrap_or_else(PoisonError::into_inner).take().map(Mutex::new),
+            mixer: mixer.clone(),
         });
         // `eglSwapBuffers` called by the game itself (through `dlsym`) is also a presented frame.
         if let Some(inner) = bhpc_gles::builtin("eglSwapBuffers", &gles) {

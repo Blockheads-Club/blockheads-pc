@@ -117,6 +117,8 @@ struct Inner {
     streams: HashMap<StreamId, Stream>,
     next_id: StreamId,
     master: f32,
+    /// [`Mixer::set_held`]: `fill` gives silence and every stream keeps its place.
+    held: bool,
     stats: Stats,
 }
 
@@ -140,7 +142,13 @@ impl Mixer {
         Mixer {
             shared: Arc::new(Shared {
                 out_rate,
-                inner: Mutex::new(Inner { streams: HashMap::new(), next_id: 1, master: 1.0, stats: Stats::default() }),
+                inner: Mutex::new(Inner {
+                    streams: HashMap::new(),
+                    next_id: 1,
+                    master: 1.0,
+                    held: false,
+                    stats: Stats::default(),
+                }),
                 events: EventQueue::default(),
                 space: Condvar::new(),
             }),
@@ -175,6 +183,16 @@ impl Mixer {
     /// Master volume (linear, 1.0 = unity).
     pub fn set_master(&self, gain: f32) {
         self.inner().master = gain;
+    }
+
+    /// Hold the output: while held, [`Mixer::fill`] gives silence without playing anything, so streams keep
+    /// their data and position (a song started meanwhile starts from its beginning once released).
+    pub fn set_held(&self, held: bool) {
+        self.inner().held = held;
+    }
+
+    pub fn held(&self) -> bool {
+        self.inner().held
     }
 
     // ---------- streams ----------
@@ -292,6 +310,10 @@ impl Mixer {
     pub fn fill(&self, out: &mut [i16]) {
         let rate = self.shared.out_rate as f64;
         let mut g = self.inner();
+        if g.held {
+            out.fill(0);
+            return;
+        }
         let master = g.master;
         let mut acc = vec![[0f32; 2]; out.len() / 2];
         let mut underruns = 0;

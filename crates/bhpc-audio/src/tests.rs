@@ -67,6 +67,29 @@ fn plays_a_queue_in_order_and_reports_events() {
 }
 
 #[test]
+fn a_held_mixer_is_silent_and_keeps_every_stream_in_place() {
+    let m = Mixer::new(44100);
+    assert!(!m.held());
+    m.set_held(true);
+    assert!(m.held());
+    let s = m.create_stream(44100, 4);
+    m.enqueue(s, ramp(2)).unwrap();
+    m.set_state(s, PlayState::Playing).unwrap();
+    // Held (the game has not shown a frame yet): silence over whatever was in the buffer, nothing played.
+    let mut buf = [7i16; 4];
+    m.fill(&mut buf);
+    assert_eq!(buf, [0; 4]);
+    assert_eq!(m.queued_frames(s), Ok(2));
+    assert_eq!(m.played_frames(s), Ok(0));
+    assert_eq!(m.events().try_pop(), None);
+    assert_eq!(m.stats(), Stats::default());
+    // Released: the song starts from its first frame.
+    m.set_held(false);
+    assert_eq!(out(&m, 2), [100, -100, 200, -200]);
+    assert_eq!(m.played_frames(s), Ok(2));
+}
+
+#[test]
 fn mixes_streams_with_gain_master_and_clipping() {
     let m = Mixer::new(8000);
     let (a, b) = (playing(&m, 8000, 2), playing(&m, 8000, 2));
