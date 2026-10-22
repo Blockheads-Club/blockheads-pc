@@ -1018,6 +1018,11 @@ fn boot(
     }
     eprintln!("[play] constructors done");
     progress(Phase::Runtime, 0, RUNTIME_STEPS);
+    // Dev aid: BHPC_DEV_OBJC_DUMP=FILE (one class name per line) prints every method of those classes with its type
+    // encoding, read from the class metadata (`-[Class sel] types`).
+    if let Some(list) = std::env::var_os("BHPC_DEV_OBJC_DUMP") {
+        dev_objc_dump(&sess, std::path::Path::new(&list));
+    }
     // Dev-only proof of the host ObjC hooks (`objchook`): BHPC_DEV_OBJC_HOOKS=1.
     let dev_hooks =
         std::env::var_os("BHPC_DEV_OBJC_HOOKS").is_some_and(|v| v == "1").then(|| dev_objc_hooks(&mut sess)).flatten();
@@ -2340,4 +2345,47 @@ fn dev_objc_hooks(sess: &mut Session) -> Option<(Arc<crate::objchook::ObjcHooks>
     eprintln!("[dev-hook] install took {:.0} us", t0.elapsed().as_secs_f64() * 1e6);
     let _ = DEV_HOOKS.set(hooks.clone());
     Some((hooks, rt))
+}
+
+/// `BHPC_DEV_OBJC_DUMP`: the method lists of the named classes (instance and class methods) with type encodings.
+fn dev_objc_dump(sess: &Session, list: &std::path::Path) {
+    let names = std::fs::read_to_string(list).unwrap_or_default();
+    let mem = sess.cpu.mem();
+    eprintln!("[objc-dump] {} class names from {}", names.lines().count(), list.display());
+    for name in names.lines().map(str::trim).filter(|n| !n.is_empty()) {
+        let Some(class) = sess.linker.modules().iter().find_map(|m| m.export(&format!("OBJC_CLASS_$_{name}"))) else {
+            continue;
+        };
+        for meta in [false, true] {
+            let read = || -> Option<Vec<String>> {
+                let cls = if meta { mem.read_u32(class).ok()? } else { class };
+                let mut ro = mem.read_u32(cls + 16).ok()? & !3;
+                // A realised class points at its class_rw_t (flags bit 31 RW_REALIZED; ro at +8).
+                if mem.read_u32(ro).ok()? & (1 << 31) != 0 {
+                    ro = mem.read_u32(ro + 8).ok()?;
+                }
+                let list = mem.read_u32(ro + 20).ok()?;
+                if list == 0 {
+                    return Some(Vec::new());
+                }
+                let size = mem.read_u32(list).ok()? & !3;
+                let count = mem.read_u32(list + 4).ok()?;
+                let mut out = Vec::new();
+                for i in 0..count.min(4096) {
+                    let m = list + 8 + i * size;
+                    let sel = mem.read_cstr(mem.read_u32(m).ok()?).ok()?;
+                    let ty = mem.read_cstr(mem.read_u32(m + 4).ok()?).ok()?;
+                    out.push(format!("{}[{name} {sel}] {ty}", if meta { '+' } else { '-' }));
+                }
+                Some(out)
+            };
+            let got = read();
+            if got.is_none() {
+                eprintln!("[objc-dump] {name}: cannot read the method list");
+            }
+            for l in got.unwrap_or_default() {
+                eprintln!("[objc-dump] {l}");
+            }
+        }
+    }
 }
