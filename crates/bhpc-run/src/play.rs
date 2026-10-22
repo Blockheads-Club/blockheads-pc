@@ -721,6 +721,11 @@ fn spawn_commands(
                 }
                 Some(Cmd::Quit) => break,
                 Some(Cmd::Layout(l)) => flags.gl_layout.store(l == Layout::GlRgba, Ordering::SeqCst),
+                Some(Cmd::ModsReload) => {
+                    if let Some(m) = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+                        m.post(bhpc_mods::view::UiCmd::Reload);
+                    }
+                }
                 Some(cmd) => {
                     if cmd_event(&cmd).is_some_and(|ev| tx.send(ev).is_err()) {
                         break;

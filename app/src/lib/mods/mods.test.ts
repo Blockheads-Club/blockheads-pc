@@ -229,10 +229,17 @@ describe('the mods store', () => {
     mock.api.modsDevInspect = vi.fn(async () => Promise.reject({ code: 'io', detail: 'nope' }));
     await mods.devAdd();
     expect(toasts.items.at(-1)?.message).toMatch(/nope/);
-    // Reload: the folder is checked again, then the loader answers that it is not there yet.
+    // Reload: the folder is checked again, then the running game reloads it (or says no game runs).
     mock.api.modsDevInspect = makeApi().modsDevInspect;
     await mods.devReload('/code/a');
-    expect(mods.devLog.at(-1)).toMatch(/in-game mod loader/);
+    expect(mods.devLog.at(-1)).toMatch(/reloaded my-mod in the running game$/);
+    mock.api.modsDevInspect = vi.fn(async (p: string) => ({ ...(await makeApi().modsDevInspect(p)), id: null }));
+    await mods.devReload('/code/a');
+    expect(mods.devLog.at(-1)).toMatch(/reloaded \/code\/a in the running game$/);
+    mock.api.modsDevInspect = makeApi().modsDevInspect;
+    mock.api.modsDevReload = vi.fn(async () => Promise.reject({ code: 'notRunning' }));
+    await mods.devReload('/code/a');
+    expect(mods.devLog.at(-1)).toMatch(/Start the game from this launcher first/);
     await mods.devRemove('/code/a');
     expect(store.prefs.mods_dev_folders).toEqual(['/code/b', '/code/c']);
     await mods.devRemove('/code/b');
@@ -241,6 +248,48 @@ describe('the mods store', () => {
     mods.devLog = Array.from({ length: 200 }, (_, i) => String(i));
     await mods.devReload('/x');
     expect(mods.devLog).toHaveLength(200);
+  });
+});
+
+describe('the running game', () => {
+  it('shows live states, the game log and joins localhost', async () => {
+    const m = makeMod({ id: 'aaa', status: 'ready' });
+    expect(mods.liveOf('aaa')).toBeNull();
+    expect(mods.statusOf(m)).toBe('ready');
+    const live = (state: string, origin = 'mine') => ({ id: 'aaa', version: '1.0.0', state, origin, ms: 1, peak_ms: 2, calls: 3 });
+    store.game = { ...store.game, mods: [live('loaded'), live('running', 'server')] };
+    expect(mods.liveOf('aaa')?.state).toBe('loaded');
+    expect(mods.statusOf(m)).toBe('ready');
+    for (const s of ['running', 'budget', 'failed']) {
+      store.game = { ...store.game, mods: [live(s)] };
+      expect(mods.statusOf(m)).toBe(s);
+    }
+    store.log = ['[play] x', '[mods] echo: hi'];
+    expect(mods.gameLog).toEqual(['echo: hi']);
+    await mods.devJoin();
+    expect(mock.api.modsDevJoin).toHaveBeenCalledWith('127.0.0.1:15151');
+    mock.api.modsDevJoin = vi.fn(async () => Promise.reject({ code: 'io', detail: 'busy' }));
+    await mods.devJoin();
+    expect(mods.devLog.at(-1)).toMatch(/busy/);
+  });
+
+  it('reloads folder mods when their files change', async () => {
+    store.prefs = { ...store.prefs, mods_developer: true, mods_dev_folders: ['/code/a'], mods_dev_watch: true };
+    await mods.loadDev();
+    // No game: nothing is watched.
+    await mods.devWatch();
+    expect(mock.api.modsDevFingerprint).not.toHaveBeenCalled();
+    store.game = { ...store.game, state: 'running' };
+    await mods.devWatch();
+    await mods.devWatch();
+    expect(mock.api.modsDevReload).not.toHaveBeenCalled();
+    mock.api.modsDevFingerprint = vi.fn(async () => 'fp2');
+    await mods.devWatch();
+    expect(mock.api.modsDevReload).toHaveBeenCalledWith('/code/a');
+    expect(mods.devLog.some((l) => /files changed/.test(l))).toBe(true);
+    store.prefs = { ...store.prefs, mods_dev_watch: false };
+    await mods.devWatch();
+    expect(mock.api.modsDevFingerprint).toHaveBeenCalledTimes(1);
   });
 });
 

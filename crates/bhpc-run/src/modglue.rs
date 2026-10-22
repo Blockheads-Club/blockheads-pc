@@ -232,6 +232,7 @@ impl ModGlue {
         let hooks = Arc::new(ObjcHooks::new());
         let objc = Arc::new(Objc { rt, cache: Mutex::new(HashMap::new()) });
         let shared = Arc::new(Shared::default());
+        shared.view.lock().unwrap_or_else(PoisonError::into_inner).dev = !opts.dev.is_empty();
         let opts = Arc::new(opts);
         let g = ModGlue { hooks, rt, shared, objc, opts };
         g.register();
@@ -269,7 +270,7 @@ impl ModGlue {
         let sh = self.shared.clone();
         self.hooks.hook(t("-[World dealloc]"), None, move |_inv| {
             if on_main() {
-                stop_session(&sh, "left the world");
+                stop_session(&sh, "left the world", false);
             }
         });
         let o = self.objc.clone();
@@ -593,10 +594,11 @@ fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
 
 fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     let (server, conn) = MAIN.with(|m| {
-        let mut m = m.borrow_mut();
+        let m = m.borrow();
         let joined = m.flow.as_ref().is_some_and(|f| *f.stage() == Stage::Joined || *f.stage() == Stage::Vanilla);
         let server = if joined { m.flow.as_ref().map(|f| f.server_name().to_string()) } else { None };
-        let accepted = m.accepted.take().unwrap_or_default();
+        // Kept for a developer reload of the same session.
+        let accepted = m.accepted.clone().unwrap_or_default();
         (server.map(|s| (s, accepted)), m.conn)
     });
     let dirs = ModsDirs::new(&opts.data_dir);
@@ -644,12 +646,12 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     publish(sh, true);
 }
 
-fn stop_session(sh: &Shared, why: &str) {
+fn stop_session(sh: &Shared, why: &str, keep_join: bool) {
     let stopped = MAIN.with(|m| {
         let mut m = m.borrow_mut();
         m.placed.clear();
         // Leaving a server's world ends that join; leaving a single-player world keeps a join in progress.
-        if m.host.is_some() && m.host_online {
+        if m.host.is_some() && m.host_online && !keep_join {
             m.flow = None;
             m.conn = None;
             m.held = None;
@@ -674,7 +676,7 @@ fn stop_session(sh: &Shared, why: &str) {
 /// Developer reload: the session's mods are stopped and loaded again from their folders.
 fn reload(opts: &ModsOptions, sh: &Shared) {
     let _ = opts;
-    stop_session(sh, "reload");
+    stop_session(sh, "reload", true);
     // The next world update starts it again (with the same server mods).
     log("reloading mods at the next world update");
 }

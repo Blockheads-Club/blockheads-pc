@@ -144,6 +144,8 @@ pub struct LaunchPlan {
     pub keys: crate::keys::KeyBindings,
     /// A link to hand the game once it runs (`--open-uri`, see [`open_uri_arg`]).
     pub open_uri: Option<String>,
+    /// A server to join from the main menu (`--join host:port`, developer mode's "join localhost").
+    pub join: Option<String>,
 }
 
 impl LaunchPlan {
@@ -157,6 +159,9 @@ impl LaunchPlan {
         }
         if let Some(u) = &self.open_uri {
             a.extend(["--open-uri".to_string(), u.clone()]);
+        }
+        if let Some(j) = &self.join {
+            a.extend(["--join".to_string(), j.clone()]);
         }
         a
     }
@@ -199,19 +204,23 @@ pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, Launcher
     }
     Ok(LaunchPlan {
         program: sidecar_path(exe_dir),
-        args: vec![
+        args: [
             "--config".to_string(),
             paths.config().display().to_string(),
             "--title".to_string(),
             title.clone(),
             "--lang".to_string(),
             prefs.language.clone(),
-        ],
+        ]
+        .into_iter()
+        .chain(crate::mods::live::args(&prefs))
+        .collect(),
         env,
         title,
         window: config.window,
         keys: config.keys,
         open_uri: None,
+        join: None,
     })
 }
 

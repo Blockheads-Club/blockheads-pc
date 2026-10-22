@@ -22,6 +22,7 @@
   let confirmRemove = $state(false);
   const name = $derived(modName(m));
   const busy = $derived(mods.busy === m.id);
+  const live = $derived(mods.liveOf(m.id));
   const missingDep = $derived(m.dependencies.find((d) => !d.ok && !d.soft));
   const source = $derived(
     m.source === 'index' ? t('mods.from.index') : m.source === 'link' ? t('mods.from.link') : m.source === 'file' ? t('mods.from.file') : ''
@@ -42,7 +43,7 @@
     <h2>{name}<span class="mono ver">{m.version}</span></h2>
     <div class="bd">
       <SidesBadge sides={sidesOf(m.sides)} />
-      <ModStatus status={m.status} />
+      <ModStatus status={mods.statusOf(m)} />
       {#if m.native}<DangerBadge />{/if}
       {#if m.reviewed}<Badges kind="reviewed" />{:else}<Badges kind="ext" />{/if}
     </div>
@@ -150,7 +151,12 @@
 <div class="grid">
   <section class="card sect">
     <h3>{t('mods.limits')}</h3>
-    <p class="hint">{m.native ? t('mods.limitsNative') : t('mods.limitsIdle')}</p>
+    {#if live}
+      <p class="mono">{t('mods.limitsNow', { ms: live.ms.toFixed(1), peak: live.peak_ms.toFixed(1) })}</p>
+      {#if live.reason}<p class="hint">{live.reason}</p>{/if}
+    {:else}
+      <p class="hint">{m.native ? t('mods.limitsNative') : t('mods.limitsIdle')}</p>
+    {/if}
     <p class="hint">{t('mods.limitsRule')}</p>
   </section>
   <section class="card sect">

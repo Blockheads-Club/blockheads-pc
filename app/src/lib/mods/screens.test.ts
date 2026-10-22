@@ -42,10 +42,9 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe('Mods screen', () => {
-  it('shows tabs, the coming-soon note and switches tabs with the keyboard', async () => {
+  it('shows tabs and switches tabs with the keyboard', async () => {
     render(ModsScreen);
     await screen.findByRole('button', { name: /Minimap/ });
-    expect(screen.getByRole('note')).toHaveTextContent('coming soon');
     const mine = screen.getByRole('tab', { name: /My mods/ });
     expect(mine).toHaveTextContent('5');
     expect(screen.queryByRole('tab', { name: 'Developer' })).toBeNull();
@@ -198,7 +197,16 @@ describe('Mod details', () => {
   });
 
   it('explains every status', async () => {
+    store.game = { ...store.game, mods: [{ id: makeMod().id, version: '1', state: 'budget', origin: 'mine', ms: 0.5, peak_ms: 30, calls: 2, reason: '3 faults within 60 s' }] };
     const r = render(ModDetail, { m: makeMod({ status: 'failed', reason: 'server-only', source: 'link', update: '1.0.0', update_asks_more: true }) });
+    expect(screen.getByText(/0.5 ms of mod code per second · longest call 30.0 ms/)).toBeVisible();
+    expect(screen.getByText('3 faults within 60 s')).toBeVisible();
+    await r.rerender({ m: makeMod({ status: 'failed', reason: 'server-only', source: 'link' }) });
+    store.game = { ...store.game, mods: [{ id: makeMod().id, version: '1', state: 'running', origin: 'mine', ms: 0, peak_ms: 0, calls: 1 }] };
+    await r.rerender({ m: makeMod({ status: 'ready' }) });
+    expect(screen.queryByText('3 faults within 60 s')).toBeNull();
+    store.game = { ...store.game, mods: null };
+    await r.rerender({ m: makeMod({ status: 'failed', reason: 'server-only', source: 'link', update: '1.0.0', update_asks_more: true }) });
     expect(screen.getByText('This mod has no part for players. It belongs on a server.')).toBeVisible();
     expect(screen.getByText('It asks for new permissions, so it waits for you.')).toBeVisible();
     await click('Update 1.0.0');
@@ -399,6 +407,24 @@ describe('Developer', () => {
     await waitFor(() => expect(store.prefs.mods_dev_folders).toEqual(['/code/my-mod']));
     await click('Load from folder…');
     expect(mock.api.pickFolder).toHaveBeenCalled();
+  });
+
+  it('shows the running folder mods, the game log and joins localhost', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    store.prefs = { ...store.prefs, mods_developer: true, mods_dev_folders: ['/code/my-mod'] };
+    store.game = { ...store.game, state: 'ready', mods: [{ id: 'my-mod', version: '0.1.0-dev', state: 'running', origin: 'dev', ms: 3.6, peak_ms: 4, calls: 9 }, { id: 'mine', version: '1', state: 'running', origin: 'mine', ms: 0, peak_ms: 0, calls: 1 }] };
+    store.log = ['[mods]     5 ms error my-mod: boom', '[mods]     6 ms warn  my-mod: slow', '[mods]     7 ms info  ok'];
+    render(ModsDev);
+    await screen.findByText(/my-mod: 3.6 ms of mod code per second/);
+    expect(screen.getByRole('log')).toHaveTextContent('my-mod: boom');
+    await click(/Errors 1/);
+    expect(screen.getByRole('log')).not.toHaveTextContent('ok');
+    await click(/Warnings 1/);
+    expect(screen.getByRole('log')).toHaveTextContent('slow');
+    await click('Start game and join localhost');
+    expect(mock.api.modsDevJoin).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1100);
+    vi.useRealTimers();
   });
 
   it('shows the empty folder list and ignores Ctrl+R without a selection', async () => {

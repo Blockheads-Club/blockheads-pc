@@ -19,7 +19,6 @@ test('Home shows the Mods button with the problem count and opens the Mods area'
   await expect(btn).toBeVisible();
   await btn.click();
   await expect(page.getByRole('tab', { name: /My mods/ })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByText('Mods start working with the in-game mod loader')).toBeVisible();
   // Keyboard: arrows switch tabs, Esc goes home.
   await page.getByRole('tab', { name: /My mods/ }).focus();
   await page.keyboard.press('ArrowRight');

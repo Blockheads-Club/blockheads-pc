@@ -136,6 +136,8 @@ export interface Snapshot {
   progress?: BootProgress | null;
   /** The game is drawn inside the launcher window. */
   embedded?: boolean;
+  /** The mods the running game runs (its mod loader's last report). */
+  mods?: import('./mods/types').LiveMod[] | null;
 }
 
 export interface ImportItem {

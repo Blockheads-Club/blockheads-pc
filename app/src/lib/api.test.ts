@@ -92,10 +92,12 @@ describe('api', () => {
     await api.modsClearServers();
     await api.modsDevInspect('/code/m');
     await api.modsDevReload('/code/m');
+    await api.modsDevFingerprint(['/code/m']);
+    await api.modsDevJoin('127.0.0.1:15151');
     expect(invoke.mock.calls.map((x: unknown[]) => x[0])).toEqual([
       'mods_overview', 'mods_index', 'mods_plan', 'mods_inspect_file', 'mods_inspect_link', 'mods_install', 'mods_set_enabled',
       'mods_set_grant', 'mods_remove', 'mods_auto_update', 'mods_servers', 'mods_clear_server', 'mods_clear_servers',
-      'mods_dev_inspect', 'mods_dev_reload'
+      'mods_dev_inspect', 'mods_dev_reload', 'mods_dev_fingerprint', 'mods_dev_join'
     ]);
     expect(invoke).toHaveBeenCalledWith('mods_install', { req });
     expect(invoke).toHaveBeenCalledWith('mods_set_grant', { id: 'a', perm: 'channels', on: true });

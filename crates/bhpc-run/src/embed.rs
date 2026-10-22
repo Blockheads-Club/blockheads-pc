@@ -110,7 +110,7 @@ fn mods(bits: u8) -> Mods {
 /// (the caller resizes the window and ends the run).
 pub fn cmd_event(cmd: &Cmd) -> Option<Event> {
     Some(match cmd {
-        Cmd::Size { .. } | Cmd::Layout(_) | Cmd::Quit => return None,
+        Cmd::Size { .. } | Cmd::Layout(_) | Cmd::Quit | Cmd::ModsReload => return None,
         Cmd::Move { x, y } => Event::MouseMove { x: *x, y: *y },
         Cmd::Button { button, pressed, x, y, .. } => {
             let button = match button {

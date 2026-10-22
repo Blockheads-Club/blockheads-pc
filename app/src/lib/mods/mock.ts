@@ -139,8 +139,8 @@ export function makeModsApi() {
     modsClearServer: vi.fn(async () => makeServers({ servers: [] , total: 0 })),
     modsClearServers: vi.fn(async () => makeServers({ servers: [], total: 0 })),
     modsDevInspect: vi.fn(async (path: string) => makeDevMod({ path })),
-    modsDevReload: vi.fn(async () => {
-      throw { code: 'needsLoader' };
-    })
+    modsDevReload: vi.fn(async () => {}),
+    modsDevFingerprint: vi.fn(async () => 'fp1'),
+    modsDevJoin: vi.fn(async () => ({ embedded: true }))
   };
 }

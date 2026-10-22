@@ -162,6 +162,9 @@ fn mods_panel_and_toasts() {
     assert!(!ui.modal(&v));
     assert_eq!(ui.render(&v, 0, 1280, 720), None);
     assert_eq!(ui.input(UiInput::Key(HID_ESCAPE), &v), (false, None));
+    assert_eq!(ui.input(UiInput::Key(HID_F5), &v), (false, None));
+    let dev = View { dev: true, ..View::default() };
+    assert_eq!(ui.input(UiInput::Key(HID_F5), &dev), (true, Some(UiCmd::Reload)));
     assert_eq!(ui.input(UiInput::Key(HID_F9), &v), (true, None));
     assert!(ui.panel && ui.modal(&v));
     render(&mut ui, &v, 1, "panel-empty");
@@ -180,6 +183,9 @@ fn mods_panel_and_toasts() {
         .collect();
     v.toasts = vec![(Instant::now(), "Zoom Out was turned off. It slowed the game.".into())];
     render(&mut ui, &v, 2, "panel");
+    v.dev = true;
+    render(&mut ui, &v, 5, "panel-dev");
+    v.dev = false;
     assert_eq!(ui.input(UiInput::Key(99), &v), (true, None));
     assert_eq!(ui.input(UiInput::Click(0.0, 0.0), &v), (true, None));
     // The close button sits in the banner, top right.

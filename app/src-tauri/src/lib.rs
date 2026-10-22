@@ -291,11 +291,23 @@ struct Started {
 }
 
 fn start_game(app: &App, window: &WebviewWindow, handle: &AppHandle, allow_embed: bool) -> Res<Started> {
+    start_game_joining(app, window, handle, allow_embed, None)
+}
+
+/// Starts the game; with `join` it joins that server (`host:port`) from the main menu.
+fn start_game_joining(
+    app: &App,
+    window: &WebviewWindow,
+    handle: &AppHandle,
+    allow_embed: bool,
+    join: Option<String>,
+) -> Res<Started> {
     let exe = std::env::current_exe().map_err(text)?;
     let dir = exe.parent().unwrap_or(Path::new("."));
     let paths = ops::paths().map_err(text)?;
     let mut plan = ops::launch_plan(&paths, dir).map_err(text)?;
     plan.open_uri = app.open_uri.lock().unwrap_or_else(|e| e.into_inner()).take();
+    plan.join = join;
     app.session().set_history(bhpc_launcher::progress::history_path(&paths.dir));
     let program = sidecar(plan.program.clone());
     // The frame file must exist before the game starts: it opens it at once.
@@ -371,6 +383,27 @@ fn end_view(app: &App, window: &WebviewWindow, handle: &AppHandle) {
 #[tauri::command]
 fn game_start(app: State<'_, App>, window: WebviewWindow, handle: AppHandle) -> Res<Started> {
     start_game(&app, &window, &handle, true)
+}
+
+/// Developer mode: the running game reloads its folder mods.
+#[tauri::command]
+fn mods_dev_reload(app: State<'_, App>, path: String) -> Result<(), bhpc_launcher::mods::ModError> {
+    let _ = path;
+    let input = app.session().input();
+    bhpc_launcher::mods::dev::reload(input.as_ref())
+}
+
+/// Developer mode: a number that changes when a file in one of the folders changes (live reload).
+#[tauri::command]
+fn mods_dev_fingerprint(paths: Vec<String>) -> String {
+    let all = paths.iter().fold(0u64, |a, p| a.rotate_left(7) ^ bhpc_launcher::mods::dev::fingerprint(Path::new(p)));
+    all.to_string()
+}
+
+/// Developer mode: start the game and join a server (the local one).
+#[tauri::command]
+fn mods_dev_join(app: State<'_, App>, window: WebviewWindow, handle: AppHandle, address: String) -> Res<Started> {
+    start_game_joining(&app, &window, &handle, true, Some(address))
 }
 
 #[tauri::command]
@@ -536,7 +569,9 @@ pub fn run() {
             mods::mods_clear_server,
             mods::mods_clear_servers,
             mods::mods_dev_inspect,
-            mods::mods_dev_reload
+            mods_dev_reload,
+            mods_dev_fingerprint,
+            mods_dev_join
         ])
         .build(tauri::generate_context!())
         .expect("error while building the Blockheads PC launcher");

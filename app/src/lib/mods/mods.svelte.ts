@@ -4,7 +4,7 @@ import type { Key } from '../messages';
 import { store } from '../store.svelte';
 import { toast } from '../ui/toast.svelte';
 import type {
-  Browse, BrowseMod, CacheOverview, DevMod, InstallProgress, ModError, ModSummary, Overview, Plan
+  Browse, BrowseMod, CacheOverview, DevMod, InstallProgress, LiveMod, ModError, ModStatus, ModSummary, Overview, Plan
 } from './types';
 
 export type ModsTab = 'mine' | 'browse' | 'servers' | 'dev';
@@ -42,7 +42,7 @@ export function asError(e: unknown): ModError {
 /** The text of a mod error in the UI language. */
 export function errorText(e: ModError): string {
   const known = ['io', 'config', 'missing', 'permission', 'download', 'insecure', 'tooLarge', 'index', 'offline', 'notListed', 'serverOnly',
-    'newerLoader', 'invalid', 'size', 'checksum', 'mismatch', 'nativeConfirm', 'nativeBlocked', 'expired', 'needsLoader'];
+    'newerLoader', 'invalid', 'size', 'checksum', 'mismatch', 'nativeConfirm', 'nativeBlocked', 'expired', 'needsLoader', 'notRunning'];
   const key = (known.includes(e.code) ? `mods.err.${e.code}` : 'mods.err.other') as Key;
   return t(key, { detail: e.detail ?? '', file: e.file ?? '', expected: e.expected ?? '', got: e.got ?? '' });
 }
@@ -331,9 +331,52 @@ export class ModsStore {
       const m = await api.modsDevInspect(path);
       this.dev = this.dev.map((d) => (d.path === path ? m : d));
       await api.modsDevReload(path);
+      this.log(t('mods.dev.reloaded', { name: m.id ?? path }));
     } catch (e) {
       this.log(errorText(asError(e)));
     }
+  }
+
+  private devFp: string | null = null;
+
+  /** Live reload, called every second while the Developer tab shows: reloads when a folder's files changed. */
+  async devWatch() {
+    if (!store.prefs.mods_dev_watch || !store.active || !this.devSelected) {
+      this.devFp = null;
+      return;
+    }
+    const fp = await api.modsDevFingerprint(store.prefs.mods_dev_folders);
+    const changed = this.devFp !== null && fp !== this.devFp;
+    this.devFp = fp;
+    if (changed) {
+      this.log(t('mods.dev.changedLog'));
+      await this.devReload(this.devSelected);
+    }
+  }
+
+  /** Starts the game and joins the Blockheads Server on this computer. */
+  async devJoin() {
+    try {
+      await api.modsDevJoin('127.0.0.1:15151');
+    } catch (e) {
+      this.log(errorText(asError(e)));
+    }
+  }
+
+  /** The running game's report for an installed mod (its own copy, not a server's). */
+  liveOf(id: string): LiveMod | null {
+    return store.game.mods?.find((l) => l.id === id && l.origin === 'mine') ?? null;
+  }
+
+  /** The status to show: while the game runs a mod, its live state (running, turned off for its budget, failed). */
+  statusOf(m: ModSummary): ModStatus {
+    const l = this.liveOf(m.id);
+    return l && (l.state === 'running' || l.state === 'budget' || l.state === 'failed') ? l.state : m.status;
+  }
+
+  /** The game's mod-loader lines (its log's `[mods]` lines). */
+  get gameLog(): string[] {
+    return store.log.filter((l) => l.startsWith('[mods] ')).map((l) => l.slice(7));
   }
 
   private log(line: string) {

@@ -20,6 +20,21 @@ export interface DepInfo {
   available: string | null;
 }
 
+/** One mod of the running game, as its mod loader reports it (`@mods` lines; bhpc_launcher::mods::live). */
+export interface LiveMod {
+  id: string;
+  version: string;
+  /** running | loaded | budget | failed */
+  state: string;
+  /** mine | dev | server */
+  origin: string;
+  /** Milliseconds of mod code in the last second. */
+  ms: number;
+  peak_ms: number;
+  calls: number;
+  reason?: string | null;
+}
+
 export interface ModSummary {
   id: string;
   name: Record<string, string>;

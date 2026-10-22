@@ -224,6 +224,7 @@ pub const HID_F9: u32 = 66;
 pub const HID_ENTER: u32 = 40;
 pub const HID_ESCAPE: u32 = 41;
 pub const HID_SPACE: u32 = 44;
+pub const HID_F5: u32 = 62;
 
 /// Byte sizes for people.
 pub fn size_text(b: u64) -> String {
@@ -301,6 +302,7 @@ impl ModUi {
                 self.panel = !self.panel;
                 (true, None)
             }
+            UiInput::Key(HID_F5) if v.dev => (true, Some(UiCmd::Reload)),
             _ if !self.panel => (false, None),
             UiInput::Key(HID_ESCAPE) => {
                 self.panel = false;
@@ -689,7 +691,11 @@ impl ModUi {
             x as f32,
             (foot + 2 * u) as f32,
             TEXT3,
-            "F9 or Esc closes · turning mods on or off is in the launcher",
+            if v.dev {
+                "F9 or Esc closes · F5 reloads folder mods"
+            } else {
+                "F9 or Esc closes · turning mods on or off is in the launcher"
+            },
         );
     }
 }

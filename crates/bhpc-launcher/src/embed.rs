@@ -447,6 +447,8 @@ pub enum Cmd {
     Visible(bool),
     /// The pixel layout the view wants frames in from now on.
     Layout(Layout),
+    /// Developer mode: stop the session's mods and load them again from their folders.
+    ModsReload,
     Quit,
 }
 
@@ -467,6 +469,7 @@ impl Cmd {
             Cmd::Focus(on) => format!("focus {}", flag(*on)),
             Cmd::Visible(on) => format!("visible {}", flag(*on)),
             Cmd::Layout(l) => format!("layout {}", l.code()),
+            Cmd::ModsReload => "mods-reload".to_string(),
             Cmd::Quit => "quit".to_string(),
         }
     }
@@ -525,6 +528,7 @@ impl Cmd {
             "focus" => Cmd::Focus(on(num())?),
             "visible" => Cmd::Visible(on(num())?),
             "layout" => Cmd::Layout(Layout::from_code(num()?.parse().ok()?)?),
+            "mods-reload" => Cmd::ModsReload,
             "quit" => Cmd::Quit,
             _ => return None,
         })

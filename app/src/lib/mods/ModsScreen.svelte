@@ -91,10 +91,6 @@
     {/if}
   </header>
 
-  {#if mods.tab === 'mine' || mods.tab === 'browse'}
-    <p class="soon" role="note"><Icon name="clock" size={16} /><span><strong>{t('mods.soon')}</strong> {t('mods.soonBody')}</span></p>
-  {/if}
-
   <div class="panel" id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-${mods.tab}`} tabindex="-1">
     {#if mods.tab === 'mine'}<MyMods {narrow} />
     {:else if mods.tab === 'browse'}<ModsBrowse />
@@ -137,18 +133,6 @@
   .narrow .tab { padding: 0 10px; }
   .tab[aria-selected='true'] { background: var(--surface); color: var(--text); box-shadow: 0 2px 0 var(--line-strong); }
   .n { font: 600 12px var(--f-mono); color: var(--text-3); }
-  .soon {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    padding: 8px 16px;
-    font-size: 14px;
-    background: var(--sun-soft);
-    color: var(--sun-ink);
-    border-bottom: 2px solid var(--line);
-    flex: none;
-  }
-  .soon :global(.ico) { flex: none; }
   .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
   .panel:focus { outline: none; }
 </style>

@@ -397,6 +397,25 @@ mod unix {
     }
 
     #[test]
+    fn mods_reports_are_kept_while_the_game_runs() {
+        let mut s = Session::new(Duration::ZERO);
+        let line = r#"@mods [{"id":"m","version":"1.0.0","state":"running","origin":"mine","ms":0.5,"peak_ms":1.0,"calls":3}]"#;
+        let (prog, args) = sh(&format!("echo '{line}'; echo after; sleep 3"));
+        s.start(&prog, &args, &[]).unwrap();
+        let t0 = std::time::Instant::now();
+        let mut snap = s.poll(0, true);
+        while snap.mods.is_none() && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            snap = s.poll(0, true);
+        }
+        assert_eq!(snap.mods.unwrap()[0].calls, 3);
+        s.stop();
+        let snap = s.poll(0, true);
+        assert!(snap.mods.is_none());
+        assert_eq!(snap.lines, ["after"]);
+    }
+
+    #[test]
     fn stop_asks_an_in_window_game_to_quit_first() {
         let mut s = Session::new(Duration::from_secs(3600));
         // It reads `quit` and ends by itself: stopped, not killed.
@@ -680,8 +699,20 @@ mod ops_tests {
             linked.args_for(None)[plan.args.len()..],
             ["--progress", "--open-uri", "http://theblockheads.net/join.php?ip=1"]
         );
-        Prefs { game_sound: false, language: "ru".into(), ..Prefs::default() }.save(&paths.prefs()).unwrap();
+        linked.open_uri = None;
+        linked.join = Some("localhost:15151".into());
+        assert_eq!(linked.args_for(None)[plan.args.len()..], ["--progress", "--join", "localhost:15151"]);
+        let dev = Prefs {
+            game_sound: false,
+            language: "ru".into(),
+            mods_developer: true,
+            mods_dev_folders: vec!["/src/my-mod".into()],
+            mods_block_native: true,
+            ..Prefs::default()
+        };
+        dev.save(&paths.prefs()).unwrap();
         let ru = launch_plan(&paths, exe).unwrap();
+        assert_eq!(ru.args[6..], ["--mods-dev", "/src/my-mod", "--mods-block-native"]);
         assert_eq!(ru.env, [("SDL_AUDIODRIVER".to_string(), "dummy".to_string())]);
         assert_eq!(
             (ru.title.as_str(), &ru.args[5]),
@@ -853,6 +884,7 @@ mod embed_tests {
             Cmd::Visible(false),
             Cmd::Layout(Layout::GlRgba),
             Cmd::Layout(Layout::Bgra),
+            Cmd::ModsReload,
             Cmd::Quit,
         ];
         for c in all {

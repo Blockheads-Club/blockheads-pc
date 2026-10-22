@@ -129,6 +129,8 @@ pub struct View {
     pub toasts: Vec<(Instant, String)>,
     /// The server the session belongs to (`None`: single-player or no session).
     pub server: Option<String>,
+    /// Developer folder mods are loaded (F5 reloads them).
+    pub dev: bool,
 }
 
 /// What the player did in the mod UI.

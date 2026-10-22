@@ -121,8 +121,8 @@ export async function mockTauri(page: Page) {
     ];
     const overview = () => {
       if (q.get('mods') === 'error') throw { code: 'io', detail: 'Permission denied (os error 13)', file: '/home/mira/.local/share/blockheads-pc/mods' };
-      const att = s.mods.filter((m: any) => ['failed', 'blocked', 'dependency', 'permissions'].includes(m.status)).length;
-      return { dir: '/home/mira/.local/share/blockheads-pc/mods', size: 3_400_000, mods: s.mods, problems: [], error: null, attention: att, updates: 1, loader_ready: false };
+      const att = s.mods.filter((m: any) => ['failed', 'blocked', 'dependency', 'permissions', 'budget'].includes(m.status)).length;
+      return { dir: '/home/mira/.local/share/blockheads-pc/mods', size: 3_400_000, mods: s.mods, problems: [], error: null, attention: att, updates: 1, loader_ready: true };
     };
     const bmod = (o: any) => ({ id: 'sky-core', name: 'Sky Core', description: 'Shared sky and weather code other mods use.', owners: ['lumen'], repo: 'https://github.com/lumen/sky-core',
       tags: ['library'], version: '1.2.0', compatible: true, compatible_version: '1.2.0', sides: ['client'], permissions: [], native: false, depends: {}, size: 210_000,
@@ -176,7 +176,9 @@ export async function mockTauri(page: Page) {
       mods_clear_servers: () => ((s.servers = { total: 0, servers: [] }), s.servers),
       mods_dev_inspect: (a) => ({ path: a.path, id: 'my-mod', version: '0.1.0-dev', name: 'My mod', permissions: [], native: false,
         errors: ['client/ui.luau: entry point is missing'], warnings: ['LICENSE: missing (needed for the public list)'] }),
-      mods_dev_reload: () => { throw { code: 'needsLoader' }; }
+      mods_dev_reload: () => { if (s.game !== 'running' && s.game !== 'starting') throw { code: 'notRunning' }; },
+      mods_dev_fingerprint: () => 'fp',
+      mods_dev_join: () => handlers.game_start({})
     };
     const update = { version: '0.2.0', size_mb: 43, notes: ['Smoother camera panning', 'Fixes a crash when importing saves', 'Turkish translation'] };
     const handlers: Record<string, (a: any) => any> = {

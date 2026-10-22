@@ -71,6 +71,10 @@ export const api = {
   modsClearServers: () => invoke<CacheOverview>('mods_clear_servers'),
   modsDevInspect: (path: string) => invoke<DevMod>('mods_dev_inspect', { path }),
   modsDevReload: (path: string) => invoke<void>('mods_dev_reload', { path }),
+  /** Changes when a file in one of the folders changes (live reload). */
+  modsDevFingerprint: (paths: string[]) => invoke<string>('mods_dev_fingerprint', { paths }),
+  /** Starts the game and joins this server from its main menu. */
+  modsDevJoin: (address: string) => invoke<Started>('mods_dev_join', { address }),
 
   /** Native pickers; `null` when the user cancels. */
   async pickFile(extensions: string[], name: string): Promise<string | null> {

@@ -101,6 +101,7 @@ fn commands_become_window_events() {
     let ev = |c: Cmd| cmd_event(&c);
     assert_eq!(ev(Cmd::Size { width: 1, height: 1 }), None);
     assert_eq!(ev(Cmd::Quit), None);
+    assert_eq!(ev(Cmd::ModsReload), None);
     assert_eq!(ev(Cmd::Layout(bhpc_launcher::embed::Layout::GlRgba)), None);
     assert_eq!(ev(Cmd::Move { x: 1.0, y: 2.0 }), Some(Event::MouseMove { x: 1.0, y: 2.0 }));
     for (n, b) in

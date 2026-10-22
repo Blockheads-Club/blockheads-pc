@@ -1,6 +1,6 @@
 //! Developer mode: mods loaded straight from a source folder (the `bhmod check` layout). The launcher checks the
-//! folder and remembers it; loading it into the game, reloading on change and the live log need the in-game loader
-//! (milestone M6), so [`reload`] answers `needsLoader` until then.
+//! folder and remembers it and passes the folders to the game (`--mods-dev`); [`reload`] asks the running game to load
+//! them again, [`fingerprint`] tells when a folder's files changed (live reload).
 
 use std::path::Path;
 
@@ -51,7 +51,32 @@ pub fn add_folder(folders: &[String], path: &str) -> Vec<String> {
     out
 }
 
-/// Loads or reloads a folder mod in the running game: needs the in-game mod loader (M6).
-pub fn reload(_path: &Path) -> MRes<()> {
-    Err(ModError::new("needsLoader"))
+/// Asks the running game (its stdin, `None` when no game runs in the launcher's window) to reload its mods.
+pub fn reload(input: Option<&std::sync::mpsc::Sender<String>>) -> MRes<()> {
+    let tx = input.ok_or_else(|| ModError::new("notRunning"))?;
+    tx.send(crate::embed::Cmd::ModsReload.encode()).map_err(|_| ModError::new("notRunning"))
+}
+
+/// A number that changes when a file below `path` is added, removed, resized or modified.
+pub fn fingerprint(path: &Path) -> u64 {
+    fn walk(p: &Path, acc: &mut u64) {
+        let Ok(rd) = std::fs::read_dir(p) else { return };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let Ok(md) = e.metadata() else { continue };
+            let name = e.file_name().to_string_lossy().into_owned();
+            let mtime =
+                md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).unwrap_or_default();
+            for b in name.bytes().chain(md.len().to_le_bytes()).chain(mtime.as_nanos().to_le_bytes()) {
+                *acc = (*acc ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+            }
+            if md.is_dir() {
+                walk(&e.path(), acc);
+            }
+        }
+    }
+    let mut acc = 0xcbf2_9ce4_8422_2325;
+    walk(path, &mut acc);
+    acc
 }

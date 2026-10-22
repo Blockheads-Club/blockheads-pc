@@ -324,7 +324,7 @@ fn overview_statuses() {
     assert_eq!(st["srv"], ("failed", Some("server-only")));
     assert_eq!(st["newloader"], ("failed", Some("loader")));
     assert_eq!(ov.attention, 3);
-    assert!(!ov.loader_ready);
+    assert!(ov.loader_ready);
     let off_m = ov.mods.iter().find(|m| m.id == "offmod").unwrap();
     assert!(off_m.reviewed);
     assert_eq!(off_m.update.as_deref(), Some("2.0.0"));
@@ -943,5 +943,47 @@ fn developer_folders() {
     let f = dev::add_folder(&[], "/a");
     assert_eq!(dev::add_folder(&f, "/a"), ["/a"]);
     assert_eq!(dev::add_folder(&f, "/b"), ["/a", "/b"]);
-    assert_eq!(dev::reload(&root).unwrap_err().code, "needsLoader");
+    // Reload: only with a running game in the launcher's window.
+    assert_eq!(dev::reload(None).unwrap_err().code, "notRunning");
+    let (tx, rx) = std::sync::mpsc::channel();
+    dev::reload(Some(&tx)).unwrap();
+    assert_eq!(rx.recv().unwrap(), "mods-reload");
+    drop(rx);
+    assert_eq!(dev::reload(Some(&tx)).unwrap_err().code, "notRunning");
+    // The fingerprint follows the files.
+    let a = dev::fingerprint(&root);
+    assert_eq!(a, dev::fingerprint(&root));
+    std::fs::create_dir_all(root.join("client/sub")).unwrap();
+    std::fs::write(root.join("client/sub/x.luau"), "return 1").unwrap();
+    let b = dev::fingerprint(&root);
+    assert_ne!(a, b);
+    std::fs::write(root.join("client/sub/x.luau"), "return 22").unwrap();
+    assert_ne!(b, dev::fingerprint(&root));
+    assert_eq!(dev::fingerprint(&t.path().join("none")), dev::fingerprint(&t.path().join("none2")));
+}
+
+#[test]
+fn live_reports_from_the_game() {
+    use super::live;
+    let line = r#"@mods [{"id":"aaa","version":"1.0.0","state":"budget","origin":"mine","ms":1.5,"peak_ms":30.0,"calls":9,"reason":"3 faults within 60 s"},{"id":"srv","version":"1.0.0","state":"running","origin":"server","ms":0.0,"peak_ms":0.0,"calls":1}]"#;
+    let l = live::parse(line).unwrap();
+    assert_eq!((l.len(), l[1].reason.as_deref()), (2, None));
+    assert_eq!(live::parse("@mods nope"), None);
+    assert_eq!(live::parse("[mods] x"), None);
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    std::fs::write(dir.join("aaa.bhmod"), pkg("aaa", "1.0.0", "")).unwrap();
+    std::fs::write(dir.join("bbb.bhmod"), pkg("bbb", "1.0.0", "")).unwrap();
+    let mut ov = overview(dir, None, false);
+    assert_eq!(ov.attention, 0);
+    let mut l2 = l.clone();
+    l2.push(live::LiveMod { id: "bbb".into(), state: "loaded".into(), ..l[0].clone() });
+    live::apply(&mut ov, &l2);
+    let a = ov.mods.iter().find(|m| m.id == "aaa").unwrap();
+    assert_eq!((a.status.as_str(), a.reason.as_deref()), ("budget", Some("3 faults within 60 s")));
+    assert_eq!(a.live.as_ref().unwrap().calls, 9);
+    let b = ov.mods.iter().find(|m| m.id == "bbb").unwrap();
+    assert_eq!((b.status.as_str(), b.live.is_some()), ("ready", true));
+    assert_eq!(ov.attention, 1);
+    assert_eq!(live::args(&crate::prefs::Prefs::default()), Vec::<String>::new());
 }

@@ -2,9 +2,9 @@
 //! `mods.toml`, the same format the mod hosts read), the public mod index, installs with size and SHA-256 checks
 //! and the per-server cache of mods that servers send.
 //!
-//! The in-game mod loader is milestone M6: until it ships nothing here runs a mod. This module only manages the
-//! files, so every mod that is ready to run reports the status `ready`; the live states (`running`, `budget`,
-//! `failed` at run time) come from the loader later.
+//! The in-game mod loader (`bhpc-run`, crate `bhpc-mods`) runs the mods; this module manages the files, so a mod
+//! that is ready to run reports `ready` here and the running game's report ([`live`]) turns that into `running`,
+//! `budget` or `failed`.
 //!
 //! Layout below the data folder:
 //!
@@ -31,6 +31,7 @@ pub mod cache;
 pub mod dev;
 pub mod index;
 pub mod install;
+pub mod live;
 
 pub use index::{Fetch, IndexFile};
 pub use install::Candidate;
@@ -314,7 +315,7 @@ pub struct Sides {
 }
 
 /// One installed mod as the Mods screen shows it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ModSummary {
     pub id: String,
     pub name: BTreeMap<String, String>,
@@ -357,9 +358,11 @@ pub struct ModSummary {
     pub origin: String,
     pub installed_at: u64,
     pub native_allowed_at: Option<u64>,
+    /// The running game's report for this mod (see [`live`]).
+    pub live: Option<live::LiveMod>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Overview {
     pub dir: String,
     pub size: u64,
@@ -371,7 +374,7 @@ pub struct Overview {
     pub attention: usize,
     /// Mods with an update on the public list.
     pub updates: usize,
-    /// The in-game loader that runs client mods is not shipped yet (M6).
+    /// The in-game loader runs client mods (Blockheads PC 0.2 and later).
     pub loader_ready: bool,
 }
 
@@ -381,7 +384,7 @@ fn runtime_name(m: &Manifest) -> Option<String> {
 }
 
 /// Statuses that need the player's attention.
-pub const ATTENTION: [&str; 4] = ["failed", "blocked", "dependency", "permissions"];
+pub const ATTENTION: [&str; 5] = ["failed", "blocked", "dependency", "permissions", "budget"];
 
 /// Every installed mod with its status. `index` gives the reviewed and update flags; `block_native` is the
 /// "never allow native mods" setting.
@@ -394,7 +397,7 @@ pub fn overview(dir: &Path, idx: Option<&IndexFile>, block_native: bool) -> Over
         error: None,
         attention: 0,
         updates: 0,
-        loader_ready: false,
+        loader_ready: true,
     };
     if let Err(e) = std::fs::read_dir(dir) {
         if e.kind() != std::io::ErrorKind::NotFound {
@@ -499,6 +502,7 @@ pub fn overview(dir: &Path, idx: Option<&IndexFile>, block_native: bool) -> Over
             origin: rec.origin,
             installed_at: rec.installed,
             native_allowed_at: rec.native_allowed,
+            live: None,
         });
     }
     ov

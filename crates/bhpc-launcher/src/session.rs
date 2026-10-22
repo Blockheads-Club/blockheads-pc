@@ -106,6 +106,8 @@ pub struct Snapshot {
     pub signal: Option<i32>,
     /// Start-up progress (of the running game, or of the last one: where it got to before it ended).
     pub progress: Option<Info>,
+    /// The mods the running game runs (its last `@mods` report; `None` before one or without the mod loader).
+    pub mods: Option<Vec<crate::mods::live::LiveMod>>,
     /// Log lines after the number the poller passed.
     pub lines: Vec<String>,
     /// Pass this next time.
@@ -145,9 +147,14 @@ pub struct Session {
     grace: Duration,
     /// Called with the text of every `@copy` line of the game (see [`crate::embed::copy_line`]).
     on_copy: CopyHandler,
+    /// The last `@mods` report of the running game.
+    live: LiveMods,
     /// How long an in-window game asked to quit may take to save and end (see [`Session::stop`]).
     quit_grace: Duration,
 }
+
+/// The running game's last mod report.
+pub type LiveMods = Arc<Mutex<Option<Vec<crate::mods::live::LiveMod>>>>;
 
 /// What the launcher does with text the game copied.
 pub type CopyHandler = Arc<Mutex<Option<Box<dyn Fn(String) + Send>>>>;
@@ -161,13 +168,13 @@ impl Default for Session {
     }
 }
 
-/// Reads lines into the log. With `track`, progress lines (see [`progress`]) go to the tracker and `@copy` lines to the
-/// copy handler instead of the log.
+/// Reads lines into the log. With `track`, progress lines (see [`progress`]) go to the tracker, `@copy` lines to the
+/// copy handler and `@mods` lines to the live mod report instead of the log.
 /// (Not generic, so that stdout and stderr share one instantiation.)
 fn pump(
     source: Box<dyn Read + Send>,
     log: Arc<Mutex<LogBuffer>>,
-    track: Option<(Arc<Mutex<Tracker>>, Instant, CopyHandler)>,
+    track: Option<(Arc<Mutex<Tracker>>, Instant, CopyHandler, LiveMods)>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(source);
@@ -175,7 +182,11 @@ fn pump(
         while reader.read_until(b'\n', &mut buf).map(|n| n > 0).unwrap_or(false) {
             let line = String::from_utf8_lossy(&buf).trim_end().to_string();
             buf.clear();
-            if let Some((tracker, began, copy)) = &track {
+            if let Some((tracker, began, copy, live)) = &track {
+                if let Some(mods) = crate::mods::live::parse(&line) {
+                    *live.lock().expect("live lock") = Some(mods);
+                    continue;
+                }
                 if let Some(parsed) = progress::parse_line(&line) {
                     tracker.lock().expect("tracker lock").feed(parsed, began.elapsed());
                     continue;
@@ -237,6 +248,7 @@ impl Session {
             stall: progress::STALL,
             grace,
             on_copy: Arc::default(),
+            live: Arc::default(),
             quit_grace: QUIT_GRACE,
         }
     }
@@ -277,15 +289,15 @@ impl Session {
         hide_console(&mut command);
         let mut child = command.spawn().map_err(|e| SessionError::Spawn(format!("{}: {e}", program.display())))?;
         self.log.lock().expect("log lock").clear();
+        *self.live.lock().expect("live lock") = None;
         let model = self.history.as_deref().map(History::load).unwrap_or_default().model();
         *self.tracker.lock().expect("tracker lock") = Tracker::with_stall(model, self.stall);
         let started = Instant::now();
         let mut readers = Vec::new();
-        readers.extend(
-            child.stdout.take().map(|s| {
-                pump(Box::new(s), self.log.clone(), Some((self.tracker.clone(), started, self.on_copy.clone())))
-            }),
-        );
+        readers.extend(child.stdout.take().map(|s| {
+            let track = (self.tracker.clone(), started, self.on_copy.clone(), self.live.clone());
+            pump(Box::new(s), self.log.clone(), Some(track))
+        }));
         readers.extend(child.stderr.take().map(|s| pump(Box::new(s), self.log.clone(), None)));
         let input = child.stdin.take().map(|s| feed(Box::new(s)));
         let embedded = args.iter().any(|a| a == "--embed");
@@ -408,6 +420,7 @@ impl Session {
             // While a game runs only its own progress counts: before its first line the screen starts at 0 %, not at
             // where the previous session ended.
             progress: if self.run.is_some() { tracker } else { self.last.as_ref().and_then(|f| f.progress.clone()) },
+            mods: self.run.as_ref().and_then(|_| self.live.lock().expect("live lock").clone()),
             lines,
             next,
         }

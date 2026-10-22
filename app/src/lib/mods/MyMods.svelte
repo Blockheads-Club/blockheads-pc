@@ -100,7 +100,7 @@
                   <div class="mm">
                     <span class="nm">{modName(m)}<span class="mono hint v">{m.version}</span></span>
                     <span class="bd">
-                      <ModStatus status={m.status} />
+                      <ModStatus status={mods.statusOf(m)} />
                       {#if m.update}<Badges kind="update" version={m.update} />{/if}
                       {#if m.native}<DangerBadge />{/if}
                     </span>

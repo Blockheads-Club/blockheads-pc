@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { api } from '../api';
   import { t } from '../i18n.svelte';
   import { store } from '../store.svelte';
@@ -15,11 +15,15 @@
   const GUIDE = 'https://github.com/Blockheads-Club/mod-sdk#readme';
   let level = $state<'all' | 'errors' | 'warnings'>('all');
   const sel = $derived(mods.dev.find((d) => d.path === mods.devSelected) ?? null);
-  /** The log: the launcher's own lines plus the folder checks (the game's lines arrive with the loader). */
+  /** The log: the folder checks, the launcher's own lines and the running game's mod-loader lines. */
+  const levelOf = (s: string) => (/ error /.test(s) ? 'e' : / warn /.test(s) ? 'w' : 'i');
   const lines = $derived([
     ...mods.dev.flatMap((d) => [...d.errors.map((e) => ({ k: 'e', s: `${d.id ?? d.path}: ${e}` })), ...d.warnings.map((w) => ({ k: 'w', s: `${d.id ?? d.path}: ${w}` }))]),
-    ...mods.devLog.map((s) => ({ k: 'i', s }))
+    ...mods.devLog.map((s) => ({ k: 'i', s })),
+    ...mods.gameLog.map((s) => ({ k: levelOf(s), s }))
   ]);
+  /** The folder mods of the running game, with the time they use. */
+  const running = $derived((store.game.mods ?? []).filter((l) => l.origin === 'dev'));
   const errors = $derived(lines.filter((l) => l.k === 'e').length);
   const warnings = $derived(lines.filter((l) => l.k === 'w').length);
   const shown = $derived(lines.filter((l) => level === 'all' || (level === 'errors' ? l.k === 'e' : l.k === 'w')));
@@ -35,9 +39,12 @@
     }
   }
 
+  let timer: ReturnType<typeof setInterval> | undefined;
   onMount(() => {
     void mods.loadDev();
+    timer = setInterval(() => void mods.devWatch(), 1000);
   });
+  onDestroy(() => clearInterval(timer));
 </script>
 
 <svelte:window onkeydown={keydown} />
@@ -78,12 +85,16 @@
         <section class="card sect">
           <h3>{t('mods.dev.local')}</h3>
           <p class="hint">{t('mods.dev.localSoon')}</p>
-          <Button variant="primary" icon="play" disabled>{t('mods.dev.join')}</Button>
+          <Button variant="primary" icon="play" disabled={store.active} onclick={() => mods.devJoin()}>{t('mods.dev.join')}</Button>
           <p class="hint">{t('mods.dev.localHint')}</p>
         </section>
         <section class="card sect">
           <h3>{t('mods.dev.limits')}</h3>
-          <p class="hint">{t('mods.limitsIdle')}</p>
+          {#each running as l (l.id)}
+            <p class="mono">{`${l.id}: ${t('mods.limitsNow', { ms: l.ms.toFixed(1), peak: l.peak_ms.toFixed(1) })}`}</p>
+          {:else}
+            <p class="hint">{t('mods.limitsIdle')}</p>
+          {/each}
         </section>
       </div>
       <section class="card sect logc">

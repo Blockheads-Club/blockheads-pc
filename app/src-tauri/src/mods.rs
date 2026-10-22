@@ -1,8 +1,8 @@
 //! Tauri commands for client mods over `bhpc_launcher::mods` (all logic and its tests live there). This file adds
 //! the HTTPS client, the checked packages waiting for "Install" and progress events.
 //!
-//! The in-game mod loader (milestone M6) is not here yet: installed mods are managed but do not run, and the
-//! developer reload answers `needsLoader`.
+//! The running game's side (developer reload, join localhost, the live mod report in the game poll) is in `lib.rs`,
+//! next to the game session.
 
 use bhpc_launcher::config::LaunchConfig;
 use bhpc_launcher::mods::cache::{self, CacheOverview};
@@ -261,10 +261,4 @@ pub async fn mods_clear_servers() -> MRes<CacheOverview> {
 #[tauri::command]
 pub async fn mods_dev_inspect(path: String) -> MRes<DevMod> {
     blocking(move || dev::inspect(&PathBuf::from(path))).await
-}
-
-/// Loads or reloads a folder mod in the running game: needs the in-game loader (M6).
-#[tauri::command]
-pub async fn mods_dev_reload(path: String) -> MRes<()> {
-    dev::reload(Path::new(&path))
 }
