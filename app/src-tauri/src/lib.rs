@@ -4,6 +4,7 @@
 mod embed;
 #[cfg(target_os = "linux")]
 mod embed_gl;
+mod mods;
 mod tray;
 
 use bhpc_launcher::apk::{self, ApkReport};
@@ -454,6 +455,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(App::default())
+        .manage(mods::Pending::default())
         .setup(|app| {
             // The main window is created hidden (tauri.conf.json) and runs the boot work; `main_ready` shows it
             // (GTK warns when the frameless window gets its title bar after it was realized and shown early).
@@ -519,7 +521,22 @@ pub fn run() {
             save_log,
             update_check,
             update_install,
-            update_progress
+            update_progress,
+            mods::mods_overview,
+            mods::mods_index,
+            mods::mods_plan,
+            mods::mods_inspect_file,
+            mods::mods_inspect_link,
+            mods::mods_install,
+            mods::mods_set_enabled,
+            mods::mods_set_grant,
+            mods::mods_remove,
+            mods::mods_auto_update,
+            mods::mods_servers,
+            mods::mods_clear_server,
+            mods::mods_clear_servers,
+            mods::mods_dev_inspect,
+            mods::mods_dev_reload
         ])
         .build(tauri::generate_context!())
         .expect("error while building the Blockheads PC launcher");

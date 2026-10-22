@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
 import type { ApkReport, BootState, LaunchConfig, Prefs, Snapshot } from './types';
+import { makeModsApi } from './mods/mock';
 
 export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H' };
 
@@ -23,7 +24,13 @@ export const PREFS: Prefs = {
   auto_update_check: true,
   keep_private_copy: true,
   game_sound: true,
-  mute_in_background: false
+  mute_in_background: false,
+  mods_auto_update: true,
+  mods_cache_limit_mb: 1024,
+  mods_block_native: false,
+  mods_developer: false,
+  mods_dev_folders: [],
+  mods_dev_watch: true
 };
 
 export function makeSnap(over: Partial<Snapshot> = {}): Snapshot {
@@ -75,6 +82,7 @@ export function makeApi(over: Record<string, unknown> = {}) {
     updateInstall: vi.fn(async () => {}),
     updateProgress: vi.fn(async () => ({ stage: 'downloading', percent: 42, done_mb: 18, total_mb: 43, mb_per_s: 1.4, eta_s: 30 })),
     openUrl: vi.fn(async () => {}),
+    ...makeModsApi(),
     pickFile: vi.fn(async () => '/dl/TheBlockheads.apk' as string | null),
     pickFolder: vi.fn(async () => '/dl/saves' as string | null),
     pickSavePath: vi.fn(async () => '/dl/blockheads-pc.log' as string | null),

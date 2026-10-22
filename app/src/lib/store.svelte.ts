@@ -26,7 +26,13 @@ export const DEFAULT_PREFS: Prefs = {
   auto_update_check: true,
   keep_private_copy: true,
   game_sound: true,
-  mute_in_background: false
+  mute_in_background: false,
+  mods_auto_update: true,
+  mods_cache_limit_mb: 1024,
+  mods_block_native: false,
+  mods_developer: false,
+  mods_dev_folders: [],
+  mods_dev_watch: true
 };
 
 const IDLE: Snapshot = {

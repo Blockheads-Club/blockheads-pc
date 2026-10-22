@@ -21,7 +21,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/lib/**/*.{ts,svelte}', 'src/routes/**/*.{ts,svelte}'],
-      exclude: ['src/**/*.test.ts', 'src/lib/mock-api.ts', 'src/lib/test-utils.ts', 'src/lib/types.ts'],
+      exclude: ['src/**/*.test.ts', 'src/lib/mock-api.ts', 'src/lib/test-utils.ts', 'src/lib/types.ts', 'src/lib/mods/types.ts', 'src/lib/mods/mock.ts'],
       reporter: ['text', 'text-summary'],
       thresholds: { lines: 100, branches: 100, functions: 100, statements: 100 }
     }
