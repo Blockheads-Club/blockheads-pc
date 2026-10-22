@@ -27,7 +27,7 @@ fn pkg_sides(id: &str, version: &str, sides: &str, extra: &str) -> Vec<u8> {
     zip_files(
         &format!(
             "schema = 1\nid = \"{id}\"\nversion = \"{version}\"\nname = {{ en = \"Mod {id}\" }}\nauthors = [\"pixelpan\"]\n\
-             license = \"MIT\"\napi = \"^0.1\"\n{extra}\n[sides]\n{sides}\n{entries}"
+             license = \"MIT\"\napi = \"^0.2\"\n{extra}\n[sides]\n{sides}\n{entries}"
         ),
         &files,
     )
@@ -72,7 +72,7 @@ impl Fetch for Net {
 }
 
 fn version_json(id: &str, v: &str, bytes: &[u8], extra: &str) -> String {
-    let api = if extra.contains(r#""api""#) { "" } else { r#","api":"^0.1""# };
+    let api = if extra.contains(r#""api""#) { "" } else { r#","api":"^0.2""# };
     format!(
         r#"{{"version":"{v}","url":"https://m.test/{id}-{v}.bhmod","sha256":"{}","size":{},"sides":["client"]{api},"published":"2026-10-01"{extra}}}"#,
         sha(bytes),
@@ -87,7 +87,7 @@ fn index_json(mods: &[(&str, Vec<String>, &str)]) -> String {
             format!(r#"{{"id":"{id}","name":"Mod {id}","owners":["lumen"],"repo":"https://g.test/{id}","tags":[{tags}],"versions":[{}]}}"#, vs.join(","))
         })
         .collect();
-    format!(r#"{{"schema":1,"generated":"2026-10-21T12:00:00Z","api":["0.1.0"],"mods":[{}]}}"#, ms.join(","))
+    format!(r#"{{"schema":1,"generated":"2026-10-21T12:00:00Z","api":["0.2.0"],"mods":[{}]}}"#, ms.join(","))
 }
 
 fn index_with(mods: &[(&str, Vec<String>, &str)]) -> IndexFile {
@@ -282,7 +282,7 @@ fn overview_statuses() {
     let native = pkg("shaders", "0.7.2", "[permissions]\nnative = true\n");
     let srv = pkg_sides("srv", "1.0.0", "server = true", "");
     let api = pkg_req("oldapi", "api = \"^9\"");
-    let loader = pkg_req("newloader", "api = \"^0.1\"\nloader = \"^9\"");
+    let loader = pkg_req("newloader", "api = \"^0.2\"\nloader = \"^9\"");
     let off = pkg("offmod", "1.0.0", "");
     for (n, b) in [
         ("dep", &dep),
@@ -547,7 +547,7 @@ fn plans_from_the_index() {
         ("base", vec![version_json("base", "1.0.0", &a, "")], ""),
         (
             "srv",
-            vec![r#"{"version":"1.0.0","url":"https://m.test/s.bhmod","sha256":"00","sides":["server"],"api":"^0.1"}"#
+            vec![r#"{"version":"1.0.0","url":"https://m.test/s.bhmod","sha256":"00","sides":["server"],"api":"^0.2"}"#
                 .to_string()],
             "",
         ),
@@ -635,7 +635,7 @@ fn downloads_check_size_hash_and_manifest() {
                 version_json("aaa", "1.0.0", &bytes, ""),
                 version_json("aaa", "1.1.0", &bytes, r#","mirror":"https://mirror.test/a""#),
                 format!(
-                    r#"{{"version":"1.2.0","url":"https://m.test/aaa-1.2.0.bhmod","sha256":"{}","sides":["client"],"api":"^0.1"}}"#,
+                    r#"{{"version":"1.2.0","url":"https://m.test/aaa-1.2.0.bhmod","sha256":"{}","sides":["client"],"api":"^0.2"}}"#,
                     sha(&bytes)
                 ),
                 version_json("aaa", "1.3.0", &bytes, r#","mirror":"https://mirror.test/missing""#),
@@ -926,7 +926,7 @@ fn developer_folders() {
     std::fs::write(
         root.join("mod.toml"),
         "schema = 1\nid = \"my-mod\"\nversion = \"0.1.0-dev\"\nname = { en = \"My mod\" }\nauthors = [\"me\"]\nlicense = \"MIT\"\n\
-         api = \"^0.1\"\n[sides]\nclient = true\n[entry.client]\nruntime = \"lua\"\npath = \"client/main.luau\"\n[permissions]\nnative = true\n",
+         api = \"^0.2\"\n[sides]\nclient = true\n[entry.client]\nruntime = \"lua\"\npath = \"client/main.luau\"\n[permissions]\nnative = true\n",
     )
     .unwrap();
     let m = dev::inspect(&root).unwrap();

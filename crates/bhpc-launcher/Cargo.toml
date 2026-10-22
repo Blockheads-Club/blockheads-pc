@@ -14,9 +14,9 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 dirs = "6"
-# Mods: mod.toml and .bhmod package checks, the same rules as `bhmod check` and the mod hosts, from mod-sdk at the rev
-# the Blockheads Server pins (keep them equal).
-bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f8f4f93" }
+# Mods: mod.toml and .bhmod package checks, the same rules as `bhmod check` and the mod hosts (mod-sdk, pinned in
+# the workspace).
+bhmod-manifest.workspace = true
 semver = "1"
 serde_json = "1"
 
