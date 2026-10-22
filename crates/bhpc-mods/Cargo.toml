@@ -1,0 +1,23 @@
+[package]
+name = "bhpc-mods"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Client mod loader of Blockheads PC: the 0xBC join flow (HELLO, mod list, downloads, READY), the mod host session (Luau + WASM through bhmod-core), and the in-game mod UI drawn as an overlay."
+
+[dependencies]
+bhpc-launcher = { path = "../bhpc-launcher" }
+bhmod-core.workspace = true
+bhmod-wasm.workspace = true
+bhmod-proto.workspace = true
+bhmod-manifest.workspace = true
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+ab_glyph = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
