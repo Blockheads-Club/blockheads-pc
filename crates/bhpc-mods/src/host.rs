@@ -328,23 +328,16 @@ impl ClientHost {
         *self.bridge.local.borrow_mut() = alias.to_string();
     }
 
-    /// A chat line from the server (`ALIAS: text` or a server message). `None`: a mod hid it; otherwise the line
-    /// to show (possibly changed).
-    pub fn chat_received(&mut self, line: &str) -> Option<String> {
-        let (player, text) = match line.split_once(": ") {
-            Some((who, text)) if !who.is_empty() && !who.contains(' ') => (who.to_string(), text.to_string()),
-            _ => (String::new(), line.to_string()),
-        };
+    /// A chat message from the server (`alias` empty for server messages). `None`: a mod hid it; otherwise the
+    /// text to show (possibly changed).
+    pub fn chat_received(&mut self, alias: &str, text: &str) -> Option<String> {
         if !self.host.wants(bhmod_core::types::EventKind::Chat) {
-            return Some(line.to_string());
+            return Some(text.to_string());
         }
-        match self.host.fire(Event::Chat { player: player.clone(), text: text.clone(), cancelled: false }) {
-            Event::Chat { cancelled: true, .. } => None,
-            Event::Chat { text: new, .. } if new != text => {
-                Some(if player.is_empty() { new } else { format!("{player}: {new}") })
-            }
-            _ => Some(line.to_string()),
-        }
+        let ev = self.host.fire(Event::Chat { player: alias.to_string(), text: text.to_string(), cancelled: false });
+        // `fire` hands back the event it was given, with the handlers' changes.
+        let Event::Chat { text: new, cancelled, .. } = ev else { return None };
+        (!cancelled).then_some(new)
     }
 
     /// A line the player typed. True when a mod handled it (a mod command, or a cancelled `command` event): it is

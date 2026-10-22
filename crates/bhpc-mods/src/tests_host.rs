@@ -71,7 +71,7 @@ fn chat_commands_ticks_players_and_channels() {
     assert!(problems.is_empty());
     assert!(!h.is_empty());
     // Before enable nothing runs.
-    assert_eq!(h.chat_received("A: hide"), Some("A: hide".into()));
+    assert_eq!(h.chat_received("A", "hide"), Some("hide".into()));
     assert!(!h.typed("/hello"));
     h.enable("World", "w1");
     h.enable("World", "w1");
@@ -81,11 +81,10 @@ fn chat_commands_ticks_players_and_channels() {
         .any(|l| l.text == "enabled" && l.level == "warn" && l.mod_id.as_deref() == Some("echo")));
     assert!(h.take_new_logs().is_empty());
     h.set_local_player("ME");
-    assert_eq!(h.chat_received("BOB: hide"), None);
-    assert_eq!(h.chat_received("BOB: up"), Some("BOB: UP".into()));
-    assert_eq!(h.chat_received("up"), Some("UP".into()));
-    assert_eq!(h.chat_received("two words: up"), Some("two words: up".into()));
-    assert_eq!(h.chat_received("BOB: same"), Some("BOB: same".into()));
+    assert_eq!(h.chat_received("BOB", "hide"), None);
+    assert_eq!(h.chat_received("BOB", "up"), Some("UP".into()));
+    assert_eq!(h.chat_received("", "up"), Some("UP".into()));
+    assert_eq!(h.chat_received("BOB", "same"), Some("same".into()));
     let t = Instant::now();
     h.tick(t);
     h.tick(t + Duration::from_millis(16));

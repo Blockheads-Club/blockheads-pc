@@ -9,7 +9,7 @@
 //! +500  drag 100 400 700 400 800   # press, move for 800 ms, release
 //! +0    hold 512 300 1500      # press, wait, release
 //! +200  text My World          # committed text (the rest of the line, spaces included)
-//! +100  key enter              # key down + up (a-z 0-9 enter escape backspace tab space delete left right up down)
+//! +100  key enter              # key down + up (a-z 0-9 enter escape backspace tab space delete f9 f11 arrows)
 //! +100  keydown left           # and keyup, for held keys
 //! +100  shot menu              # screenshot `<name>.png` in the shot directory on the next presented frame
 //! +100  mark world              # start a frame-time segment (p50/p99 are reported per segment)
@@ -92,6 +92,7 @@ pub fn key_code(name: &str) -> Option<Key> {
         "tab" => 43,
         "space" => 44,
         "delete" => 76,
+        "f9" => 66,
         "f11" => 68,
         "right" => 79,
         "left" => 80,

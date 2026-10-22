@@ -11,6 +11,7 @@
 pub mod host;
 pub mod join;
 pub mod session;
+pub mod ui;
 pub mod view;
 
 /// The loader version sent in `HELLO.loader`.
@@ -32,5 +33,7 @@ mod tests_join;
 
 /// The `blockheads:api` version the client host implements.
 pub const API_VERSION: &str = bhmod_core::API_VERSION;
+#[cfg(test)]
+mod tests_ui;
 #[cfg(test)]
 mod tests_view;

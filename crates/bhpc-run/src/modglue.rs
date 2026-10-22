@@ -54,6 +54,8 @@ pub struct ModsOptions {
 #[derive(Default)]
 pub struct Shared {
     pub view: Mutex<View>,
+    /// The mod UI's own state (open panel, native confirmation, clickable areas).
+    pub ui: Mutex<bhpc_mods::ui::ModUi>,
     cmds: Mutex<Vec<UiCmd>>,
     /// Bumped when `view` changes.
     pub serial: std::sync::atomic::AtomicU64,
@@ -97,8 +99,12 @@ struct Main {
     /// Server mods accepted for the coming world.
     accepted: Option<Vec<Accepted>>,
     host: Option<ClientHost>,
+    /// The running session belongs to the joined server (not single-player).
+    host_online: bool,
     placed: Vec<session::Placed>,
     menu: u32,
+    /// Since when the main menu renders without a world in between.
+    menu_since: Option<Instant>,
     joined_menu: bool,
     last_publish: Option<Instant>,
 }
@@ -291,7 +297,11 @@ impl ModGlue {
         };
         self.hooks.hook(t("-[MainMenuUI render:projectionMatrix:]"), Some(render), move |inv| {
             let me = inv.receiver();
-            MAIN.with(|m| m.borrow_mut().menu = me);
+            MAIN.with(|m| {
+                let mut m = m.borrow_mut();
+                m.menu = me;
+                m.menu_since.get_or_insert_with(Instant::now);
+            });
         });
     }
 
@@ -310,7 +320,7 @@ impl ModGlue {
                 for cmd in &cmds {
                     match cmd {
                         UiCmd::Decide { accept, native_ok } => out.extend(f.decide(*accept, *native_ok, now)),
-                        UiCmd::Dismiss | UiCmd::Reload => {}
+                        UiCmd::Dismiss | UiCmd::Reload | UiCmd::Cancel => {}
                     }
                 }
             }
@@ -324,6 +334,20 @@ impl ModGlue {
                     self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
                 UiCmd::Reload => reload(&self.opts, &self.shared),
+                UiCmd::Cancel => {
+                    log("download cancelled by the player");
+                    let conn = MAIN.with(|m| {
+                        let mut m = m.borrow_mut();
+                        m.flow = None;
+                        m.held = None;
+                        m.conn
+                    });
+                    if let Some(conn) = conn {
+                        self.objc.send(c, conn.matcher, "disconnect", &[]);
+                    }
+                    self.shared.view.lock().unwrap_or_else(PoisonError::into_inner).join = None;
+                    self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 UiCmd::Decide { .. } => {}
             }
         }
@@ -341,9 +365,11 @@ impl ModGlue {
     /// `--join HOST:PORT`: once the main menu renders, ask it to join (as a join link would).
     fn join_from_menu(&self, c: &mut Cpu) {
         let Some(target) = self.opts.join.as_deref() else { return };
+        // Only once the menu has settled (a fresh start shows it briefly before the first world).
         let menu = MAIN.with(|m| {
             let m = m.borrow();
-            if m.joined_menu {
+            let settled = m.menu_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(3));
+            if m.joined_menu || !settled {
                 0
             } else {
                 m.menu
@@ -357,9 +383,10 @@ impl ModGlue {
         log(&format!("joining {host}:{port} from the main menu"));
         let h = self.objc.new_string(c, host);
         let p = self.objc.new_string(c, port);
-        // The menu acts on a join link once its "Join World" portal is selected.
+        // As a join link would: the menu takes the address, then its "Join Online World" action connects.
         self.objc.send(c, menu, "selectJoinOption", &[]);
         self.objc.send(c, menu, "gameLaunchedWithUrlToJoinHost:port:", &[h, p]);
+        self.objc.send(c, menu, "joinOnlineWorldButtonTapped", &[]);
     }
 }
 
@@ -541,7 +568,18 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
 
 /// Starts the session's mods at the first update of a world, then fires `tick`.
 fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
-    let started = MAIN.with(|m| m.borrow().host.is_some());
+    MAIN.with(|m| m.borrow_mut().menu_since = None);
+    // A world that updates while a join is being negotiated is the one being left (the menu's): no session for it.
+    let (started, joining) = MAIN.with(|m| {
+        let m = m.borrow();
+        let joining = m.flow.as_ref().is_some_and(|f| {
+            matches!(f.stage(), Stage::Idle | Stage::Hello | Stage::Listing | Stage::Prompt | Stage::Downloading)
+        });
+        (m.host.is_some(), joining)
+    });
+    if joining {
+        return;
+    }
     if !started {
         start_session(o, opts, sh, c);
     }
@@ -596,6 +634,7 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     MAIN.with(|m| {
         let mut m = m.borrow_mut();
         m.host = Some(host);
+        m.host_online = server.is_some();
         m.placed = placed;
     });
     {
@@ -609,10 +648,13 @@ fn stop_session(sh: &Shared, why: &str) {
     let stopped = MAIN.with(|m| {
         let mut m = m.borrow_mut();
         m.placed.clear();
-        m.flow = None;
-        m.conn = None;
-        m.held = None;
-        m.accepted = None;
+        // Leaving a server's world ends that join; leaving a single-player world keeps a join in progress.
+        if m.host.is_some() && m.host_online {
+            m.flow = None;
+            m.conn = None;
+            m.held = None;
+            m.accepted = None;
+        }
         m.host.take().map(|mut h| {
             h.stop();
             h
@@ -673,8 +715,8 @@ fn apply_effects(o: &Objc, c: &mut Cpu) {
     for (e, p) in effects.iter().zip(packets) {
         match (e, conn) {
             (Effect::Chat(text), Some(conn)) => {
-                let s = o.new_string(c, text);
-                bypass(|| o.send(c, conn.client, "chatMessageRecieved:displayNotification:", &[s, 0]));
+                let d = chat_dict(o, c, "MOD", text);
+                bypass(|| o.send(c, conn.client, "chatMessageRecieved:displayNotification:", &[d, 1]));
             }
             (Effect::Chat(text), None) => log(&format!("chat (no client to show it): {text}")),
             (Effect::Channel { name, .. }, Some(conn)) => match p {
@@ -686,22 +728,44 @@ fn apply_effects(o: &Objc, c: &mut Cpu) {
     }
 }
 
+/// A dictionary `{message, alias}` as the game's chat uses.
+fn chat_dict(o: &Objc, c: &mut Cpu, alias: &str, text: &str) -> u32 {
+    let cls = o.class(c, "NSMutableDictionary");
+    let d = o.send(c, cls, "dictionary", &[]);
+    let (m, mk) = (o.new_string(c, text), o.new_string(c, "message"));
+    o.send(c, d, "setObject:forKey:", &[m, mk]);
+    let (a, ak) = (o.new_string(c, alias), o.new_string(c, "alias"));
+    o.send(c, d, "setObject:forKey:", &[a, ak]);
+    d
+}
+
 fn chat_in(o: &Objc, inv: &mut Invocation<'_>) {
-    let s = inv.arg(0).map_or(0, |v| v.word());
-    let busy = MAIN.with(|m| m.borrow().host.is_none());
-    if busy {
+    // The message is a dictionary `{message, alias, playerID, date, ...}`.
+    let dict = inv.arg(0).map_or(0, |v| v.word());
+    if MAIN.with(|m| m.borrow().host.is_none()) {
         return;
     }
     let c = inv.cpu();
-    let line = o.string(c, s);
-    let out = MAIN.with(|m| m.borrow_mut().host.as_mut().map(|h| h.chat_received(&line)));
+    let dict_sel = o.sel(c, "objectForKey:");
+    if o.send(c, dict, "respondsToSelector:", &[dict_sel]) == 0 {
+        return;
+    }
+    let (mk, ak) = (o.new_string(c, "message"), o.new_string(c, "alias"));
+    let (m, a) = (o.send(c, dict, "objectForKey:", &[mk]), o.send(c, dict, "objectForKey:", &[ak]));
+    let (text, alias) = (o.string(c, m), o.string(c, a));
+    let out = MAIN.with(|mm| mm.borrow_mut().host.as_mut().map(|h| h.chat_received(&alias, &text)));
     match out {
         Some(None) => {
             let _ = inv.set_return(Val::Void);
         }
-        Some(Some(new)) if new != line => {
-            let ns = o.new_string(inv.cpu(), &new);
-            let _ = inv.set_arg(0, Val::Word(ns));
+        Some(Some(new)) if new != text => {
+            let c = inv.cpu();
+            let copy = o.send(c, dict, "mutableCopy", &[]);
+            let ns = o.new_string(c, &new);
+            let mk = o.new_string(c, "message");
+            o.send(c, copy, "setObject:forKey:", &[ns, mk]);
+            o.send(c, copy, "autorelease", &[]);
+            let _ = inv.set_arg(0, Val::Word(copy));
         }
         _ => {}
     }
@@ -723,7 +787,10 @@ fn chat_out(o: &Objc, sh: &Shared, inv: &mut Invocation<'_>) {
 fn players(o: &Objc, inv: &mut Invocation<'_>) {
     let me = inv.receiver();
     let _ = inv.call_original();
-    let is_client = MAIN.with(|m| m.borrow().conn.is_some_and(|c| c.client == me));
+    let is_client = MAIN.with(|m| {
+        let m = m.borrow();
+        m.host.is_some() && m.conn.is_some_and(|c| c.client == me)
+    });
     if !is_client {
         return;
     }
@@ -732,11 +799,30 @@ fn players(o: &Objc, inv: &mut Invocation<'_>) {
     let n = o.send(c, list, "count", &[]);
     let key = o.new_string(c, "alias");
     let mut names = Vec::new();
+    let dict_sel = o.sel(c, "objectForKey:");
     for i in 0..n.min(256) {
-        let d = o.send(c, list, "objectAtIndex:", &[i]);
-        let a = o.send(c, d, "objectForKey:", &[key]);
-        if a != 0 {
-            names.push(o.string(c, a));
+        let e = o.send(c, list, "objectAtIndex:", &[i]);
+        // Entries are player-info dicts on the server; a client may hold peer ids (strings) instead.
+        let d = if o.send(c, e, "respondsToSelector:", &[dict_sel]) != 0 {
+            e
+        } else {
+            o.send(c, me, "playerInfoForPeerID:", &[e])
+        };
+        let a = if d != 0 && o.send(c, d, "respondsToSelector:", &[dict_sel]) != 0 {
+            o.send(c, d, "objectForKey:", &[key])
+        } else {
+            0
+        };
+        let utf8 = o.sel(c, "UTF8String");
+        let name = if a != 0 {
+            o.string(c, a)
+        } else if o.send(c, e, "respondsToSelector:", &[utf8]) != 0 {
+            o.string(c, e)
+        } else {
+            String::new()
+        };
+        if !name.is_empty() {
+            names.push(name);
         }
     }
     MAIN.with(|m| {

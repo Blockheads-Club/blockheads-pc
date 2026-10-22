@@ -38,6 +38,55 @@ impl OverlayFeed {
     }
 }
 
+/// What a composed frame was made from: the views' serial, the mod picture, the size.
+type ComposeKey = (u64, usize, u32, u32);
+
+/// Puts a picture of the mod UI (premultiplied RGBA of the same size) over the Java views' frame, so the window
+/// gets one overlay. The result is rebuilt only when either input changes.
+#[derive(Default)]
+pub struct Composer {
+    last: Option<(ComposeKey, Arc<UiFrame>)>,
+    serial: u64,
+}
+
+impl Composer {
+    /// `base`: the Java views (or `None`); `top`: the mod UI picture and the window size it was drawn for.
+    pub fn compose(
+        &mut self,
+        base: Option<Arc<UiFrame>>,
+        top: Option<(Arc<Vec<u8>>, u32, u32)>,
+    ) -> Option<Arc<UiFrame>> {
+        let Some((top, w, h)) = top else {
+            self.last = None;
+            return base;
+        };
+        let base = base.filter(|b| (b.width, b.height) == (w, h));
+        let key = (base.as_ref().map_or(0, |b| b.serial), Arc::as_ptr(&top) as usize, w, h);
+        if let Some((k, f)) = &self.last {
+            if *k == key {
+                return Some(f.clone());
+            }
+        }
+        let mut px = match &base {
+            Some(b) => b.rgba.as_ref().clone(),
+            None => vec![0; top.len()],
+        };
+        for (d, s) in px.chunks_exact_mut(4).zip(top.chunks_exact(4)) {
+            let a = u32::from(s[3]);
+            if a == 0 {
+                continue;
+            }
+            for i in 0..4 {
+                d[i] = (u32::from(s[i]) + u32::from(d[i]) * (255 - a) / 255).min(255) as u8;
+            }
+        }
+        self.serial += 1;
+        let f = Arc::new(UiFrame { width: w, height: h, rgba: Arc::new(px), serial: (1 << 63) | self.serial });
+        self.last = Some((key, f.clone()));
+        Some(f)
+    }
+}
+
 /// What the controller cursor and the host's messages look like right now (kept by the UI thread, drawn when a frame
 /// is presented).
 #[derive(Debug, Clone, Default, PartialEq)]

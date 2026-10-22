@@ -276,6 +276,7 @@ struct Hooks {
     shot: Option<PathBuf>,
     shot_at: u64,
     overlay: crate::overlay::OverlayFeed,
+    composer: Mutex<crate::overlay::Composer>,
     /// In-window mode: where finished frames go.
     embed: Option<Mutex<EmbedOut>>,
     /// The SDL window, for the read-back that does not depend on the window's own surface (in-window mode).
@@ -443,7 +444,18 @@ impl Hooks {
         // The Java views (popups) go over the game's frame, also in screenshots.
         let vm = self.flags.vm.lock().unwrap_or_else(PoisonError::into_inner).clone();
         if let Some(vm) = vm {
-            self.overlay.update(&*self.window, vm.render_ui());
+            // The mod UI (join prompt, F9 panel, toasts) goes over the views.
+            let mods = self.flags.mods.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            let top = mods.and_then(|m| {
+                let (w, h) = vm.screen_size();
+                let (w, h) = (w.max(1) as u32, h.max(1) as u32);
+                let view = m.view.lock().unwrap_or_else(PoisonError::into_inner);
+                let serial = m.serial.load(Ordering::SeqCst);
+                let px = m.ui.lock().unwrap_or_else(PoisonError::into_inner).render(&view, serial, w, h);
+                px.map(|p| (p, w, h))
+            });
+            let frame = self.composer.lock().unwrap_or_else(PoisonError::into_inner).compose(vm.render_ui(), top);
+            self.overlay.update(&*self.window, frame);
         }
         self.publish_frame();
         let n = self.flags.swaps.fetch_add(1, Ordering::SeqCst) + 1;
@@ -918,6 +930,7 @@ fn boot(
             shot: shot.clone(),
             shot_at,
             overlay: crate::overlay::OverlayFeed::default(),
+            composer: Mutex::default(),
             sdl: sdl.clone(),
             pace: Mutex::new(crate::pace::SwapPacer::new(lock(st).sched.clone(), fps_limit, fps_hud)),
             sprites: Mutex::new(crate::overlay::SpriteCache::new(lang)),
@@ -1569,6 +1582,8 @@ impl UiThread {
         let pickers = crate::picker::Pickers::default();
         // The wheel step in progress (the game's own pinch, a few frames long).
         let mut wheel: Option<crate::gameui::WheelAnim> = None;
+        // Window pixels per logical pixel, for clicks on the mod UI (its picture is in window pixels).
+        let mut mods_scale = 0.0f32;
         loop {
             if flags.done.load(Ordering::SeqCst) {
                 return "window closed".into();
@@ -1662,12 +1677,43 @@ impl UiThread {
                 mapper.pad_mut().set_dpad(dpad);
             }
             let pending: Vec<Event> = std::iter::from_fn(|| rx.and_then(|r| r.try_recv().ok())).collect();
+            if mods_scale == 0.0 {
+                mods_scale = vm.screen_size().0.max(1) as f32 / cfg.window.0.max(1) as f32;
+            }
             for ev in crate::input::coalesce_moves(pending) {
                 let mut back = false;
                 if let Event::Key { key, pressed: true, mods, .. } = &ev {
                     let held = bhpc_input::Mods { ctrl: mods.ctrl, shift: mods.shift, alt: mods.alt };
                     back = cfg.bindings.back.fires(Input::Key(host_key(*key)), held);
                     escape |= back;
+                }
+                // The mod UI (F9 panel, join prompt) is modal while it shows.
+                if let Event::Resized(m) = &ev {
+                    mods_scale = m.drawable.0 as f32 / m.logical.0.max(1) as f32;
+                }
+                let mods = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                if let Some(m) = mods {
+                    use bhpc_mods::ui::UiInput;
+                    let input = match &ev {
+                        Event::Key { key, pressed: true, .. } => UiInput::Key(key.0),
+                        Event::MouseButton { button: bhpc_app::MouseButton::Left, pressed: true, x, y } => {
+                            UiInput::Click(x * mods_scale, y * mods_scale)
+                        }
+                        Event::Resized(_) | Event::Focus(_) | Event::Visible(_) | Event::Quit => UiInput::Other,
+                        _ => UiInput::Other,
+                    };
+                    let passive = matches!(ev, Event::Resized(_) | Event::Focus(_) | Event::Visible(_) | Event::Quit);
+                    let (took, cmd) = {
+                        let view = m.view.lock().unwrap_or_else(PoisonError::into_inner);
+                        m.ui.lock().unwrap_or_else(PoisonError::into_inner).input(input, &view)
+                    };
+                    if let Some(cmd) = cmd {
+                        m.post(cmd);
+                    }
+                    if took && !passive {
+                        m.serial.fetch_add(1, Ordering::SeqCst);
+                        continue;
+                    }
                 }
                 // A shown dialog is modal: its keys and controller buttons do not reach the game.
                 if let Some(nav) = dialog_keys.filter(&ev, vm.dialog_alert().map(|d| d.field.is_some()), back) {

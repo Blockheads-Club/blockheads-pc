@@ -136,6 +136,8 @@ pub struct View {
 pub enum UiCmd {
     /// Join prompt answer.
     Decide { accept: bool, native_ok: bool },
+    /// Stop a download and leave the server.
+    Cancel,
     /// Close a failure or rejection notice.
     Dismiss,
     /// Reload the session's mods (developer mode).

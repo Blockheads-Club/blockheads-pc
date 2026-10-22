@@ -126,3 +126,25 @@ fn messages_are_drawn_in_the_launcher_language() {
     let want = render_label("КНОПКИ ИГРЫ ПОКАЗАНЫ", hud_scale(800));
     assert_eq!((s[0].overlay.width, &*s[0].overlay.rgba), (want.width, &want.rgba));
 }
+
+#[test]
+fn composer_blends_the_mod_ui_over_the_views() {
+    use crate::overlay::Composer;
+    let mut c = Composer::default();
+    let base =
+        Arc::new(UiFrame { width: 2, height: 1, rgba: Arc::new(vec![0, 0, 200, 255, 10, 10, 10, 255]), serial: 5 });
+    // No mod UI: the views as they are.
+    assert!(Arc::ptr_eq(&c.compose(Some(base.clone()), None).unwrap(), &base));
+    assert!(c.compose(None, None).is_none());
+    let top = Arc::new(vec![255, 0, 0, 255, 0, 0, 0, 0]);
+    let f = c.compose(Some(base.clone()), Some((top.clone(), 2, 1))).unwrap();
+    assert_eq!(f.rgba.as_slice(), &[255, 0, 0, 255, 10, 10, 10, 255]);
+    // Unchanged inputs: the same frame.
+    assert!(Arc::ptr_eq(&f, &c.compose(Some(base.clone()), Some((top.clone(), 2, 1))).unwrap()));
+    // A views frame of another size is left out; no views: over transparency.
+    let half = Arc::new(vec![64, 0, 0, 128, 0, 0, 0, 0]);
+    let g = c.compose(Some(base), Some((half.clone(), 3, 1))).unwrap();
+    assert_eq!((g.width, &g.rgba[..4]), (3, &[64, 0, 0, 128][..]));
+    let h = c.compose(None, Some((half, 2, 1))).unwrap();
+    assert_ne!(h.serial, g.serial);
+}
