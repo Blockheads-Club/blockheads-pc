@@ -1,7 +1,7 @@
-import type { Key } from './messages';
+import type { BaseKey } from './messages';
 
 /** Kazakh (Cyrillic). Needs a native speaker review. */
-export const kk: Record<Key, string> = {
+export const kk: Record<BaseKey, string> = {
   'app.title': 'Blockheads PC',
   'app.tag': 'PC Port',
 

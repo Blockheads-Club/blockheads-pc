@@ -7,6 +7,9 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import type {
   ApkReport, AppInfo, BootState, DisplayInfo, ImportSummary, LaunchConfig, Prefs, Snapshot, SplashState, Started, UpdateInfo, UpdateProgress
 } from './types';
+import type {
+  AutoUpdate, Browse, CacheOverview, DevMod, InstallProgress, InstallRequest, Overview, Plan
+} from './mods/types';
 
 /** Thin typed wrapper over the Tauri commands (see src-tauri/src/lib.rs). */
 export const api = {
@@ -50,6 +53,24 @@ export const api = {
   updateInstall: () => invoke<void>('update_install'),
   updateProgress: () => invoke<UpdateProgress>('update_progress'),
   openUrl: (url: string) => openUrl(url),
+
+  /** Client mods (src-tauri/src/mods.rs). Failures reject with a `ModError` object. */
+  modsOverview: () => invoke<Overview>('mods_overview'),
+  modsIndex: (refresh: boolean) => invoke<Browse>('mods_index', { refresh }),
+  modsPlan: (id: string, version: string | null) => invoke<Plan>('mods_plan', { id, version }),
+  modsInspectFile: (path: string) => invoke<Plan>('mods_inspect_file', { path }),
+  modsInspectLink: (url: string) => invoke<Plan>('mods_inspect_link', { url }),
+  modsInstall: (req: InstallRequest) => invoke<string[]>('mods_install', { req }),
+  onModsInstall: (cb: (p: InstallProgress) => void) => listen<InstallProgress>('mods-install', (e) => cb(e.payload)),
+  modsSetEnabled: (id: string, on: boolean) => invoke<void>('mods_set_enabled', { id, on }),
+  modsSetGrant: (id: string, perm: string, on: boolean) => invoke<void>('mods_set_grant', { id, perm, on }),
+  modsRemove: (id: string) => invoke<void>('mods_remove', { id }),
+  modsAutoUpdate: () => invoke<AutoUpdate>('mods_auto_update'),
+  modsServers: () => invoke<CacheOverview>('mods_servers'),
+  modsClearServer: (key: string) => invoke<CacheOverview>('mods_clear_server', { key }),
+  modsClearServers: () => invoke<CacheOverview>('mods_clear_servers'),
+  modsDevInspect: (path: string) => invoke<DevMod>('mods_dev_inspect', { path }),
+  modsDevReload: (path: string) => invoke<void>('mods_dev_reload', { path }),
 
   /** Native pickers; `null` when the user cancels. */
   async pickFile(extensions: string[], name: string): Promise<string | null> {

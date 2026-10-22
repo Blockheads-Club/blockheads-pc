@@ -60,6 +60,13 @@ export interface Prefs {
   keep_private_copy: boolean;
   game_sound: boolean;
   mute_in_background: boolean;
+  mods_auto_update: boolean;
+  /** 500, 1024, 2048 or 0 (no limit). */
+  mods_cache_limit_mb: number;
+  mods_block_native: boolean;
+  mods_developer: boolean;
+  mods_dev_folders: string[];
+  mods_dev_watch: boolean;
 }
 
 export type ApkStatus = 'supported' | 'unknown' | 'error';

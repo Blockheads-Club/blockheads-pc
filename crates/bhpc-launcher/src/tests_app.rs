@@ -509,6 +509,17 @@ mod ops_tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    #[test]
+    fn mods_live_below_the_data_folder() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = crate::prefs::Paths::new(t.path().join("cfg"));
+        assert_eq!(ops::mods_dirs(&paths, PathBuf::from("/def")).mods, PathBuf::from("/def/mods"));
+        LaunchConfig::new("/a.apk", "/games/data").save(&paths.config()).unwrap();
+        assert_eq!(ops::mods_dirs(&paths, PathBuf::from("/def")).cache, PathBuf::from("/games/data/mods-cache"));
+        std::fs::write(paths.config(), "[[[").unwrap();
+        assert_eq!(ops::mods_dirs(&paths, PathBuf::from("/def")).mods, PathBuf::from("/def/mods"));
+    }
+
     fn fake_apk(dir: &Path) -> PathBuf {
         let p = dir.join("game.apk");
         make_zip(&p, &[("lib/armeabi-v7a/libApplication.so", b"synthetic libApplication")]);

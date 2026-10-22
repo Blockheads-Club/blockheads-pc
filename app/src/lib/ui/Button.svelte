@@ -4,7 +4,7 @@
   import Icon from './Icon.svelte';
 
   interface Props {
-    variant?: 'default' | 'primary' | 'danger' | 'ghost';
+    variant?: 'default' | 'primary' | 'danger' | 'danger-quiet' | 'ghost';
     size?: 'sm' | 'md' | 'lg';
     icon?: IconName;
     /** Accessible name; required for icon-only buttons. */
@@ -18,6 +18,8 @@
     haspopup?: boolean;
     block?: boolean;
     title?: string;
+    /** Focused first when it opens in a dialog (the safe choice). */
+    autofocus?: boolean;
     onclick?: (e: MouseEvent) => void;
     children?: Snippet;
   }
@@ -35,6 +37,7 @@
     haspopup,
     block = false,
     title,
+    autofocus = false,
     onclick,
     children
   }: Props = $props();
@@ -54,6 +57,7 @@
     {onclick}
     disabled={disabled || loading}
     aria-label={label}
+    data-autofocus={autofocus || undefined}
     aria-busy={loading || undefined}
     aria-pressed={pressed}
     aria-expanded={expanded}
@@ -105,6 +109,8 @@
     color: var(--on-bad);
   }
   .btn.danger:hover:not(:disabled) { background: var(--bad); color: var(--on-bad); filter: brightness(1.06); }
+  /* A destructive action that is not the main one (Remove, Clear all): red text and border, plain fill. */
+  .btn.danger-quiet { color: var(--bad); border-color: color-mix(in oklab, var(--bad), transparent 50%); }
   .btn.ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--text-2); }
   .btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
   .btn.ghost:active:not(:disabled) { box-shadow: none; }

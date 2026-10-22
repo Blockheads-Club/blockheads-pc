@@ -13,6 +13,7 @@
 //! * [`embed`]: playing inside the launcher window (frame file, input commands).
 //! * [`progress`]: the runner's start-up progress protocol and the percentage the loading screen shows.
 //! * [`session`]: spawn and supervise `bhpc-run`, keep its log.
+//! * [`mods`]: client mods: installed packages, the public index, installs, the per-server cache.
 
 pub mod apk;
 pub mod config;
@@ -20,6 +21,7 @@ pub mod datadir;
 pub mod embed;
 pub mod import;
 pub mod keys;
+pub mod mods;
 pub mod ops;
 pub mod prefs;
 pub mod progress;

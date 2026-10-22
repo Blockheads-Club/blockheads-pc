@@ -4,7 +4,7 @@ import type { Page } from '@playwright/test';
  * Replaces the Tauri IPC with an in-page fake launcher backend so the built web UI can be driven in a browser.
  * Scenarios come from the URL query: ?first=1 (no saved config), ?os=macos|windows|linux, ?game=ready|running|
  * stopped|crashed|missing, ?lang=en|tr|ru|kk (saved language), ?fresh=1 (no saved preferences: the language follows
- * the browser's), ?updates=1 (the update feed exists), ?update=available, ?splash=hang|error (main window boot) and, on /splash, ?splash=slow|error&first=1 (state of the splash window).
+ * the browser's), ?mods=empty|error (Mods area), ?modsindex=offline|slow, ?dev=1 (mods developer mode), ?updates=1 (the update feed exists), ?update=available, ?splash=hang|error (main window boot) and, on /splash, ?splash=slow|error&first=1 (state of the splash window).
  */
 export async function mockTauri(page: Page) {
   await page.addInitScript(() => {
@@ -27,7 +27,10 @@ export async function mockTauri(page: Page) {
     };
     const s: any = {
       config: q.get('first') ? null : structuredClone(saved),
-      prefs: { language: q.get('lang') ?? 'en', theme: 'system', auto_update_check: true, keep_private_copy: true, game_sound: true, mute_in_background: false },
+      prefs: {
+        language: q.get('lang') ?? 'en', theme: 'system', auto_update_check: true, keep_private_copy: true, game_sound: true, mute_in_background: false,
+        mods_auto_update: true, mods_cache_limit_mb: 1024, mods_block_native: false, mods_developer: !!q.get('dev'), mods_dev_folders: q.get('dev') ? ['/home/mira/code/my-mod'] : [], mods_dev_watch: true
+      },
       game: q.get('game') ?? 'ready',
       startedAt: 0,
       lines: [] as string[],
@@ -95,6 +98,85 @@ export async function mockTauri(page: Page) {
       if (name.includes('damaged')) return { ...base, status: 'error', version: null, problem: 'damaged', detail: 'truncated APK', size_bytes: 12_400_000 };
       if (name.includes('denied')) return { ...base, status: 'error', version: null, problem: 'unreadable', detail: 'cannot read APK: Permission denied (os error 13)' };
       return base;
+    };
+
+    // ---- client mods (src-tauri/src/mods.rs) ----
+    const mod = (o: any) => ({
+      id: 'minimap', name: { en: 'Minimap' }, description: { en: 'A small map in the corner. Shows places you’ve seen and your friends on the same server.' },
+      version: '0.9.1', authors: ['pixelpan'], license: 'MIT', homepage: 'https://github.com/pixelpan/minimap', sides: { server: false, client: true },
+      runtime: 'lua', api: '^0.1', native: false, permissions: [], granted: [], missing: [], enabled: true, status: 'ready', reason: null, detail: null,
+      dependencies: [], file: 'minimap-0.9.1.bhmod', sha256: 'ab'.repeat(32), size: 420_000, reviewed: true, update: null, update_asks_more: false,
+      source: 'index', origin: '', installed_at: 1_759_449_600, native_allowed_at: null, ...o
+    });
+    s.mods = q.get('mods') === 'empty' ? [] : [
+      mod({ sides: { server: true, client: true }, permissions: ['world:read', 'channels'], granted: ['world:read', 'channels'] }),
+      mod({ id: 'hats', name: { en: 'Hats & Capes' }, version: '1.1.0', description: { en: 'Hats and capes for your blockheads.' } }),
+      mod({ id: 'better-sounds', name: { en: 'Better Sounds' }, version: '1.3.0', update: '1.4.0', description: { en: 'Richer footsteps, rain and cave echoes.' } }),
+      mod({ id: 'zoom-out', name: { en: 'Zoom Out' }, version: '2.0.0', enabled: false, status: 'off', permissions: ['world:read'], granted: ['world:read'] }),
+      mod({ id: 'cozy-menus', name: { en: 'Cozy Menus' }, version: '0.3.0', status: 'permissions', permissions: ['world:read'], missing: ['world:read'], detail: 'world:read' }),
+      mod({ id: 'day-sky', name: { en: 'Day & Night Sky' }, version: '1.0.0', status: 'dependency', detail: 'sky-core ^1', authors: ['lumen'],
+        dependencies: [{ id: 'sky-core', req: '^1', installed: null, ok: false, soft: false, available: '1.2.0' }] }),
+      mod({ id: 'pixel-shaders', name: { en: 'Pixel Shaders' }, version: '0.7.2', native: true, permissions: ['native'], granted: ['native'], reviewed: false,
+        source: 'file', authors: ['glowbug'], license: '', homepage: null, native_allowed_at: 1_760_227_200, description: { en: 'Soft lighting and glow effects. Uses native code for speed.' } })
+    ];
+    const overview = () => {
+      if (q.get('mods') === 'error') throw { code: 'io', detail: 'Permission denied (os error 13)', file: '/home/mira/.local/share/blockheads-pc/mods' };
+      const att = s.mods.filter((m: any) => ['failed', 'blocked', 'dependency', 'permissions'].includes(m.status)).length;
+      return { dir: '/home/mira/.local/share/blockheads-pc/mods', size: 3_400_000, mods: s.mods, problems: [], error: null, attention: att, updates: 1, loader_ready: false };
+    };
+    const bmod = (o: any) => ({ id: 'sky-core', name: 'Sky Core', description: 'Shared sky and weather code other mods use.', owners: ['lumen'], repo: 'https://github.com/lumen/sky-core',
+      tags: ['library'], version: '1.2.0', compatible: true, compatible_version: '1.2.0', sides: ['client'], permissions: [], native: false, depends: {}, size: 210_000,
+      published: '2026-10-01', versions: [['1.2.0', '2026-10-01'], ['1.1.0', '2026-09-02']], installed: null, ...o });
+    const browse = () => ({ generated: '2026-10-21T12:00:00Z', offline: false, error: null, tags: ['fun', 'graphics', 'interface', 'library', 'sound'], mods: [
+      bmod({}),
+      bmod({ id: 'cozy-menus', name: 'Cozy Menus', owners: ['pixelpan'], tags: ['interface'], description: 'Softer, rounder menus with bigger text.', installed: '0.3.0', version: '0.3.0' }),
+      bmod({ id: 'pets', name: 'Pet Companions', owners: ['pixelpan'], tags: ['fun'], description: 'Tame a dodo; it follows you, with its own hat.', sides: ['server', 'client'], permissions: ['world:read', 'channels'] }),
+      bmod({ id: 'turbo', name: 'Turbo Lighting', tags: ['graphics'], description: 'Smooth lighting and coloured torches. Native code for speed.', native: true, permissions: ['native'] }),
+      bmod({ id: 'keys', name: 'Key Hints', owners: ['echo'], tags: ['interface'], description: 'Shows keyboard and controller hints on screen.', version: '2.0.0', compatible: false, compatible_version: '1.6.0' }),
+      bmod({ id: 'better-sounds', name: 'Better Sounds', owners: ['echo'], tags: ['sound'], description: 'Richer footsteps, rain and cave echoes.', installed: '1.3.0', version: '1.4.0' }),
+      bmod({ id: 'land-claims', name: 'Land Claims', owners: ['tobyblock'], tags: [], sides: ['server'], description: 'Claim land on a server.' })
+    ] });
+    const plan = (id: string) => {
+      const item = (o: any) => ({ id: 'day-sky', name: 'Day & Night Sky', version: '1.0.0', size: 640_000, sides: ['client'], permissions: ['world:read'], native: false,
+        needed_by: null, replaces: null, reviewed: true, authors: ['lumen'], ...o });
+      if (id === 'turbo') return { items: [item({ id: 'turbo', name: 'Turbo Lighting', version: '2.0.1', native: true, permissions: ['native'], size: 2_400_000 })], satisfied: [], missing: [], total_bytes: 2_400_000, token: null };
+      if (id === 'keys') throw { code: 'newerLoader', file: 'Key Hints 2.0.0', expected: '^1.4', got: '0.1.0', detail: '1.6.0' };
+      return { items: [item({}), item({ id: 'sky-core', name: 'Sky Core', version: '1.2.0', size: 210_000, permissions: [], needed_by: 'day-sky' })], satisfied: [], missing: [], total_bytes: 850_000, token: null };
+    };
+    s.servers = { total: 5_100_000, servers: [
+      { key: 'mira.example.net_15151', name: 'Sunny Isle', address: 'mira.example.net:15151', last_played: Math.floor(Date.now() / 1000) - 3600, size: 3_900_000, mods: [
+        { id: 'minimap', name: 'Minimap', version: '0.9.1', sha256: 'a1', size: 420_000, native: false, shared_with: ['Dodo Land'] },
+        { id: 'pets', name: 'Pet Companions', version: '1.2.0', sha256: 'b2', size: 1_100_000, native: false, shared_with: [] },
+        { id: 'turbo', name: 'Turbo Lighting', version: '2.0.1', sha256: 'c3', size: 2_400_000, native: true, shared_with: [] }] },
+      { key: '192.168.1.20_15151', name: 'Dodo Land', address: '192.168.1.20:15151', last_played: Math.floor(Date.now() / 1000) - 14 * 86400, size: 1_200_000, mods: [
+        { id: 'minimap', name: 'Minimap', version: '0.9.1', sha256: 'a1', size: 420_000, native: false, shared_with: ['Sunny Isle'] },
+        { id: 'race', name: 'Race Track', version: '0.5.0', sha256: 'd4', size: 780_000, native: false, shared_with: [] }] }
+    ] };
+    const modHandlers: Record<string, (a: any) => any> = {
+      mods_overview: overview,
+      mods_index: async () => {
+        if (q.get('modsindex') === 'slow') await new Promise(() => {});
+        if (q.get('modsindex') === 'offline') throw { code: 'offline', detail: 'dns error: failed to lookup address' };
+        return browse();
+      },
+      mods_plan: (a) => plan(a.id),
+      mods_inspect_file: () => ({ items: [{ id: 'pixel-shaders', name: 'Pixel Shaders', version: '0.7.2', size: 1_300_000, sides: ['client'], permissions: ['native'], native: true,
+        needed_by: null, replaces: null, reviewed: false, authors: ['glowbug'] }], satisfied: [], missing: [], total_bytes: 1_300_000, token: 'tok' }),
+      mods_inspect_link: (a) => {
+        if (!a.url.startsWith('https://')) throw { code: 'insecure', detail: a.url };
+        throw { code: 'checksum', file: 'pixel-shaders-0.7.2.bhmod', expected: '9f2c…a71e', got: '41b0…0c3d' };
+      },
+      mods_install: async () => { await new Promise((r) => setTimeout(r, 300)); return ['day-sky']; },
+      mods_set_enabled: (a) => { s.mods = s.mods.map((m: any) => (m.id === a.id ? { ...m, enabled: a.on, status: a.on ? 'ready' : 'off' } : m)); },
+      mods_set_grant: () => undefined,
+      mods_remove: (a) => { s.mods = s.mods.filter((m: any) => m.id !== a.id); },
+      mods_auto_update: () => ({ updated: [], failed: [] }),
+      mods_servers: () => s.servers,
+      mods_clear_server: (a) => ((s.servers = { ...s.servers, servers: s.servers.servers.filter((x: any) => x.key !== a.key) }), s.servers),
+      mods_clear_servers: () => ((s.servers = { total: 0, servers: [] }), s.servers),
+      mods_dev_inspect: (a) => ({ path: a.path, id: 'my-mod', version: '0.1.0-dev', name: 'My mod', permissions: [], native: false,
+        errors: ['client/ui.luau: entry point is missing'], warnings: ['LICENSE: missing (needed for the public list)'] }),
+      mods_dev_reload: () => { throw { code: 'needsLoader' }; }
     };
     const update = { version: '0.2.0', size_mb: 43, notes: ['Smoother camera panning', 'Fixes a crash when importing saves', 'Turkish translation'] };
     const handlers: Record<string, (a: any) => any> = {
@@ -181,7 +263,8 @@ export async function mockTauri(page: Page) {
       'plugin:window|close': () => undefined,
       'plugin:window|destroy': () => undefined,
       'plugin:event|listen': () => 1,
-      'plugin:event|unlisten': () => undefined
+      'plugin:event|unlisten': () => undefined,
+      ...modHandlers
     };
     (window as any).__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     (window as any).__TAURI_INTERNALS__ = {

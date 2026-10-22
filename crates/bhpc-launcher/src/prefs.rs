@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 pub const LANGUAGES: [&str; 4] = ["en", "tr", "ru", "kk"];
 /// Theme choices.
 pub const THEMES: [&str; 3] = ["system", "light", "dark"];
+/// Size limits offered for the server mods cache, in MB (0 = no limit).
+pub const MOD_CACHE_LIMITS: [u32; 4] = [500, 1024, 2048, 0];
 
 /// Launcher preferences, saved next to `launcher.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +28,18 @@ pub struct Prefs {
     pub game_sound: bool,
     /// Mute the game while the launcher is in the background.
     pub mute_in_background: bool,
+    /// Install mod updates that ask for nothing new by themselves.
+    pub mods_auto_update: bool,
+    /// Size limit of the server mods cache in MB, one of [`MOD_CACHE_LIMITS`] (0 = no limit).
+    pub mods_cache_limit_mb: u32,
+    /// Never allow native mods (from any source, on any server).
+    pub mods_block_native: bool,
+    /// Developer mode: the Developer tab with folder mods.
+    pub mods_developer: bool,
+    /// Mod source folders loaded in developer mode.
+    pub mods_dev_folders: Vec<String>,
+    /// Reload folder mods when their files change.
+    pub mods_dev_watch: bool,
 }
 
 impl Default for Prefs {
@@ -37,6 +51,12 @@ impl Default for Prefs {
             keep_private_copy: true,
             game_sound: true,
             mute_in_background: false,
+            mods_auto_update: true,
+            mods_cache_limit_mb: 1024,
+            mods_block_native: false,
+            mods_developer: false,
+            mods_dev_folders: Vec::new(),
+            mods_dev_watch: true,
         }
     }
 }
@@ -50,6 +70,9 @@ impl Prefs {
         }
         if !THEMES.contains(&self.theme.as_str()) {
             self.theme = d.theme;
+        }
+        if !MOD_CACHE_LIMITS.contains(&self.mods_cache_limit_mb) {
+            self.mods_cache_limit_mb = d.mods_cache_limit_mb;
         }
         self
     }

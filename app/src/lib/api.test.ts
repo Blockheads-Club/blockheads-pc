@@ -75,6 +75,36 @@ describe('api', () => {
     expect(invoke).toHaveBeenCalledWith('embed_fullscreen', { on: true });
   });
 
+  it('maps the mod calls onto their commands', async () => {
+    const req = { items: [{ id: 'a', version: '1.0.0' }], token: null, grants: {}, enable: true, native_confirmed: false };
+    await api.modsOverview();
+    await api.modsIndex(true);
+    await api.modsPlan('a', null);
+    await api.modsInspectFile('/a.bhmod');
+    await api.modsInspectLink('https://x/a.bhmod');
+    await api.modsInstall(req);
+    await api.modsSetEnabled('a', false);
+    await api.modsSetGrant('a', 'channels', true);
+    await api.modsRemove('a');
+    await api.modsAutoUpdate();
+    await api.modsServers();
+    await api.modsClearServer('k');
+    await api.modsClearServers();
+    await api.modsDevInspect('/code/m');
+    await api.modsDevReload('/code/m');
+    expect(invoke.mock.calls.map((x: unknown[]) => x[0])).toEqual([
+      'mods_overview', 'mods_index', 'mods_plan', 'mods_inspect_file', 'mods_inspect_link', 'mods_install', 'mods_set_enabled',
+      'mods_set_grant', 'mods_remove', 'mods_auto_update', 'mods_servers', 'mods_clear_server', 'mods_clear_servers',
+      'mods_dev_inspect', 'mods_dev_reload'
+    ]);
+    expect(invoke).toHaveBeenCalledWith('mods_install', { req });
+    expect(invoke).toHaveBeenCalledWith('mods_set_grant', { id: 'a', perm: 'channels', on: true });
+    const seen: unknown[] = [];
+    await api.onModsInstall((p) => seen.push(p));
+    expect(seen).toEqual(['p']);
+    expect(event.listen).toHaveBeenCalledWith('mods-install', expect.any(Function));
+  });
+
   it('subscribes to the splash events', async () => {
     const seen: unknown[] = [];
     await api.onSplashState((s) => seen.push(s));

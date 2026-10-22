@@ -10,7 +10,8 @@ vi.mock('$lib/api', () => ({
 
 import { makeApi, makeBoot, makeSnap, makeWin } from '$lib/mock-api';
 import { store } from '$lib/store.svelte';
-import { resetStore } from '$lib/test-utils';
+import { resetMods, resetStore } from '$lib/test-utils';
+import { mods } from '$lib/mods/mods.svelte';
 import { theme } from '$lib/theme.svelte';
 import { viewport } from '$lib/viewport.svelte';
 import Layout from './+layout.svelte';
@@ -145,6 +146,17 @@ describe('page', () => {
     await fireEvent.keyDown(document.body, { key: 'Enter' });
     expect(mock.api.gameStart).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Back to game' })).toBeVisible();
+  });
+
+  it('opens the Mods area from Home and names its tab in the title', async () => {
+    await resetMods();
+    render(Page);
+    await screen.findByRole('button', { name: 'Mods, 1 problem' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Mods, 1 problem' }));
+    await waitFor(() => expect(document.title).toBe('Blockheads PC · Mods'));
+    expect(await screen.findByRole('tab', { name: /My mods/ })).toBeVisible();
+    mods.tab = 'servers';
+    await waitFor(() => expect(document.title).toBe('Blockheads PC · Mods · Server mods'));
   });
 
   it('ignores shortcuts that need a saved configuration, and handles setup keys', async () => {

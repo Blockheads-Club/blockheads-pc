@@ -37,6 +37,11 @@
   --code-text: #f5ede5;
   --code-dim: #b9aa9c;
   --scrim: rgba(31, 26, 23, 0.45);
+  /* Mods: native code always looks dangerous (stripes + icon + word + border, never colour alone). */
+  --mod-danger: #b42318;
+  --mod-danger-edge: #7a1710;
+  --mod-on-danger: #ffffff;
+  --mod-danger-stripe: #9a1d13;
 
   --r-sm: 6px;
   --r-md: 10px;
@@ -93,6 +98,10 @@
   --focus: #86b9ff;
   --code-bg: #0e0b09;
   --scrim: rgba(0, 0, 0, 0.6);
+  --mod-danger: #ff8f80;
+  --mod-danger-edge: #b42318;
+  --mod-on-danger: #1c0d06;
+  --mod-danger-stripe: #f27466;
   --edge: 0 3px 0 #0a0807;
   --lift: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
@@ -130,6 +139,10 @@
     --focus: #86b9ff;
     --code-bg: #0e0b09;
     --scrim: rgba(0, 0, 0, 0.6);
+    --mod-danger: #ff8f80;
+    --mod-danger-edge: #b42318;
+    --mod-on-danger: #1c0d06;
+    --mod-danger-stripe: #f27466;
     --edge: 0 3px 0 #0a0807;
     --lift: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
     color-scheme: dark;

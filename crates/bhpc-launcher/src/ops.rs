@@ -214,3 +214,10 @@ pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, Launcher
         open_uri: None,
     })
 }
+
+/// Where the client mods live: below the configured data folder, else below `default_data_dir` (before setup).
+/// A broken configuration also falls back to the default.
+pub fn mods_dirs(paths: &Paths, default_data_dir: PathBuf) -> crate::mods::ModsDirs {
+    let data = LaunchConfig::load(&paths.config()).ok().flatten().map_or(default_data_dir, |c| c.data_dir);
+    crate::mods::ModsDirs::new(&data)
+}
