@@ -188,3 +188,15 @@ Umbrella rules: `../AGENTS.md`.
   on Linux too (the headless smoke run passes with it).
 - Tests must not assume Linux paths or layouts: `/proc`, `/bin/sh` (Git's `sh` is on the Windows runners' PATH),
   `file:///C:/...` URLs, host pointers above the guest window, `\` separators in displayed paths.
+
+## ObjC method hooks from the host (mod system foundation)
+- `bhpc-run/src/objchook.rs`: `ObjcHooks::hook(Target, Option<Sig>, handler)` + `install(cpu, &Runtime)` swizzle a
+  guest method through Apportable's own runtime exports (`method_setImplementation` with a host thunk as the IMP):
+  no code patch, no JIT flush, ARM and Thumb IMPs alike. Handlers run under `catch_unwind` (a panic falls back to the
+  original) and hold the host gate like any thunk. Before hooks tail-call the original; `call_original` (after /
+  result changes) runs it on the nested child JIT. Signatures are ObjC type encodings checked against the runtime's.
+- Install after the constructors; `class_getInstanceMethod` realises a class without `+initialize`. Unknown classes
+  or methods stay waiting until a later `install`. Module docs list the limits.
+- Dev proof: `BHPC_DEV_OBJC_HOOKS=1` (play build) logs `-[BHClient match:didReceiveData:fromPlayer:]` packets, times
+  `-[WorldUI render:...]` (after hook) and samples `-[World update:...]` (before hook); `BHPC_THUNK_STATS=1` adds
+  per-thunk host time. Overhead: `cargo test --release -p bhpc-run --lib objchook_overhead -- --ignored --nocapture`.
