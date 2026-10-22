@@ -1,0 +1,26 @@
+name: website-rebuild
+
+# blockheads.club shows the latest PUBLISHED release of this app (versions and download links are read from
+# GitHub at build time). Publishing a release asks Cloudflare Workers Builds to rebuild the website through its
+# deploy hook (secret WEBSITE_DEPLOY_HOOK: https://api.cloudflare.com/client/v4/workers/builds/deploy_hooks/<id>).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST to the website deploy hook
+        env:
+          HOOK: ${{ secrets.WEBSITE_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::notice::WEBSITE_DEPLOY_HOOK is not set; the website is not rebuilt."
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error --retry 3 --retry-all-errors --max-time 30 -X POST "$HOOK" \
+            | jq '{success, build: .result.build_uuid, branch: .result.branch, worker: .result.worker}'
