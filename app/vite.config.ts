@@ -2,6 +2,8 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vitest/config';
 
 const host = process.env.TAURI_DEV_HOST;
+// Tests format dates in the local zone; pin it so they pass on runners outside UTC (the Windows ARM64 runners).
+if (process.env.VITEST) process.env.TZ = 'UTC';
 
 export default defineConfig({
   plugins: [sveltekit()],
