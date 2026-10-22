@@ -12,6 +12,8 @@
   import PlayButton from '../ui/PlayButton.svelte';
   import Progress from '../ui/Progress.svelte';
   import StatusPill from '../ui/StatusPill.svelte';
+  import { mods } from '../mods/mods.svelte';
+  import { onMount } from 'svelte';
 
   const g = $derived(store.game);
   const state = $derived(g.state);
@@ -25,6 +27,10 @@
   const upd = $derived(['available', 'downloading', 'installing', 'ready'].includes(store.update.stage) ? store.update.info : null);
   const version = $derived(store.version);
   const file = $derived(baseName(store.config?.apk ?? ''));
+
+  /** Mods needing attention: the count on the Mods button. */
+  const issues = $derived(mods.overview?.attention ?? 0);
+  onMount(() => void mods.load(true));
 
   const quick = $derived<{ icon: IconName; title: string; hint: string; short: string; run: () => void }[]>([
     { icon: 'file', title: t('home.q.file'), hint: `${version} · ${file}`, short: t('home.q.fileShort'), run: () => store.openSettings('game') },
@@ -52,6 +58,10 @@
       </Button>
       <Button size="sm" variant="ghost" icon="help" onclick={() => (store.dialog = 'join')}>{t('home.joinTop')}</Button>
     {/if}
+    <div class="mb">
+      <Button size={compact ? 'md' : 'sm'} icon="puzzle" label={issues ? t('mods.homeAria', { n: issues }) : undefined} onclick={() => mods.open()}>{t('mods.title')}</Button>
+      {#if issues}<span class="mcount" aria-hidden="true">{issues}</span>{/if}
+    </div>
     <Button size={compact ? 'md' : 'sm'} icon="sliders" onclick={() => store.openSettings()}>{t('set.title')}</Button>
   </header>
 
@@ -122,6 +132,11 @@
 </div>
 
 <style>
+  .mb { position: relative; display: inline-flex; }
+  .mcount {
+    position: absolute; top: -8px; right: -8px; display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px;
+    border-radius: 999px; background: var(--bad); color: var(--on-bad); font: 800 12px var(--f-body); pointer-events: none;
+  }
   .app { min-height: 100%; display: flex; flex-direction: column; background: var(--bg); }
   .top { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 2px solid var(--line); background: var(--surface); flex-wrap: wrap; }
   .sp { flex: 1; }

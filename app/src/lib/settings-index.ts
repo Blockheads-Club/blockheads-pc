@@ -4,7 +4,7 @@ import type { Key } from './messages';
 import type { ActionId } from './types';
 
 /** One page per Settings sidebar item. */
-export type SettingsPage = 'game' | 'gfx' | 'controls' | 'audio' | 'lang' | 'about';
+export type SettingsPage = 'game' | 'gfx' | 'controls' | 'audio' | 'lang' | 'mods' | 'about';
 
 export const PAGES: { id: SettingsPage; icon: IconName; labelKey: Key }[] = [
   { id: 'game', icon: 'file', labelKey: 'set.nav.game' },
@@ -12,6 +12,7 @@ export const PAGES: { id: SettingsPage; icon: IconName; labelKey: Key }[] = [
   { id: 'controls', icon: 'mouse', labelKey: 'set.nav.controls' },
   { id: 'audio', icon: 'sound', labelKey: 'set.nav.audio' },
   { id: 'lang', icon: 'globe', labelKey: 'set.nav.lang' },
+  { id: 'mods', icon: 'puzzle', labelKey: 'set.nav.mods' },
   { id: 'about', icon: 'info', labelKey: 'set.nav.about' }
 ];
 
@@ -47,6 +48,7 @@ const ACTION_WORDS: Record<ActionId, string[]> = {
     'скрыть', 'кнопки', 'интерфейс', 'скриншот', 'жасыру', 'батырмалар'
   ]
 };
+const MOD_WORDS = ['mod', 'mods', 'modlar', 'мод', 'моды', 'модтар', 'плагин', 'addon', 'eklenti'];
 const PAD_WORDS = [
   'controller', 'gamepad', 'joystick', 'xbox', 'playstation', 'stick', 'kol', 'oyun kolu', 'gamepad',
   'геймпад', 'джойстик', 'контроллер', 'стик', 'таяқша'
@@ -89,6 +91,15 @@ export const SETTINGS: SettingEntry[] = [
     'язык', 'русский', 'английский', 'турецкий', 'казахский', 'перевод', 'тіл', 'қазақша', 'орысша', 'ағылшынша', 'түрікше', 'аударма'
   ] },
   { id: 'set-lng-theme', page: 'lang', titleKey: 'set.theme', hintKey: 'set.h.theme', keywords: ['dark', 'light', 'mode', 'night', 'karanlık', 'koyu', 'açık', 'tema', 'gece', 'тёмная', 'светлая', 'тема', 'ночь', 'қараңғы', 'ашық', 'тақырып', 'түн'] },
+
+  { id: 'set-mods-auto', page: 'mods', titleKey: 'mods.set.auto', hintKey: 'mods.set.autoHint', keywords: [...MOD_WORDS, 'update', 'automatic', 'güncelle', 'otomatik', 'обновление', 'автоматически', 'жаңарту', 'автоматты'] },
+  { id: 'set-mods-servers', page: 'mods', titleKey: 'mods.set.fromServers', hintKey: 'mods.set.fromServersHint', keywords: [...MOD_WORDS, 'server', 'join', 'download', 'sunucu', 'katıl', 'indir', 'сервер', 'войти', 'скачать', 'сервер', 'кіру', 'жүктеу'] },
+  { id: 'set-mods-cache', page: 'mods', titleKey: 'mods.set.storage', hintKey: 'mods.set.storageHint', keywords: [...MOD_WORDS, 'cache', 'storage', 'disk', 'space', 'limit', 'önbellek', 'depolama', 'alan', 'sınır', 'кэш', 'место', 'диск', 'лимит', 'кэш', 'орын', 'шектеу'] },
+  { id: 'set-mods-clear', page: 'mods', titleKey: 'mods.set.clear', hintKey: 'mods.set.storageHint', keywords: [...MOD_WORDS, 'clear', 'delete', 'cache', 'temizle', 'sil', 'önbellek', 'очистить', 'удалить', 'кэш', 'тазалау', 'жою'] },
+  { id: 'set-mods-native', page: 'mods', titleKey: 'mods.set.blockNative', hintKey: 'mods.set.blockNativeHint', keywords: [...MOD_WORDS, 'native', 'danger', 'safety', 'family', 'block', 'yerel', 'tehlike', 'güvenlik', 'aile', 'engelle', 'нативный', 'опасно', 'безопасность', 'семья', 'запретить', 'жергілікті', 'қауіп', 'қауіпсіздік', 'отбасы', 'тыйым'] },
+  { id: 'set-mods-files', page: 'mods', titleKey: 'mods.set.files', hintKey: 'mods.set.filesHint', keywords: [...MOD_WORDS, 'file', 'link', 'zip', 'review', 'dosya', 'bağlantı', 'файл', 'ссылка', 'сілтеме'] },
+  { id: 'set-mods-dev', page: 'mods', titleKey: 'mods.set.devMode', hintKey: 'mods.set.devModeHint', keywords: [...MOD_WORDS, 'developer', 'folder', 'reload', 'log', 'geliştirici', 'klasör', 'yeniden yükle', 'разработчик', 'папка', 'перезагрузка', 'әзірлеуші', 'қалта'] },
+  { id: 'set-mods-folder', page: 'mods', titleKey: 'mods.set.folder', hintKey: 'mods.set.devModeHint', keywords: [...MOD_WORDS, 'folder', 'path', 'open', 'klasör', 'aç', 'папка', 'открыть', 'қалта', 'ашу'] },
 
   { id: 'set-upd-check', page: 'about', titleKey: 'upd.check', hintKey: 'set.h.updCheck', keywords: ['update', 'new version', 'upgrade', 'güncelle', 'güncelleme', 'yeni sürüm', 'обновление', 'обновить', 'новая версия', 'жаңарту', 'жаңа нұсқа'] },
   { id: 'set-upd-auto', page: 'about', titleKey: 'upd.auto', hintKey: 'upd.autoHint', keywords: ['automatic', 'weekly', 'update', 'otomatik', 'haftalık', 'güncelleme', 'автоматически', 'еженедельно', 'обновление', 'автоматты', 'апта сайын', 'жаңарту'] },

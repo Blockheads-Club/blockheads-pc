@@ -1,6 +1,15 @@
-import { en, tr, type Key } from './messages';
-import { kk } from './messages-kk';
-import { ru } from './messages-ru';
+import { en as baseEn, tr as baseTr, type Key } from './messages';
+import { kk as baseKk } from './messages-kk';
+import { modsEn } from './messages-mods';
+import { modsKk } from './messages-mods-kk';
+import { modsRu } from './messages-mods-ru';
+import { modsTr } from './messages-mods-tr';
+import { ru as baseRu } from './messages-ru';
+
+const en: Record<Key, string> = { ...baseEn, ...modsEn };
+const tr: Record<Key, string> = { ...baseTr, ...modsTr };
+const ru: Record<Key, string> = { ...baseRu, ...modsRu };
+const kk: Record<Key, string> = { ...baseKk, ...modsKk };
 
 /** The launcher's languages, each named in itself. */
 export const LANGUAGES = [

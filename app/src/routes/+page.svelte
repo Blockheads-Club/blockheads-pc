@@ -8,6 +8,8 @@
   import Home from '$lib/screens/Home.svelte';
   import ImportDialog from '$lib/screens/ImportDialog.svelte';
   import JoinDialog from '$lib/screens/JoinDialog.svelte';
+  import ModsScreen from '$lib/mods/ModsScreen.svelte';
+  import { mods } from '$lib/mods/mods.svelte';
   import LogsDialog from '$lib/screens/LogsDialog.svelte';
   import Playing from '$lib/screens/Playing.svelte';
   import Settings from '$lib/screens/Settings.svelte';
@@ -37,6 +39,7 @@
     if (s === 'setup') return t('tb.setup', { n: store.step, total: SETUP_STEPS });
     if (s === 'settings') return t('tb.settingsPage', { page: t(PAGES.find((p) => p.id === store.section)!.labelKey) });
     if (s === 'playing') return t('tb.playing', { v: store.version });
+    if (s === 'mods') return mods.tab === 'mine' ? t('mods.title') : `${t('mods.title')} · ${t(`mods.tab.${mods.tab}`)}`;
     if (store.dialog === 'join') return t('tb.help');
     return s === 'home' ? t('tb.home') : '';
   });
@@ -170,6 +173,8 @@
       <Home />
     {:else if s === 'playing'}
       <Playing />
+    {:else if s === 'mods'}
+      <ModsScreen />
     {:else}
       <Settings />
     {/if}

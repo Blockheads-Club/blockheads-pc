@@ -9,7 +9,7 @@ import type {
 } from './types';
 import { baseName, copyText, MIN_EDGE, recommendedSize, stageMatches, stageSize } from './util';
 
-export type Screen = 'splash' | 'setup' | 'home' | 'playing' | 'settings';
+export type Screen = 'splash' | 'setup' | 'home' | 'playing' | 'settings' | 'mods';
 export type Section = SettingsPage;
 export type DialogName = 'join' | 'update' | 'logs' | 'close' | 'import' | 'resetKeys' | null;
 export const SETUP_STEPS = 6;

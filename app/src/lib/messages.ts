@@ -560,9 +560,13 @@ export const en = {
   'lic.all': 'Show all licences'
 } as const;
 
-export type Key = keyof typeof en;
+import type { ModKey } from './messages-mods';
 
-export const tr: Record<Key, string> = {
+/** Keys of this file; the Mods area adds its own (`messages-mods*.ts`). */
+export type BaseKey = keyof typeof en;
+export type Key = BaseKey | ModKey;
+
+export const tr: Record<BaseKey, string> = {
   'app.title': 'Blockheads PC',
   'app.tag': 'PC Port',
 

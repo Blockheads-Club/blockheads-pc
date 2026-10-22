@@ -2,6 +2,10 @@ import { expect, test, type Page } from '@playwright/test';
 import { en, tr, type Key } from '../src/lib/messages';
 import { kk } from '../src/lib/messages-kk';
 import { ru } from '../src/lib/messages-ru';
+import { modsEn } from '../src/lib/messages-mods';
+import { modsKk } from '../src/lib/messages-mods-kk';
+import { modsRu } from '../src/lib/messages-mods-ru';
+import { modsTr } from '../src/lib/messages-mods-tr';
 import { mockTauri } from './mock';
 
 /**
@@ -10,7 +14,9 @@ import { mockTauri } from './mock';
  * cut off or pushes the page sideways.
  */
 const DIR = `${process.env.SHOT_DIR ?? 'test-results/shots'}/i18n`;
-const DICTS = { en, tr, ru, kk } as const;
+const DICTS: Record<'en' | 'tr' | 'ru' | 'kk', Record<Key, string>> = {
+  en: { ...en, ...modsEn }, tr: { ...tr, ...modsTr }, ru: { ...ru, ...modsRu }, kk: { ...kk, ...modsKk }
+};
 type Lang = keyof typeof DICTS;
 const MIN = { width: 1100, height: 760 };
 
@@ -114,6 +120,31 @@ for (const lang of Object.keys(DICTS) as Lang[]) {
         await page.getByRole('button', { name: T('home.play'), exact: true }).click();
         await expect(page.getByText(T('play.title'))).toBeVisible();
         await check(page, 'playing');
+      });
+
+      test('mods', async ({ page }) => {
+        await open(page, 'dev=1');
+        await page.getByRole('button', { name: new RegExp(`^${T('mods.title')}`) }).click();
+        await expect(page.getByRole('tab', { name: new RegExp(T('mods.tab.mine')) })).toBeVisible();
+        await check(page, 'mods-mine');
+        await page.getByRole('button', { name: /Pixel Shaders/ }).click();
+        await check(page, 'mods-native');
+        for (const tab of ['browse', 'servers', 'dev'] as const) {
+          await page.getByRole('tab', { name: new RegExp(T(`mods.tab.${tab}`)) }).click();
+          await page.waitForTimeout(150);
+          await check(page, `mods-${tab}`);
+        }
+        await page.getByRole('tab', { name: new RegExp(T('mods.tab.browse')) }).click();
+        await page.getByRole('button', { name: 'Turbo Lighting', exact: true }).click();
+        await page.locator('.dhead').getByRole('button').click();
+        await check(page, 'mods-install-perms');
+        await page.getByRole('button', { name: T('mods.inst.turnOn') }).click();
+        await check(page, 'mods-install-native');
+        await page.getByRole('button', { name: T('mods.inst.dont') }).click();
+        await page.getByRole('button', { name: T('tb.home') }).click();
+        await page.getByRole('button', { name: T('set.title'), exact: true }).click();
+        await page.getByRole('navigation', { name: T('set.navLabel') }).getByRole('button', { name: T('set.nav.mods') }).click();
+        await check(page, 'settings-mods');
       });
     });
   }

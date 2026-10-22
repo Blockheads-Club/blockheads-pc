@@ -45,3 +45,14 @@ export function resetStore(overrides: Partial<Record<keyof AppStore, unknown>> =
   localStorage.clear();
   vi.clearAllTimers();
 }
+
+/** Put the Mods area back to its start-up state. */
+export async function resetMods() {
+  const { mods } = await import('./mods/mods.svelte');
+  Object.assign(mods, {
+    tab: 'mine', overview: null, loading: false, error: null, selected: null, showDetail: false, query: '', filter: 'all', busy: null,
+    browse: null, browseLoading: false, browseError: null, bQuery: '', bAll: false, bHideNative: false, bTag: null, bDetail: null,
+    servers: null, serversLoading: false, serversError: null, dev: [], devSelected: null, devLog: [], install: null, autoUpdated: false
+  });
+  return mods;
+}

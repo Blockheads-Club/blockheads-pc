@@ -1,6 +1,6 @@
-import type { Key } from './messages';
+import type { BaseKey } from './messages';
 
-export const ru: Record<Key, string> = {
+export const ru: Record<BaseKey, string> = {
   'app.title': 'Blockheads PC',
   'app.tag': 'PC Port',
 
