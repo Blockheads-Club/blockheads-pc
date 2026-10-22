@@ -425,3 +425,15 @@ fn hashes_and_names() {
     e.info.name.clear();
     assert_eq!(e.name(), "x");
 }
+
+#[test]
+fn the_join_packet_gets_the_key() {
+    let p = b"\x1f<?xml?><plist><dict><key>alias</key><string>A</string><key>d</key><dict></dict></dict></plist>";
+    let out = inject_mod_loader(p, "ab").unwrap();
+    let s = String::from_utf8(out[1..].to_vec()).unwrap();
+    assert!(s.ends_with("<key>bhcModLoader</key><dict><key>acceptedHash</key><string>ab</string><key>proto</key><integer>1</integer></dict></dict></plist>"), "{s}");
+    assert_eq!(out[0], 0x1f);
+    assert_eq!(inject_mod_loader(b"\x23<dict></dict>", "ab"), None);
+    assert_eq!(inject_mod_loader(b"\x1fbplist00\xff", "ab"), None);
+    assert_eq!(inject_mod_loader(b"\x1f<plist/>", "ab"), None);
+}

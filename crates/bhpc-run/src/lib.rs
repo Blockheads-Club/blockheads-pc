@@ -15,6 +15,8 @@ pub mod input;
 pub mod mainq;
 pub mod mktimer;
 pub mod mmapio;
+#[cfg(feature = "play")]
+pub mod modglue;
 pub mod music;
 pub mod objchook;
 pub mod overlay;

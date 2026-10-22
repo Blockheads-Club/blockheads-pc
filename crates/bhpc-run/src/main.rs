@@ -190,6 +190,23 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             return 2;
         }
     }
+    // The client mod loader: on unless `--no-mods`; files below the data folder.
+    if !args.iter().any(|a| a == "--no-mods") {
+        let data = bhpc_run::apkrun::data_dirs(cfg.init.data_dir.as_deref(), bhpc_vfs::DataDirs::platform_default());
+        cfg.mods = Some(bhpc_run::modglue::ModsOptions {
+            data_dir: data.root,
+            dev: args
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--mods-dev")
+                .filter_map(|(i, _)| args.get(i + 1))
+                .map(Into::into)
+                .collect(),
+            block_native: args.iter().any(|a| a == "--mods-block-native"),
+            join: opt(args, "--join").cloned(),
+            auto_accept: args.iter().any(|a| a == "--mods-auto-accept"),
+        });
+    }
     cfg.shot = opt(args, "--shot").map(Into::into);
     if let Some(n) = opt(args, "--shot-at").and_then(|v| v.parse().ok()) {
         cfg.shot_at = n;

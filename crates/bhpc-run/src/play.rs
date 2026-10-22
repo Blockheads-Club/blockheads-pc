@@ -101,6 +101,8 @@ pub struct PlayConfig {
     pub pad_tile_cursor: bool,
     /// Window title.
     pub title: String,
+    /// The client mod loader (`None`: off, `--no-mods`).
+    pub mods: Option<crate::modglue::ModsOptions>,
     /// Language of the messages shown over the game.
     pub lang: bhpc_app::hud::Lang,
     /// What the buttons, wheel and keys do.
@@ -145,6 +147,7 @@ impl PlayConfig {
             hide_dpad: false,
             pad_tile_cursor: false,
             title: "The Blockheads".into(),
+            mods: None,
             lang: bhpc_app::hud::Lang::En,
             bindings: Bindings::default(),
             embed: None,
@@ -242,6 +245,8 @@ struct Flags {
     pad_view: Mutex<crate::overlay::PadView>,
     /// Text the game copied, for the host main thread to put on the clipboard (SDL's clipboard is main-thread only).
     clipboard: Mutex<Option<String>>,
+    /// The mod loader's view and the player's answers (drawn and handled on the window thread).
+    mods: Mutex<Option<Arc<crate::modglue::Shared>>>,
 }
 
 /// A failure to get a window or GL context: in-window mode reports that it cannot work here (the launcher falls back
@@ -1026,6 +1031,18 @@ fn boot(
     // Dev-only proof of the host ObjC hooks (`objchook`): BHPC_DEV_OBJC_HOOKS=1.
     let dev_hooks =
         std::env::var_os("BHPC_DEV_OBJC_HOOKS").is_some_and(|v| v == "1").then(|| dev_objc_hooks(&mut sess)).flatten();
+    // The client mod loader (`modglue`): hooks installed now, the rest retried from the frame hook.
+    let mod_glue = cfg.mods.clone().and_then(|opts| {
+        let rt = crate::objchook::Runtime::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
+            .inspect_err(|e| eprintln!("[mods] no ObjC runtime, mods are off: {e}"))
+            .ok()?;
+        let g = Arc::new(crate::modglue::ModGlue::new(rt, opts));
+        g.install(&mut sess.cpu);
+        Some(g)
+    });
+    if let Some(g) = &mod_glue {
+        *flags.mods.lock().unwrap_or_else(PoisonError::into_inner) = Some(g.shared.clone());
+    }
 
     if let Some(secs) = cfg.seconds {
         // If a guest thread is stuck in a call that never returns (so the UI loop cannot look at the clock), stop
@@ -1061,8 +1078,18 @@ fn boot(
         if retry.as_ref().is_some_and(|(h, _, _)| h.waiting() == 0) {
             retry = None;
         }
+        let glue = mod_glue.clone().map(|g| (g, Mutex::new(Instant::now())));
         gles.set_frame_hook(Arc::new(move |c| {
             q.drain(c);
+            if let Some((g, last)) = &glue {
+                let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
+                if g.hooks.waiting() > 0 && last.elapsed() >= Duration::from_secs(1) {
+                    *last = Instant::now();
+                    drop(last);
+                    g.install(c);
+                }
+                g.frame(c);
+            }
             // Waiting dev hooks: try again once a second, on the main thread.
             if let Some((h, rt, last)) = &retry {
                 let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
@@ -2375,7 +2402,8 @@ fn dev_objc_dump(sess: &Session, list: &std::path::Path) {
                     let m = list + 8 + i * size;
                     let sel = mem.read_cstr(mem.read_u32(m).ok()?).ok()?;
                     let ty = mem.read_cstr(mem.read_u32(m + 4).ok()?).ok()?;
-                    out.push(format!("{}[{name} {sel}] {ty}", if meta { '+' } else { '-' }));
+                    let imp = mem.read_u32(m + 8).ok()?;
+                    out.push(format!("{}[{name} {sel}] {ty} imp={imp:#x}", if meta { '+' } else { '-' }));
                 }
                 Some(out)
             };

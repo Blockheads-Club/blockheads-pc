@@ -624,3 +624,20 @@ pub fn parse_hash(h: &str) -> Option<Hash> {
     }
     Some(out)
 }
+
+/// Adds `bhcModLoader{acceptedHash, proto: 1}` to a 0x1f packet (`0x1f` + an XML property list), before the
+/// closing tag of its top-level dict. `None` when the packet is not that (another type, a binary plist).
+pub fn inject_mod_loader(packet: &[u8], hash: &str) -> Option<Vec<u8>> {
+    let body = packet.strip_prefix(&[0x1f])?;
+    let text = std::str::from_utf8(body).ok()?;
+    let at = text.rfind("</dict>")?;
+    let key = format!(
+        "<key>{}</key><dict><key>acceptedHash</key><string>{hash}</string><key>proto</key><integer>{PROTO}</integer></dict>",
+        bhmod_proto::PLIST_KEY
+    );
+    let mut out = vec![0x1f];
+    out.extend_from_slice(&text.as_bytes()[..at]);
+    out.extend_from_slice(key.as_bytes());
+    out.extend_from_slice(&text.as_bytes()[at..]);
+    Some(out)
+}
