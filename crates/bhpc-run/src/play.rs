@@ -1018,6 +1018,9 @@ fn boot(
     }
     eprintln!("[play] constructors done");
     progress(Phase::Runtime, 0, RUNTIME_STEPS);
+    // Dev-only proof of the host ObjC hooks (`objchook`): BHPC_DEV_OBJC_HOOKS=1.
+    let dev_hooks =
+        std::env::var_os("BHPC_DEV_OBJC_HOOKS").is_some_and(|v| v == "1").then(|| dev_objc_hooks(&mut sess)).flatten();
 
     if let Some(secs) = cfg.seconds {
         // If a guest thread is stuck in a call that never returns (so the UI loop cannot look at the clock), stop
@@ -1049,7 +1052,22 @@ fn boot(
     };
     {
         let q = main_q.clone();
-        gles.set_frame_hook(Arc::new(move |c| q.drain(c)));
+        let mut retry = dev_hooks.map(|(h, rt)| (h, rt, Mutex::new(Instant::now())));
+        if retry.as_ref().is_some_and(|(h, _, _)| h.waiting() == 0) {
+            retry = None;
+        }
+        gles.set_frame_hook(Arc::new(move |c| {
+            q.drain(c);
+            // Waiting dev hooks: try again once a second, on the main thread.
+            if let Some((h, rt, last)) = &retry {
+                let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
+                if h.waiting() > 0 && last.elapsed() >= Duration::from_secs(1) {
+                    *last = Instant::now();
+                    drop(last);
+                    report_objc_hooks(&h.install(c, rt));
+                }
+            }
+        }));
     }
     kick_main_queue(&mut sess, &main_q);
     let marker = main_marker(&mut sess);
@@ -1812,6 +1830,20 @@ fn finish(
     blocks: &BlockLog,
 ) -> PlayReport {
     let sym = &cfg.symbolize;
+    if let Some(h) = DEV_HOOKS.get() {
+        // With BHPC_THUNK_STATS=1: host time per call of each hook thunk (an after hook includes the original).
+        for t in sess.cpu.table().stats().iter().filter(|t| t.name.starts_with("bhpc:objc:") && t.calls > 0) {
+            eprintln!(
+                "[dev-hook] {}: {} calls, {:.0} ns per call in the thunk",
+                t.name,
+                t.calls,
+                t.nanos as f64 / t.calls as f64
+            );
+        }
+        for st in h.stats() {
+            eprintln!("[dev-hook] {} {}: {} calls, {} panics {}", st.name, st.state, st.calls, st.panics, st.note);
+        }
+    }
     if std::env::var_os("BHPC_THUNK_STATS").is_some() {
         for t in sess.cpu.table().stats().iter().take(60) {
             let free = if t.free { " (gate-free)" } else { "" };
@@ -2209,4 +2241,103 @@ fn hook_trace(sess: &mut Session, symbol: &str) -> Result<(), String> {
             .collect();
         eprintln!("[trace-fn] {name}({})", args.join(", "));
     })
+}
+
+/// The dev hooks of `BHPC_DEV_OBJC_HOOKS=1`, for the end-of-run report.
+static DEV_HOOKS: std::sync::OnceLock<Arc<crate::objchook::ObjcHooks>> = std::sync::OnceLock::new();
+
+fn report_objc_hooks(r: &crate::objchook::InstallReport) {
+    for n in &r.installed {
+        eprintln!("[dev-hook] installed {n}");
+    }
+    for (n, why) in &r.waiting {
+        eprintln!("[dev-hook] waiting {n}: {why}");
+    }
+    for (n, why) in &r.failed {
+        eprintln!("[dev-hook] failed {n}: {why}");
+    }
+}
+
+/// Dev-only proof of the host ObjC hooks (`objchook`, the mod system's swizzling primitive): log the size and type
+/// byte of every network message the client receives, time the HUD's renderer (an after hook) and look at the
+/// world step's time (a before hook). Installed after the constructors on the main CPU.
+fn dev_objc_hooks(sess: &mut Session) -> Option<(Arc<crate::objchook::ObjcHooks>, crate::objchook::Runtime)> {
+    use crate::objchook::{ObjcHooks, Runtime, Target, Val};
+    let rt = Runtime::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
+        .inspect_err(|e| eprintln!("[dev-hook] no ObjC runtime: {e}"))
+        .ok()?;
+    let hooks = Arc::new(ObjcHooks::new());
+    let t = |s: &str| Target::parse(s).expect("valid target");
+    // -[BHClient match:didReceiveData:fromPlayer:]: [data length], first byte of [data bytes] (the packet type).
+    let sels = Arc::new((AtomicU32::new(0), AtomicU32::new(0)));
+    let packets = AtomicU64::new(0);
+    hooks.hook(t("-[BHClient match:didReceiveData:fromPlayer:]"), None, move |inv| {
+        let data = inv.arg(1).map_or(0, |v| v.word());
+        let c = inv.cpu();
+        let sel = |slot: &AtomicU32, name: &str, c: &mut Cpu| {
+            let s = slot.load(Ordering::Relaxed);
+            if s != 0 {
+                return s;
+            }
+            let s = rt.sel(c, name).unwrap_or(0);
+            slot.store(s, Ordering::Relaxed);
+            s
+        };
+        let (len_sel, bytes_sel) = (sel(&sels.0, "length", c), sel(&sels.1, "bytes", c));
+        let len = rt.send(c, data, len_sel, &[]).map_or(0, |r| r.r0);
+        let ptr = rt.send(c, data, bytes_sel, &[]).map_or(0, |r| r.r0);
+        let kind = c.mem().read_u8(ptr).unwrap_or(0);
+        let n = packets.fetch_add(1, Ordering::Relaxed) + 1;
+        if n <= 40 || n % 200 == 0 {
+            eprintln!(
+                "[dev-hook] -[BHClient match:didReceiveData:fromPlayer:] #{n} t{}: {len} bytes, type {kind:#04x}",
+                sched::ctx().tid
+            );
+        }
+    });
+    // -[WorldUI render:translation:pinchScale:paused:]: after hook, timing the original (the first call, which
+    // translates the whole HUD renderer into the nested JIT, is reported on its own).
+    let renders = Mutex::new((0u64, Duration::ZERO));
+    hooks.hook(t("-[WorldUI render:translation:pinchScale:paused:]"), None, move |inv| {
+        let t0 = Instant::now();
+        let r = inv.call_original();
+        let took = t0.elapsed();
+        let mut g = renders.lock().unwrap_or_else(PoisonError::into_inner);
+        g.0 += 1;
+        if g.0 > 1 {
+            g.1 += took;
+        }
+        if g.0 == 1 || g.0 % 120 == 0 {
+            let show = |v: Val| match v {
+                Val::Words(w) => format!("{:?}", w.iter().map(|x| f32::from_bits(*x)).collect::<Vec<_>>()),
+                v => format!("{v:?}"),
+            };
+            let args: Vec<String> = (0..4).filter_map(|i| inv.arg(i)).map(show).collect();
+            let timing = if g.0 == 1 {
+                format!("{:.0} us (first call)", took.as_secs_f64() * 1e6)
+            } else {
+                format!("{:.1} us avg after the first call", g.1.as_secs_f64() * 1e6 / (g.0 - 1) as f64)
+            };
+            eprintln!(
+                "[dev-hook] -[WorldUI render:...] #{} t{}: original {timing}, args {}, result {r:?}",
+                g.0,
+                sched::ctx().tid,
+                args.join(" ")
+            );
+        }
+    });
+    // -[World update:accurateDT:pinchScale:dragInProgress:]: before hook, the step's time.
+    let steps = AtomicU64::new(0);
+    hooks.hook(t("-[World update:accurateDT:pinchScale:dragInProgress:]"), None, move |inv| {
+        let n = steps.fetch_add(1, Ordering::Relaxed) + 1;
+        if n == 1 || n % 120 == 0 {
+            let dt = inv.arg(0).unwrap_or(Val::Void);
+            eprintln!("[dev-hook] -[World update:...] #{n}: dt {dt:?}");
+        }
+    });
+    let t0 = Instant::now();
+    report_objc_hooks(&hooks.install(&mut sess.cpu, &rt));
+    eprintln!("[dev-hook] install took {:.0} us", t0.elapsed().as_secs_f64() * 1e6);
+    let _ = DEV_HOOKS.set(hooks.clone());
+    Some((hooks, rt))
 }
