@@ -27,7 +27,9 @@ pub trait Fetch {
 /// Reads `url`: `https://` through `f`, `file://` and absolute paths from disk (fixtures, `BHPC_MODS_INDEX`);
 /// anything else is refused.
 pub fn fetch(f: &dyn Fetch, url: &str, limit: u64) -> MRes<Vec<u8>> {
-    let local = url.strip_prefix("file://").or_else(|| url.starts_with('/').then_some(url));
+    // `Path::is_absolute` also covers Windows drive paths (`C:\...`); a leading `/` counts everywhere.
+    let local =
+        url.strip_prefix("file://").or_else(|| (url.starts_with('/') || Path::new(url).is_absolute()).then_some(url));
     if let Some(path) = local {
         return read_local(Path::new(path), limit);
     }
