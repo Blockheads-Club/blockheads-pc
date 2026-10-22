@@ -16,6 +16,7 @@ pub mod mainq;
 pub mod mktimer;
 pub mod mmapio;
 pub mod music;
+pub mod objchook;
 pub mod overlay;
 pub mod pace;
 pub mod picker;
@@ -246,6 +247,8 @@ mod tests_mmapio;
 mod tests_music;
 #[cfg(all(test, target_os = "linux"))]
 mod tests_net;
+#[cfg(test)]
+mod tests_objchook;
 #[cfg(test)]
 mod tests_overlay;
 #[cfg(test)]
