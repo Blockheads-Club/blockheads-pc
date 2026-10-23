@@ -18,6 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use bhmod_core::remote::{RemoteCall, RemoteError, RemoteTarget};
 use bhmod_core::runtime::{CommandId, InstanceLimits, ModFiles, SubscriptionId, TaskId};
 use bhmod_core::storage::FileStorage;
 use bhmod_core::types::{
@@ -25,6 +26,7 @@ use bhmod_core::types::{
     Outcome, Pos, Role, SavePhase, Side,
 };
 use bhmod_core::{CallError, GameBridge, HostApi, HostOptions, Instance, ModHost, ModState, Runtime};
+use bhmod_proto::{ServiceCall, ServiceFailure, ServiceResult};
 
 /// Longest kept log.
 pub const MAX_LOG_LINES: usize = 500;
@@ -39,6 +41,9 @@ pub enum Effect {
     Chat(String),
     /// Send a channel message to the server.
     Channel { name: String, data: Vec<u8> },
+    /// Send a service call to the server (`SERVICE_CALL`); the answer comes back through
+    /// [`ClientHost::service_result_in`], and a call that cannot be sent is failed with [`ClientHost::service_unavailable`].
+    Service(RemoteCall),
 }
 
 /// One log line.
@@ -248,6 +253,13 @@ impl GameBridge for Bridge {
     }
     fn is_builtin_command(&self, _name: &str) -> bool {
         false
+    }
+    fn service_send(&self, call: &RemoteCall) -> Result<(), RemoteError> {
+        if !self.online {
+            return Err(RemoteError::Unavailable);
+        }
+        self.effects.borrow_mut().push(Effect::Service(call.clone()));
+        Ok(())
     }
     fn channel_send(&self, _mod_id: &str, name: &str, target: &ChannelTarget, data: &[u8]) -> Result<(), ApiError> {
         match target {
@@ -539,6 +551,35 @@ impl ClientHost {
     /// A channel message from the server.
     pub fn channel_in(&mut self, name: &str, data: Vec<u8>) -> bool {
         self.host.channel_receive(name, ChannelSource::Server, data)
+    }
+
+    /// The server calls a service of a client mod (`SERVICE_CALL`). The answer is for the glue to send back.
+    pub fn service_call_in(&mut self, call: ServiceCall) -> ServiceResult {
+        let out = self.host.remote_call_in(
+            &RemoteTarget::Server,
+            &call.mod_id,
+            &call.service,
+            &call.version_req,
+            &call.method,
+            &call.args,
+        );
+        ServiceResult { id: call.id, outcome: out.map_err(|e| ServiceFailure::from(&e)) }
+    }
+
+    /// The server's answer to a call of a client mod (`SERVICE_RESULT`). False when no such call is open.
+    pub fn service_result_in(&mut self, r: ServiceResult) -> bool {
+        self.host.remote_result(&RemoteTarget::Server, r.id, r.outcome.map_err(RemoteError::from))
+    }
+
+    /// A call of a client mod could not be sent (the server has no id for it, or the join is not modded): the
+    /// mod hears `unavailable`.
+    pub fn service_unavailable(&mut self, id: u32) {
+        self.host.remote_result(&RemoteTarget::Server, id, Err(RemoteError::Unavailable));
+    }
+
+    /// The connection to the server is gone: open service calls fail with `disconnected`.
+    pub fn server_gone(&mut self) {
+        self.host.remote_peer_gone(&RemoteTarget::Server);
     }
 
     /// Effects queued by the mods since the last call.

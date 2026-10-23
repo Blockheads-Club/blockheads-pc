@@ -59,6 +59,12 @@ Client API events now: `chat`, `command` + mod commands, `tick`, `player-join`, 
 events come from `crates/bhpc-run/src/modevents.rs` (hooks listed there) and are notifications: the server decides
 what happens in a world, so a client mod's `cancelled` or changed `amount` is dropped. A player is named by the
 blockhead's or the placing client's name; the local player's own actions carry none, so they read as the local player.
+Service calls (API 0.3.1, mod-sdk `docs/luau-api.md#remote-services-api-031`): a client mod calls a service a server
+mod provides with `bh.services.call_remote("server", ...)`, asynchronously; the call leaves as `Effect::Service` (a `SERVICE_CALL`
+packet), the answer (`SERVICE_RESULT`, `Action::ServiceResultIn`) reaches the mod's callback, a call that cannot be sent
+(single-player, a server that has not announced mods) is answered `unavailable`. The server can call a client mod's
+service too (`remote = true` in its `[provides]`; `Action::ServiceCallIn` runs it under the mod's budget and the glue
+sends the `SERVICE_RESULT`).
 Not on a client: `player-pre-login`. Still open: JVM and native client mods (M9/M10), content (M8).
 
 ## Runner flags and launcher protocol

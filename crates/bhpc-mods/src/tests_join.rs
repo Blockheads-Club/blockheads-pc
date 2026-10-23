@@ -24,6 +24,10 @@ pub(crate) fn pkg(id: &str, version: &str, main: &str, extra: &str, pad: usize) 
     let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     w.start_file("mod.toml", o).unwrap();
     w.write_all(toml.as_bytes()).unwrap();
+    if extra.contains("[provides]") {
+        w.start_file("wit/svc.wit", o).unwrap();
+        w.write_all(b"package x:y;\n").unwrap();
+    }
     w.start_file("client/main.luau", o).unwrap();
     w.write_all(if main.is_empty() { "return {}\n" } else { main }.as_bytes()).unwrap();
     if pad > 0 {
@@ -256,6 +260,34 @@ fn full_download_with_acks_resume_and_cache() {
     let wear =
         bhmod_proto::Cosmetics { full: true, players: [("p".to_string(), [("hat".to_string(), 1u64)].into())].into() };
     assert_eq!(g.packet(&Message::Cosmetics(wear.clone()).encode(), t), vec![Action::Cosmetics(wear)]);
+    // Service calls: the server's call and answer reach the glue; the client's packets are built.
+    let call = bhmod_proto::ServiceCall {
+        id: 5,
+        mod_id: "srv".into(),
+        service: "hud".into(),
+        version_req: "^1".into(),
+        method: "title".into(),
+        args: vec![0x80],
+    };
+    assert_eq!(g.packet(&Message::ServiceCall(call.clone()).encode(), t), vec![Action::ServiceCallIn(call.clone())]);
+    let result = bhmod_proto::ServiceResult { id: 5, outcome: Ok(vec![0xf6]) };
+    assert_eq!(
+        g.packet(&Message::ServiceResult(result.clone()).encode(), t),
+        vec![Action::ServiceResultIn(result.clone())]
+    );
+    let out = bhmod_core::RemoteCall {
+        id: 8,
+        target: bhmod_core::RemoteTarget::Server,
+        mod_id: "echo".into(),
+        service: "prices".into(),
+        version_req: "*".into(),
+        method: "price".into(),
+        args: vec![0x80],
+    };
+    let pkt = g.service_call_packet(&out).unwrap();
+    assert!(matches!(Message::decode(&pkt).unwrap(), Message::ServiceCall(c) if c.id == 8 && c.mod_id == "echo"));
+    let pkt = g.service_result_packet(result.clone()).unwrap();
+    assert_eq!(Message::decode(&pkt).unwrap(), Message::ServiceResult(result));
 }
 
 #[test]
@@ -266,6 +298,29 @@ fn channels_need_a_finished_join() {
     assert_eq!(f.channel_packet("echo:ping", b""), None);
     let ch = Message::Channel(bhmod_proto::Channel { channel_id: 3, payload: vec![] }).encode();
     assert!(f.packet(&ch, t).is_empty());
+    // Nor do service calls.
+    let call = bhmod_proto::ServiceCall {
+        id: 1,
+        mod_id: "srv".into(),
+        service: "s".into(),
+        version_req: "*".into(),
+        method: "m".into(),
+        args: vec![0x80],
+    };
+    assert!(f.packet(&Message::ServiceCall(call.clone()).encode(), t).is_empty());
+    let result = bhmod_proto::ServiceResult { id: 1, outcome: Ok(vec![0xf6]) };
+    assert!(f.packet(&Message::ServiceResult(result.clone()).encode(), t).is_empty());
+    let out = bhmod_core::RemoteCall {
+        id: 1,
+        target: bhmod_core::RemoteTarget::Server,
+        mod_id: "echo".into(),
+        service: "s".into(),
+        version_req: "*".into(),
+        method: "m".into(),
+        args: vec![0x80],
+    };
+    assert_eq!(f.service_call_packet(&out), None);
+    assert_eq!(f.service_result_packet(result), None);
 }
 
 #[test]
