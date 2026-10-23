@@ -142,6 +142,10 @@ pub enum Action {
     ChannelIn(String, Vec<u8>),
     /// Which cosmetics players wear (`COSMETICS`, after the join).
     Cosmetics(bhmod_proto::Cosmetics),
+    /// The server calls a service of a client mod (`SERVICE_CALL`).
+    ServiceCallIn(bhmod_proto::ServiceCall),
+    /// The server answers a call of a client mod (`SERVICE_RESULT`).
+    ServiceResultIn(bhmod_proto::ServiceResult),
 }
 
 /// A server mod the player accepted, downloaded and checked.
@@ -405,6 +409,8 @@ impl JoinFlow {
                 }
                 Output::Channel { name, data } => actions.push(Action::ChannelIn(name, data)),
                 Output::Cosmetics(c) => actions.push(Action::Cosmetics(c)),
+                Output::ServiceCall(c) => actions.push(Action::ServiceCallIn(c)),
+                Output::ServiceResult(r) => actions.push(Action::ServiceResultIn(r)),
             }
         }
         actions
@@ -467,6 +473,16 @@ impl JoinFlow {
             bhpc_launcher::mods::now(),
         );
         (out, Some(run))
+    }
+
+    /// The `SERVICE_CALL` packet for a client mod's call, `None` when the join is not modded.
+    pub fn service_call_packet(&self, call: &bhmod_core::RemoteCall) -> Option<Vec<u8>> {
+        self.session.service_call(bhmod_proto::ServiceCall::from(call))
+    }
+
+    /// The `SERVICE_RESULT` packet answering a call of the server, `None` when the join is not modded.
+    pub fn service_result_packet(&self, result: bhmod_proto::ServiceResult) -> Option<Vec<u8>> {
+        self.session.service_result(result)
     }
 
     /// The `CHANNEL` packet for a mod's message, `None` when the server has no id for the channel (yet).

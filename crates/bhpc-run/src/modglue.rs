@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use bhmod_proto::{service_error, ServiceFailure, ServiceResult};
 use bhpc_bionic::sched;
 use bhpc_cpu::Cpu;
 use bhpc_launcher::mods::ModsDirs;
@@ -610,6 +611,27 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
                     }
                 });
             }
+            Action::ServiceCallIn(call) => {
+                // The server calls a service of a client mod: run it now and answer. Without running mods the
+                // answer is BUSY, so the server's mod hears it at once instead of after its timeout.
+                let id = call.id;
+                let result = MAIN.with(|m| m.borrow_mut().host.as_mut().map(|h| h.service_call_in(call)));
+                let result = result.unwrap_or(ServiceResult {
+                    id,
+                    outcome: Err(ServiceFailure { code: service_error::BUSY, message: "mods are not running".into() }),
+                });
+                let packet = MAIN.with(|m| m.borrow().flow.as_ref().and_then(|f| f.service_result_packet(result)));
+                if let (Some(bytes), Some(conn)) = (packet, conn) {
+                    send_packet(o, c, conn, &bytes);
+                }
+            }
+            Action::ServiceResultIn(result) => {
+                MAIN.with(|m| {
+                    if let Some(h) = m.borrow_mut().host.as_mut() {
+                        h.service_result_in(result);
+                    }
+                });
+            }
         }
     }
     sync_join(sh);
@@ -782,6 +804,7 @@ pub(crate) fn apply_effects(o: &Objc, c: &mut Cpu) {
             .iter()
             .map(|e| match e {
                 Effect::Channel { name, data } => m.flow.as_ref().and_then(|f| f.channel_packet(name, data)),
+                Effect::Service(call) => m.flow.as_ref().and_then(|f| f.service_call_packet(call)),
                 Effect::Chat(_) => None,
             })
             .collect();
@@ -799,6 +822,17 @@ pub(crate) fn apply_effects(o: &Objc, c: &mut Cpu) {
                 None => log(&format!("channel {name}: the server has not opened it")),
             },
             (Effect::Channel { name, .. }, None) => log(&format!("channel {name}: not connected")),
+            (Effect::Service(call), conn) => match (p, conn) {
+                (Some(bytes), Some(conn)) => send_packet(o, c, conn, &bytes),
+                _ => {
+                    log(&format!("service {}: the server cannot be asked", call.service));
+                    MAIN.with(|m| {
+                        if let Some(h) = m.borrow_mut().host.as_mut() {
+                            h.service_unavailable(call.id);
+                        }
+                    });
+                }
+            },
         }
     }
 }

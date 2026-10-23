@@ -118,6 +118,104 @@ fn chat_commands_ticks_players_and_channels() {
     h.stop();
 }
 
+const SVC: &str = r#"
+local mod = {}
+function mod.on_enable()
+    bh.services.provide("hud", "1.0.0", {
+        title = function(n)
+            local c = bh.services.caller()
+            return "title " .. n .. " from " .. c.mod .. " " .. tostring(c.player)
+        end,
+    })
+    local function ask(item)
+        bh.services.call_remote("server", "prices", "^1", "price", { item }, function(ok, v)
+            bh.log.info("answer " .. item .. " " .. tostring(ok) .. " " .. (ok and tostring(v) or v.kind))
+        end)
+    end
+    bh.events.on("tick", function(ev)
+        if ev.tick == 1 then ask("a") elseif ev.tick == 2 then ask("b") elseif ev.tick == 3 then ask("c") end
+    end)
+end
+return mod
+"#;
+
+fn svc_host(dir: &Path, online: bool) -> ClientHost {
+    let extra = "[permissions]\nchannels = true\n[provides]\nservices = [{ name = \"hud\", version = \"1.0.0\", wit = \"wit/svc.wit\", remote = true }]";
+    let p = dir.join("svc.bhmod");
+    std::fs::write(&p, pkg("svc", "1.0.0", SVC, extra, 0)).unwrap();
+    let plan = Plan {
+        own: None,
+        dev: vec![],
+        server: vec![Accepted { id: "svc".into(), path: p, grant: vec!["channels".into()] }],
+    };
+    let (mut h, _, problems) = setup(dir, online, plan);
+    assert!(problems.is_empty(), "{problems:?}");
+    h.enable("W", "w");
+    h
+}
+
+#[test]
+fn service_calls_both_ways() {
+    use bhmod_proto::{service_error, ServiceCall, ServiceResult};
+    let d = tempfile::tempdir().unwrap();
+    let mut h = svc_host(d.path(), true);
+    assert_eq!(h.status()[0].state, "running", "{:?}", h.log());
+    // A mod's call leaves as an effect; its answers, failures and the connection loss come back as events.
+    let t = Instant::now();
+    h.tick(t);
+    h.tick(t);
+    h.tick(t);
+    let effects = h.take_effects();
+    let calls: Vec<_> = effects
+        .iter()
+        .map(|e| match e {
+            Effect::Service(c) => (c.id, c.service.clone(), c.method.clone()),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            (1, "prices".into(), "price".into()),
+            (2, "prices".into(), "price".into()),
+            (3, "prices".into(), "price".into())
+        ]
+    );
+    assert!(h.service_result_in(ServiceResult { id: 1, outcome: Ok(vec![0x03]) }));
+    h.service_unavailable(2);
+    h.server_gone();
+    let logs: Vec<String> = h.take_new_logs().into_iter().map(|l| l.text).collect();
+    for want in ["answer a true 3", "answer b false unavailable", "answer c false disconnected"] {
+        assert!(logs.iter().any(|l| l == want), "{want}: {logs:?}");
+    }
+    assert!(!h.service_result_in(ServiceResult { id: 1, outcome: Ok(vec![0x03]) }), "already answered");
+    // The server calls a client mod's service (remote = true): it sees the server as the caller.
+    let call = ServiceCall {
+        id: 9,
+        mod_id: "srv".into(),
+        service: "hud".into(),
+        version_req: "^1".into(),
+        method: "title".into(),
+        args: vec![0x81, 0x07],
+    };
+    let r = h.service_call_in(call.clone());
+    let want = bhmod_core::value::Value::text("title 7 from srv nil").encode();
+    assert_eq!(r, ServiceResult { id: 9, outcome: Ok(want) });
+    let r = h.service_call_in(ServiceCall { id: 10, service: "nothing".into(), ..call });
+    assert_eq!(r.id, 10);
+    assert_eq!(r.outcome.unwrap_err().code, service_error::NOT_FOUND);
+    h.stop();
+}
+
+#[test]
+fn offline_service_calls_are_unavailable() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = svc_host(d.path(), false);
+    h.tick(Instant::now());
+    assert!(h.take_effects().is_empty());
+    assert!(h.take_new_logs().iter().any(|l| l.text == "answer a false unavailable"));
+}
+
 #[test]
 fn offline_channels_failed_mods_and_the_log_limit() {
     let d = tempfile::tempdir().unwrap();

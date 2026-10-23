@@ -73,8 +73,8 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bhmod-client"
-version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=479e7b9#479e7b9eeef4ecce23d82cfc1ad78723da56a686"
+version = "0.2.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=fcafb231205705f854d1e3d38169ff5959c68b1d#fcafb231205705f854d1e3d38169ff5959c68b1d"
 dependencies = [
  "bhmod-content",
  "bhmod-manifest",
@@ -86,8 +86,8 @@ dependencies = [
 
 [[package]]
 name = "bhmod-content"
-version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=479e7b9#479e7b9eeef4ecce23d82cfc1ad78723da56a686"
+version = "0.2.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=fcafb231205705f854d1e3d38169ff5959c68b1d#fcafb231205705f854d1e3d38169ff5959c68b1d"
 dependencies = [
  "bhmod-manifest",
  "bhmod-proto",
@@ -97,10 +97,11 @@ dependencies = [
 
 [[package]]
 name = "bhmod-core"
-version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=479e7b9#479e7b9eeef4ecce23d82cfc1ad78723da56a686"
+version = "0.2.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=fcafb231205705f854d1e3d38169ff5959c68b1d#fcafb231205705f854d1e3d38169ff5959c68b1d"
 dependencies = [
  "bhmod-manifest",
+ "bhmod-proto",
  "jni",
  "mlua",
  "semver",
@@ -111,8 +112,8 @@ dependencies = [
 
 [[package]]
 name = "bhmod-manifest"
-version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=479e7b9#479e7b9eeef4ecce23d82cfc1ad78723da56a686"
+version = "0.2.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=fcafb231205705f854d1e3d38169ff5959c68b1d#fcafb231205705f854d1e3d38169ff5959c68b1d"
 dependencies = [
  "semver",
  "serde",
@@ -123,16 +124,16 @@ dependencies = [
 
 [[package]]
 name = "bhmod-proto"
-version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=479e7b9#479e7b9eeef4ecce23d82cfc1ad78723da56a686"
+version = "0.2.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=fcafb231205705f854d1e3d38169ff5959c68b1d#fcafb231205705f854d1e3d38169ff5959c68b1d"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "bhmod-wasm"
-version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=479e7b9#479e7b9eeef4ecce23d82cfc1ad78723da56a686"
+version = "0.2.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=fcafb231205705f854d1e3d38169ff5959c68b1d#fcafb231205705f854d1e3d38169ff5959c68b1d"
 dependencies = [
  "bhmod-core",
  "bhmod-manifest",
