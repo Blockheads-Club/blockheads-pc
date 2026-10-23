@@ -336,6 +336,18 @@ describe('UpdateDialog', () => {
     expect(mock.api.updateInstall).toHaveBeenCalled();
   });
 
+  it('links to the release page when the install cannot update itself', async () => {
+    set('available', { info: { version: '0.2.0', size_mb: 0, notes: [], manual_url: 'https://github.com/Blockheads-Club/blockheads-pc/releases/tag/v0.2.0' } });
+    render(UpdateDialog);
+    expect(screen.getByText(/can’t update itself/)).toBeVisible();
+    expect(screen.queryByRole('list')).toBeNull();
+    expect(screen.queryByText(/Download size/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Download and install' })).toBeNull();
+    await click('Open release page');
+    expect(mock.api.openUrl).toHaveBeenCalledWith('https://github.com/Blockheads-Club/blockheads-pc/releases/tag/v0.2.0');
+    expect(mock.api.updateInstall).not.toHaveBeenCalled();
+  });
+
   it('shows download progress with and without numbers', async () => {
     set('downloading');
     render(UpdateDialog);

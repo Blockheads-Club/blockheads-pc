@@ -21,6 +21,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+# In-place updates, only on a click (src/updater.rs); the feed and the pinned public key are in tauri.conf.json.
+tauri-plugin-updater = "2"
 bhpc-launcher = { path = "../../crates/bhpc-launcher" }
 bhpc-input = { path = "../../crates/bhpc-input" }
 serde = { version = "1", features = ["derive"] }
