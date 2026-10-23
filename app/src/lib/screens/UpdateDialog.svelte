@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, win } from '../api';
+  import { api } from '../api';
   import { t } from '../i18n.svelte';
   import { REPO_URL, store } from '../store.svelte';
   import Badge from '../ui/Badge.svelte';
@@ -81,7 +81,7 @@
         <Button disabled>{t('upd.restartNow')}</Button>
       {:else}
         <Button variant="ghost" onclick={close}>{t('upd.restartLater')}</Button>
-        <Button variant="primary" icon="refresh" onclick={() => win.close()}>{t('upd.restartNow')}</Button>
+        <Button variant="primary" icon="refresh" onclick={() => api.updateRestart()}>{t('upd.restartNow')}</Button>
       {/if}
     {:else}
       <Button variant="ghost" icon="ext" onclick={() => api.openUrl(REPO_URL)}>{t('upd.website')}</Button>

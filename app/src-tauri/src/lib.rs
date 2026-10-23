@@ -538,6 +538,7 @@ pub fn run() {
             updater::update_check,
             updater::update_install,
             updater::update_progress,
+            updater::update_restart,
             mods::mods_overview,
             mods::mods_index,
             mods::mods_plan,

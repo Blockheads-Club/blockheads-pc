@@ -150,6 +150,13 @@ pub fn update_progress(state: State<'_, UpdateState>) -> Progress {
     lock(&state.progress).clone()
 }
 
+/// "Restart now" after an install: starts the new version and ends this one. Closing the window would only hide it
+/// to the tray. In an AppImage Tauri relaunches `$APPIMAGE`, the file the update replaced.
+#[tauri::command]
+pub fn update_restart(app: AppHandle) {
+    app.restart();
+}
+
 /// Registers the updater plugin and the state the commands share.
 pub fn init<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
     b.plugin(tauri_plugin_updater::Builder::new().build()).manage(UpdateState::default())

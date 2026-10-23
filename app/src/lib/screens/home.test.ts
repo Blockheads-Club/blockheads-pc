@@ -374,7 +374,7 @@ describe('UpdateDialog', () => {
     expect(screen.getByRole('dialog', { name: 'Update installed' })).toBeVisible();
     await click('Restart later');
     await click('Restart now');
-    expect(mock.win.close).toHaveBeenCalled();
+    expect(mock.api.updateRestart).toHaveBeenCalled();
     cleanup();
     store.game = makeSnap({ state: 'running' });
     set('ready');
