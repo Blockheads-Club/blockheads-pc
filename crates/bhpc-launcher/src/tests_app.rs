@@ -690,18 +690,18 @@ mod ops_tests {
         assert_eq!(plan.window, c.window);
         assert_eq!(plan.keys, c.keys);
         assert_eq!(plan.args_for(None)[..plan.args.len()], plan.args);
-        assert_eq!(plan.args_for(None)[plan.args.len()..], ["--progress"]);
+        assert_eq!(plan.args_for(None)[plan.args.len()..], ["--progress", "--control"]);
         let embedded = plan.args_for(Some(Path::new("/run/f")));
         assert_eq!(embedded[plan.args.len()..], ["--progress", "--embed", "/run/f"]);
         let mut linked = plan.clone();
         linked.open_uri = Some("http://theblockheads.net/join.php?ip=1".into());
         assert_eq!(
             linked.args_for(None)[plan.args.len()..],
-            ["--progress", "--open-uri", "http://theblockheads.net/join.php?ip=1"]
+            ["--progress", "--control", "--open-uri", "http://theblockheads.net/join.php?ip=1"]
         );
         linked.open_uri = None;
         linked.join = Some("localhost:15151".into());
-        assert_eq!(linked.args_for(None)[plan.args.len()..], ["--progress", "--join", "localhost:15151"]);
+        assert_eq!(linked.args_for(None)[plan.args.len()..], ["--progress", "--control", "--join", "localhost:15151"]);
         let dev = Prefs {
             game_sound: false,
             language: "ru".into(),

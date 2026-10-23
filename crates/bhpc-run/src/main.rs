@@ -207,6 +207,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             auto_accept: args.iter().any(|a| a == "--mods-auto-accept"),
         });
     }
+    cfg.control = args.iter().any(|a| a == "--control");
     cfg.shot = opt(args, "--shot").map(Into::into);
     if let Some(n) = opt(args, "--shot-at").and_then(|v| v.parse().ok()) {
         cfg.shot_at = n;
