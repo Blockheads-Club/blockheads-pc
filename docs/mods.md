@@ -35,7 +35,7 @@ The PC client runs Luau and WASM client mods (mod-sdk `bhmod-core` + `bhmod-wasm
 
 ## Cosmetics (M8)
 
-A server mod that declares `[content] cosmetics` (mod-sdk `docs/content.md`) re-skins what a player wears (the hair always; clothing only while the vanilla item is worn). The join
+A server mod that declares `[content] cosmetics` (mod-sdk `docs/content.md`) re-skins what a player wears (auto-wear: an empty clothing slot gets a plain vanilla item to draw on). The join
 flow keeps `MOD_LIST.registry` and hands `COSMETICS` (0xBC op 0x12, after the join) to
 `bhpc-run/src/cosmetics.rs`; the session start reads the cosmetics of the session's packages
 (`bhmod_content::Content`). Hooks (main thread, inactive while no cosmetic is declared):
@@ -43,8 +43,12 @@ flow keeps `MOD_LIST.registry` and hands `COSMETICS` (0xBC op 0x12, after the jo
 - `-[Blockhead updateClothingCubes]` (this client's own blockheads): original, then the texture ivars
   (`hatTexture`, `shirtBodyTexture`, `shirtArmTexture`, `pantsTexture`, `shoesTexture`) are replaced with
   `CPTexture2D`s made from the mod's PNG (`initWithData:pixelFormat:1:pixelsWide:pixelsHigh:contentSize:mipmap:`,
-  the game's own loader path; PNGs are padded to powers of two and converted to premultiplied RGBA4444 by `bhmod-content`).
-- `-[Blockhead updateSkin]` (hair texture `headHairTexture`), `-[Blockhead setupFromNetCreationData:]` (other
+  the game's own loader path; PNGs are padded to powers of two and premultiplied RGBA made by `bhmod-content`).
+- Auto-wear: before the original `updateClothingCubes` runs, the empty clothing slots a cosmetic needs get a plain
+  vanilla `InventoryItem` (put into `inventoryItems[0].subItems[slot]` for the call, and its type into the
+  `*ItemType` ivar: the armv7 build builds its cubes from those); the item type then travels in the blockhead's
+  creation data, so other players draw the shape too.
+- `-[Blockhead updateSkin]` (hair texture `headHairTexture`: a mask, see mod-sdk `docs/content.md`), `-[Blockhead setupFromNetCreationData:]` (other
   players' blockheads: clothing and hair), `-[Blockhead update:accurateDT:isSimulation:]` (refresh when the cosmetics changed).
 - Dev aids: `BHPC_DEV_COSMETICS=hat=<key>,hair=<key>` puts cosmetics of a `--mods-dev` folder on every blockhead in a
   single-player world (ids from an in-memory registry); `BHPC_COSMETICS_TRACE=1` logs what the hooks do.

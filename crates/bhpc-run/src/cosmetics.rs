@@ -32,7 +32,8 @@ use crate::modglue::Objc;
 use crate::objchook::{ObjcHooks, Target};
 
 /// Guest addresses of the ivar offset variables (`OBJC_IVAR_$_Class.name`) the hooks read and write.
-const IVARS: [(&str, &str); 12] = [
+const IVARS: [(&str, &str); 13] = [
+    ("Blockhead", "inventoryItems"),
     ("Blockhead", "clientID"),
     ("DynamicObject", "isNet"),
     ("Blockhead", "hatItemType"),
@@ -61,13 +62,17 @@ impl Ivars {
         let mut addr = HashMap::new();
         for (class, name) in IVARS {
             let a = export(&format!("OBJC_IVAR_$_{class}.{name}")).ok_or(format!("no ivar {class}.{name}"))?;
-            addr.insert(name, a);
+            addr.insert(&*Box::leak(format!("{class}.{name}").into_boxed_str()), a);
         }
         Ok(Ivars { store_strong, addr })
     }
 
+    /// The offset of an ivar: `Class.name`, or just `name` for the ones of `Blockhead` and `DynamicObject`.
     fn offset(&self, c: &mut Cpu, name: &str) -> u32 {
-        self.addr.get(name).and_then(|a| c.mem().read_u32(*a).ok()).unwrap_or(0)
+        let a = [name.to_string(), format!("Blockhead.{name}"), format!("DynamicObject.{name}")]
+            .iter()
+            .find_map(|k| self.addr.get(k.as_str()).copied());
+        a.and_then(|a| c.mem().read_u32(a).ok()).unwrap_or(0)
     }
 }
 
@@ -83,6 +88,8 @@ struct State {
     failed: BTreeMap<(u64, Part), ()>,
     /// The game's own texture of every ivar a cosmetic replaced (retained), by blockhead and ivar.
     originals: HashMap<(u32, &'static str), u32>,
+    /// Vanilla `InventoryItem`s lent to empty slots, by item type.
+    items: HashMap<u16, u32>,
 }
 
 thread_local! {
@@ -310,7 +317,7 @@ fn make_texture(o: &Objc, c: &mut Cpu, g: &Arc<bhmod_content::Gpu>) -> u32 {
     }
     let cls = o.class(c, "CPTexture2D");
     let tex = o.send(c, cls, "alloc", &[]);
-    // The game's own pixel format (1, RGBA4444), contentSize as two floats, no mipmaps.
+    // The game's own pixel format (1: premultiplied RGBA bytes), contentSize as two floats, no mipmaps.
     let tex = o.send(
         c,
         tex,
@@ -327,6 +334,62 @@ fn make_texture(o: &Objc, c: &mut Cpu, g: &Arc<bhmod_content::Gpu>) -> u32 {
     );
     // The data object stays alive (one per texture): the game may read the pixels again later.
     tex
+}
+
+/// A vanilla `InventoryItem` of `item_type` (made once) to put in an empty clothing slot.
+fn item(o: &Objc, c: &mut Cpu, item_type: u16) -> u32 {
+    if let Some(i) = STATE.with(|s| s.borrow().items.get(&item_type).copied()) {
+        return i;
+    }
+    let cls = o.class(c, "InventoryItem");
+    let alloc = o.send(c, cls, "alloc", &[]);
+    let it = o.send(
+        c,
+        alloc,
+        "initWithType:dataA:dataB:subItems:dynamicObjectSaveDict:",
+        &[u32::from(item_type), 0, 0, 0, 0],
+    );
+    STATE.with(|s| s.borrow_mut().items.insert(item_type, it));
+    it
+}
+
+/// Lends plain vanilla items to the empty clothing slots a cosmetic needs a shape for (auto-wear). The game's
+/// `updateClothingCubes` reads `inventoryItems[0]` (the clothing group item) `.subItems[slot][0]`; the item is put
+/// into that slot's array for the duration of the call. Returns the slot arrays to empty again afterwards.
+fn lend_items(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32, player: &str) -> Vec<u32> {
+    let off = iv.offset(c, "inventoryItems");
+    let inv = c.mem().read_u32(bh + off).unwrap_or(0);
+    if inv == 0 {
+        return Vec::new();
+    }
+    let group_slot = o.send(c, inv, "objectAtIndex:", &[0]);
+    if group_slot == 0 || o.send(c, group_slot, "count", &[]) == 0 {
+        return Vec::new();
+    }
+    let group = o.send(c, group_slot, "objectAtIndex:", &[0]);
+    let subs = o.send(c, group, "subItems", &[]);
+    let n = o.send(c, subs, "count", &[]);
+    let mut lent = Vec::new();
+    for (i, slot) in CLOTHING.iter().enumerate() {
+        if i as u32 >= n {
+            break;
+        }
+        let Some(wear) = STATE.with(|s| s.borrow().content.resolve(player, slot, None).and_then(|r| r.wear)) else {
+            continue;
+        };
+        let arr = o.send(c, subs, "objectAtIndex:", &[i as u32]);
+        if arr == 0 || o.send(c, arr, "count", &[]) != 0 {
+            continue;
+        }
+        let it = item(o, c, wear);
+        o.send(c, arr, "addObject:", &[it]);
+        let names = ["shoesItemType", "pantsItemType", "shirtItemType", "hatItemType"];
+        let off = iv.offset(c, names[i]);
+        let _ = c.mem().write_u16(bh + off, wear);
+        trace(|| format!("lent item {wear} to {bh:#x} slot {i}"));
+        lent.push(arr);
+    }
+    lent
 }
 
 /// Writes the cosmetics' textures into a blockhead.
@@ -376,13 +439,39 @@ fn apply_to(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32, which: Which) {
 /// Registers the hooks.
 pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
     let t = |s: &str| Target::parse(s).expect("valid target");
+    // Dev trace: the first pixels the game itself hands to CPTexture2D (to compare with the PNG).
+    hooks.hook(
+        t("-[CPTexture2D initWithData:pixelFormat:pixelsWide:pixelsHigh:contentSize:mipmap:]"),
+        None,
+        move |inv| {
+            let on = std::env::var_os("BHPC_COSMETICS_TRACE").is_some_and(|v| v == "2");
+            if !on {
+                return;
+            }
+            let (p, f, w, h) = (
+                inv.arg(0).map_or(0, |v| v.word()),
+                inv.arg(1).map_or(0, |v| v.word()),
+                inv.arg(2).map_or(0, |v| v.word()),
+                inv.arg(3).map_or(0, |v| v.word()),
+            );
+            let bytes = inv.cpu().mem().read_bytes(p, 48).unwrap_or_default();
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            eprintln!("[cosmetics] CPTexture2D init fmt {f} {w}x{h}: {hex}");
+        },
+    );
     let (oo, ii) = (o.clone(), iv.clone());
     hooks.hook(t("-[Blockhead updateClothingCubes]"), None, move |inv| {
         if !on_main() || !active() {
             return;
         }
         let bh = inv.receiver();
+        let dev = STATE.with(|s| !s.borrow().dev.is_empty());
+        let player = player_of(&oo, inv.cpu(), &ii, bh, dev);
+        let lent = lend_items(&oo, inv.cpu(), &ii, bh, &player);
         let r = inv.call_original();
+        for arr in lent {
+            oo.send(inv.cpu(), arr, "removeAllObjects", &[]);
+        }
         trace(|| format!("updateClothingCubes of {bh:#x}: {r:?}"));
         apply_to(&oo, inv.cpu(), &ii, bh, Which::Clothing);
     });
