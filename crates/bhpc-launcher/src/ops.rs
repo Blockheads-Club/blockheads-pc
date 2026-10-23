@@ -154,8 +154,11 @@ impl LaunchPlan {
         let mut a = self.args.clone();
         // Start-up progress lines for the loading screen (`--embed` implies them).
         a.push("--progress".to_string());
-        if let Some(f) = embed {
-            a.extend(["--embed".to_string(), f.display().to_string()]);
+        match embed {
+            Some(f) => a.extend(["--embed".to_string(), f.display().to_string()]),
+            // A game in a window of its own still hears the launcher on its stdin (`mods-reload`, see
+            // `embed::Cmd`); the in-window game reads all its commands there already.
+            None => a.push("--control".to_string()),
         }
         if let Some(u) = &self.open_uri {
             a.extend(["--open-uri".to_string(), u.clone()]);

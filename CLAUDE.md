@@ -202,11 +202,16 @@ Umbrella rules: `../AGENTS.md`.
   per-thunk host time. Overhead: `cargo test --release -p bhpc-run --lib objchook_overhead -- --ignored --nocapture`.
 
 ## Client mod loader (mod system M6, `docs/mods.md`)
-- Logic in `crates/bhpc-mods` (join flow, session folder, mod host, in-game UI; 100 % covered); the guest glue is
-  `bhpc-run/src/modglue.rs` (play build). Everything mod-related runs on the game's main thread (t0): the network
+- Logic in `crates/bhpc-mods` (join flow = mod-sdk's `bhmod_client::Session` wrapped for the prompt, session folder,
+  mod host, in-game UI; 100 % covered); the guest glue is `bhpc-run/src/modglue.rs` and the world-event hooks
+  `modevents.rs` (play build). Everything mod-related runs on the game's main thread (t0): the network
   poll, the world update, chat and the frame hook; the window thread only posts `UiCmd`s through `modglue::Shared`.
 - Never wait for the player on the game thread: the 0x1f is held (the send hook answers YES) and sent later.
 - The game's chat messages are dictionaries (`message`, `alias`), not strings; a client's `livePlayerInfos` may hold
   peer ids. Wrong guesses show up as millions of `unrecognized selector` lines that slow the game to a crawl.
 - `scripts/e2e-mods.sh` needs a blockheads-server with mods (`BHPC_SERVER_BIN`); the server stops when its last
-  player leaves. The in-game chat input field is laid out off screen in the port, so typed commands are unit-tested.
+  player leaves. The in-game chat input field is laid out off screen in the port: the e2e says a `/command` through
+  the runner's control channel (`--control`, stdin line `mods-chat TEXT`, also `mods-reload`), which calls the game's
+  own `-[BHClient sendChatMessage:sendToClients:]`; the typed path above that is unit-tested.
+- Finding game methods: `BHPC_DEV_OBJC_DUMP=FILE` prints the methods of the named classes; class names come from the
+  `OBJC_CLASS_$_*` exports of libApplication.so. `BHPC_MODS_TRACE=1` logs every world event the hooks report.

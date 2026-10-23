@@ -449,6 +449,9 @@ pub enum Cmd {
     Layout(Layout),
     /// Developer mode: stop the session's mods and load them again from their folders.
     ModsReload,
+    /// Say a line in the game's chat as if the player had typed it (a `/command` of a mod runs). For tests and
+    /// developer tools: the game's chat field is not reachable from outside the window.
+    ModsChat(String),
     Quit,
 }
 
@@ -465,11 +468,12 @@ impl Cmd {
             Cmd::Button { button, pressed, x, y, mods } => format!("button {button} {} {x} {y} {mods}", flag(*pressed)),
             Cmd::Wheel { dx, dy, x, y, mods } => format!("wheel {dx} {dy} {x} {y} {mods}"),
             Cmd::Key { hid, pressed, repeat, mods } => format!("key {hid} {} {} {mods}", flag(*pressed), flag(*repeat)),
-            Cmd::Text(t) => format!("text {}", t.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")),
+            Cmd::Text(t) => format!("text {}", escape(t)),
             Cmd::Focus(on) => format!("focus {}", flag(*on)),
             Cmd::Visible(on) => format!("visible {}", flag(*on)),
             Cmd::Layout(l) => format!("layout {}", l.code()),
             Cmd::ModsReload => "mods-reload".to_string(),
+            Cmd::ModsChat(t) => format!("mods-chat {}", escape(t)),
             Cmd::Quit => "quit".to_string(),
         }
     }
@@ -479,21 +483,10 @@ impl Cmd {
         let line = line.trim_end_matches(['\n', '\r']);
         let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
         if name == "text" {
-            let mut out = String::new();
-            let mut chars = rest.chars();
-            while let Some(c) = chars.next() {
-                out.push(if c == '\\' {
-                    match chars.next()? {
-                        'n' => '\n',
-                        'r' => '\r',
-                        '\\' => '\\',
-                        _ => return None,
-                    }
-                } else {
-                    c
-                });
-            }
-            return Some(Cmd::Text(out));
+            return unescape(rest).map(Cmd::Text);
+        }
+        if name == "mods-chat" {
+            return unescape(rest).map(Cmd::ModsChat);
         }
         let mut it = rest.split(' ');
         let mut num = || it.next();
@@ -533,6 +526,30 @@ impl Cmd {
             _ => return None,
         })
     }
+}
+
+/// A text on one line: backslash, newline and carriage return are escaped.
+fn escape(t: &str) -> String {
+    t.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")
+}
+
+/// The text of [`escape`]; `None` for an escape that does not exist.
+fn unescape(s: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        out.push(if c == '\\' {
+            match chars.next()? {
+                'n' => '\n',
+                'r' => '\r',
+                '\\' => '\\',
+                _ => return None,
+            }
+        } else {
+            c
+        });
+    }
+    Some(out)
 }
 
 /// USB HID usage id of a Linux evdev key code (GDK's hardware keycode minus 8 on X11 and Wayland); the physical

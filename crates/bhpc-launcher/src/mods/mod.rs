@@ -100,7 +100,8 @@ impl ModsDirs {
     pub fn index_cache(&self) -> PathBuf {
         self.cache.join("index.json")
     }
-    pub(crate) fn blobs(&self) -> PathBuf {
+    /// Server-mod packages by SHA-256 (`<sha256>.bhmod`, partial downloads as `.part`).
+    pub fn blobs(&self) -> PathBuf {
         self.cache.join("blobs")
     }
     pub(crate) fn servers(&self) -> PathBuf {

@@ -12,7 +12,7 @@ fn join_view_follows_the_flow() {
     let d = tempfile::tempdir().unwrap();
     let t = Instant::now();
     let mut f = JoinFlow::new(cfg(d.path()));
-    assert_eq!(JoinView::of(&f), None);
+    assert_eq!(JoinView::of(&f, t), None);
     f.contact(t);
     f.packet(
         &Message::ServerHello(ServerHello { proto: 1, mods_hash: [1; 32], client_required: true, count: 2 }).encode(),
@@ -30,7 +30,7 @@ fn join_view_follows_the_flow() {
         &Message::ModList(ModList { mods: vec![rich, nat], channels: vec![], registry: Default::default() }).encode(),
         t,
     );
-    let v = JoinView::of(&f).unwrap();
+    let v = JoinView::of(&f, t).unwrap();
     assert_eq!(v.stage, JoinStage::Prompt);
     assert!(v.required);
     assert_eq!(v.mods[0].permissions, ["world:read", "players:chat", "net-http", "channels"]);
@@ -43,7 +43,7 @@ fn join_view_follows_the_flow() {
     assert!(ok.can_accept(false));
     // Declining required mods: nothing to show any more.
     f.decide(false, false, t);
-    assert_eq!(JoinView::of(&f), None);
+    assert_eq!(JoinView::of(&f, t), None);
     let r = JoinView::rejected("S", "go away", Some("https://x"));
     assert_eq!(r.stage, JoinStage::Rejected("go away".into(), Some("https://x".into())));
     assert!(!r.can_accept(true));
@@ -72,10 +72,89 @@ fn downloading_and_failed_views() {
         t,
     );
     f.decide(true, false, t);
-    assert_eq!(JoinView::of(&f).unwrap().stage, JoinStage::Downloading);
-    assert!(!JoinView::of(&f).unwrap().required);
+    assert_eq!(JoinView::of(&f, t).unwrap().stage, JoinStage::Downloading);
+    assert!(!JoinView::of(&f, t).unwrap().required);
     f.packet(&Message::FileError(bhmod_proto::FileError { sha256: crate::tests_join::sha(&a), code: 1 }).encode(), t);
-    assert!(matches!(JoinView::of(&f).unwrap().stage, JoinStage::Failed(s) if s.contains("error 1")));
+    assert!(matches!(JoinView::of(&f, t).unwrap().stage, JoinStage::Failed(s) if s.text.contains("error 1")));
+}
+
+/// A flow at the prompt for `mods` (all required), already accepted.
+fn accepted(d: &std::path::Path, mods: Vec<bhmod_proto::ModInfo>, t: Instant) -> JoinFlow {
+    let mut f = JoinFlow::new(cfg(d));
+    f.contact(t);
+    let hello = ServerHello { proto: 1, mods_hash: [1; 32], client_required: true, count: mods.len() as u64 };
+    f.packet(&Message::ServerHello(hello).encode(), t);
+    f.packet(&Message::ModList(ModList { mods, channels: vec![], registry: Default::default() }).encode(), t);
+    f.decide(true, false, t);
+    f
+}
+
+fn chunk(bytes: &[u8], sha: [u8; 32], index: usize) -> Vec<u8> {
+    let data = bytes.chunks(bhmod_proto::CHUNK_SIZE).nth(index).unwrap().to_vec();
+    let offset = (index * bhmod_proto::CHUNK_SIZE) as u64;
+    Message::FileChunk(bhmod_proto::FileChunk { sha256: sha, offset, total: bytes.len() as u64, data }).encode()
+}
+
+#[test]
+fn failure_notices_and_the_pace() {
+    use crate::view::FailKind;
+    let d = tempfile::tempdir().unwrap();
+    let t = Instant::now();
+    let big = pkg("big", "1.0.0", "", "", 3 * bhmod_proto::CHUNK_SIZE);
+    let sha = crate::tests_join::sha(&big);
+    let mut f = accepted(d.path(), vec![info("big", &big, false)], t);
+    assert_eq!(f.address(), "127.0.0.1:15151");
+    assert_eq!(f.eta_secs(t), None);
+    f.packet(&chunk(&big, sha, 0), t);
+    // No pace yet within the first second, then the pace so far: one chunk of ~4 in 2 s.
+    assert_eq!(f.eta_secs(t + std::time::Duration::from_millis(500)), None);
+    let left = f.eta_secs(t + std::time::Duration::from_secs(2)).unwrap();
+    assert!((5..=7).contains(&left), "{left}");
+    let v = JoinView::of(&f, t + std::time::Duration::from_secs(2)).unwrap();
+    assert_eq!((v.address.as_str(), v.eta), ("127.0.0.1:15151", Some(left)));
+    // Stopped: the share of the file that was there.
+    let out = f.tick(t + crate::join::STALL + std::time::Duration::from_secs(1));
+    assert_eq!(out, vec![crate::join::Action::Disconnect]);
+    let JoinStage::Failed(fail) = JoinView::of(&f, t).unwrap().stage else { panic!() };
+    assert!(
+        matches!(&fail.kind, FailKind::Download { name, percent } if name == "Mod big" && (25..=40).contains(percent))
+    );
+    assert!(fail.text.contains("connection"));
+    // A file whose bytes do not hash to the listed value.
+    let d = tempfile::tempdir().unwrap();
+    let small = pkg("small", "1.0.0", "", "", 0);
+    let mut wrong = info("small", &small, false);
+    wrong.sha256 = [9; 32];
+    let mut f = accepted(d.path(), vec![wrong], t);
+    f.packet(&chunk(&small, [9; 32], 0), t);
+    let JoinStage::Failed(fail) = JoinView::of(&f, t).unwrap().stage else { panic!() };
+    assert!(matches!(&fail.kind, FailKind::Check { name, version, expected }
+        if name == "Mod small" && version == "1.0.0" && expected == &"09".repeat(32)));
+    // A package that needs a newer loader.
+    let d = tempfile::tempdir().unwrap();
+    let newer = pkg("newer", "1.0.0", "", "loader = \"^9.0\"", 0);
+    let mut f = accepted(d.path(), vec![info("newer", &newer, false)], t);
+    f.packet(&chunk(&newer, crate::tests_join::sha(&newer), 0), t);
+    let JoinStage::Failed(fail) = JoinView::of(&f, t).unwrap().stage else { panic!() };
+    assert_eq!(fail.kind, FailKind::Newer);
+    assert!(fail.text.contains("newer mod loader"));
+    // The server cannot send a file; the failure of an unknown id still reads.
+    let d = tempfile::tempdir().unwrap();
+    let mut f = accepted(d.path(), vec![info("small", &small, false)], t);
+    let err = Message::FileError(bhmod_proto::FileError { sha256: crate::tests_join::sha(&small), code: 1 });
+    f.packet(&err.encode(), t);
+    let JoinStage::Failed(fail) = JoinView::of(&f, t).unwrap().stage else { panic!() };
+    assert!(matches!(fail.kind, FailKind::Download { percent: 0, .. }) && fail.text.contains("error 1"));
+    let none = crate::view::fail_for_tests(&bhmod_client::session::Failure::Stalled("zz".into()));
+    assert!(matches!(&none.kind, FailKind::Download { name, percent: 0 } if name == "zz"));
+    let hash = crate::view::fail_for_tests(&bhmod_client::session::Failure::HashMismatch("zz".into()));
+    assert!(
+        matches!(&hash.kind, FailKind::Check { version, expected, .. } if version.is_empty() && expected.is_empty())
+    );
+    // Anything else keeps its own words.
+    let load = crate::view::fail_for_tests(&bhmod_client::session::Failure::LoadFailed("boom".into()));
+    assert_eq!(load.kind, FailKind::Other);
+    assert!(load.text.contains("boom"));
 }
 
 #[test]

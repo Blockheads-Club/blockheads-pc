@@ -209,6 +209,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             java_home: opt(args, "--mods-java-home").map(Into::into),
         });
     }
+    cfg.control = args.iter().any(|a| a == "--control");
     cfg.shot = opt(args, "--shot").map(Into::into);
     if let Some(n) = opt(args, "--shot-at").and_then(|v| v.parse().ok()) {
         cfg.shot_at = n;

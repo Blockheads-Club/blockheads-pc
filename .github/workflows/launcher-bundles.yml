@@ -106,7 +106,16 @@ jobs:
         # The sidecar above is built for this target; the build hook would build the host's.
         env:
           BHPC_SKIP_SIDECAR: "1"
-        run: bun run tauri build --target ${{ matrix.target }}
+          # In-place updates: with the updater key (secrets TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]) the build also signs
+          # the updater artifacts (AppImage, NSIS installer, macOS .app.tar.gz) and writes a .sig next to each.
+          # Without the key (forks, pull requests) it builds as before and the release job skips latest.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          updater=false
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && updater=true
+          bun run tauri build --target ${{ matrix.target }} --config "{\"bundle\":{\"createUpdaterArtifacts\":$updater}}"
 
       - name: Sidecar inside, no game files
         shell: bash
@@ -129,6 +138,21 @@ jobs:
           ext=""; case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
           "app/src-tauri/binaries/bhpc-run-${{ matrix.target }}$ext" --bench-thunk 100000
 
+      # macOS updater tarballs are all named "<product>.app.tar.gz": give each its version and arch (the feed picks
+      # files by name).
+      - name: Name the macOS updater files
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          arch="${{ matrix.target }}"; arch="${arch%%-*}"; [ "$arch" = x86_64 ] && arch=x64
+          version="$(sed -n 's/^  "version": "\(.*\)",/\1/p' app/src-tauri/tauri.conf.json)"
+          cd app/src-tauri/target/${{ matrix.target }}/release/bundle/macos
+          for f in *.app.tar.gz *.app.tar.gz.sig; do
+            [ -e "$f" ] || continue
+            case "$f" in *.sig) ext=".app.tar.gz.sig" ;; *) ext=".app.tar.gz" ;; esac
+            mv -v -- "$f" "Blockheads PC_${version}_${arch}${ext}"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: blockheads-pc-${{ matrix.name }}
@@ -140,6 +164,11 @@ jobs:
             app/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             app/src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
             app/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.sig
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe.sig
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi.sig
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
 
   release:
     name: release assets
@@ -154,6 +183,24 @@ jobs:
           path: bundles
           pattern: blockheads-pc-*
           merge-multiple: true
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Write latest.json (the launcher's update feed)
+        env:
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          # GitHub turns spaces in asset names into dots: rename first so the feed matches the stored names.
+          find bundles -type f -name '* *' -print0 | while IFS= read -r -d '' f; do mv -v -- "$f" "$(dirname "$f")/$(basename "$f" | tr ' ' '.')"; done
+          if [ -n "$(find bundles -name '*.sig' -print -quit)" ]; then
+            mkdir feed && find bundles -type f -exec cp {} feed/ \;
+            node scripts/updater-manifest.mjs feed "${TAG#v}" "$TAG"
+            cp feed/latest.json bundles/latest.json
+          else
+            echo "::notice::no updater signatures (TAURI_SIGNING_PRIVATE_KEY unset): latest.json skipped"
+          fi
       - name: Replace the release's assets
         env:
           GH_TOKEN: ${{ github.token }}

@@ -6,6 +6,7 @@ mod embed;
 mod embed_gl;
 mod mods;
 mod tray;
+mod updater;
 
 use bhpc_launcher::apk::{self, ApkReport};
 use bhpc_launcher::config::LaunchConfig;
@@ -104,7 +105,7 @@ struct AppInfo {
     os: &'static str,
     arch: &'static str,
     config_dir: String,
-    /// No release feed exists yet: the update UI stays off in real builds (see `update_check`).
+    /// The update notice is wired to the release feed (see `updater`).
     updates_enabled: bool,
     /// macOS draws the traffic lights (overlay title bar).
     native_controls: bool,
@@ -121,7 +122,7 @@ fn app_info() -> AppInfo {
         },
         arch: std::env::consts::ARCH,
         config_dir: ops::paths().map(|p| p.dir.display().to_string()).unwrap_or_default(),
-        updates_enabled: false,
+        updates_enabled: true,
         native_controls: cfg!(target_os = "macos"),
     }
 }
@@ -462,29 +463,11 @@ fn save_log(app: State<'_, App>, path: String) -> Res<()> {
     app.session().save_log(Path::new(&path)).map_err(text)
 }
 
-/// There is no release feed yet (the repository is not published): the UI hides the update flow in real builds
-/// (`updates_enabled: false`) and these commands only answer that it is unavailable. The screens are exercised
-/// against a mock backend in the e2e tests.
-#[tauri::command]
-fn update_check() -> Res<Option<()>> {
-    Err("updates are not available in this build".to_string())
-}
-
-#[tauri::command]
-fn update_install() -> Res<()> {
-    Err("updates are not available in this build".to_string())
-}
-
-#[tauri::command]
-fn update_progress() -> Res<()> {
-    Err("updates are not available in this build".to_string())
-}
-
 /// Smallest launcher window (logical pixels): the size it opens at, as minWidth/minHeight in tauri.conf.json.
 const MIN_SIZE: (f64, f64) = (1100.0, 760.0);
 
 pub fn run() {
-    let app = tauri::Builder::default()
+    let app = updater::init(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(App::default())
@@ -552,9 +535,10 @@ pub fn run() {
             embed_reveal,
             embed_fullscreen,
             save_log,
-            update_check,
-            update_install,
-            update_progress,
+            updater::update_check,
+            updater::update_install,
+            updater::update_progress,
+            updater::update_restart,
             mods::mods_overview,
             mods::mods_index,
             mods::mods_plan,

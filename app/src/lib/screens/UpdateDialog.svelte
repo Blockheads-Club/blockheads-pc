@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, win } from '../api';
+  import { api } from '../api';
   import { t } from '../i18n.svelte';
   import { REPO_URL, store } from '../store.svelte';
   import Badge from '../ui/Badge.svelte';
@@ -22,13 +22,14 @@
     error: t('upd.t.error')
   } as Record<string, string>);
   const bodies = $derived({
-    available: t('upd.b.available', { v: store.info?.version ?? '' }),
+    available: t(u.info?.manual_url ? 'upd.b.manual' : 'upd.b.available', { v: store.info?.version ?? '' }),
     downloading: t('upd.b.downloading'),
     installing: t('upd.b.installing'),
     ready: playing ? t('upd.b.playing') : t('upd.b.ready'),
     error: t('upd.b.error')
   } as Record<string, string>);
   const badge = $derived(stage === 'available' ? t('upd.badge.available') : stage === 'ready' ? t('upd.badge.ready') : stage === 'error' ? t('upd.badge.error') : t('upd.badge.updating'));
+  const hint = $derived([u.info?.size_mb ? t('upd.size', { n: u.info.size_mb }) : '', t('upd.kept')].filter(Boolean).join(' · '));
   const close = () => (store.dialog = null);
 </script>
 
@@ -40,8 +41,8 @@
   <p class="muted body">{bodies[stage] ?? bodies.available}</p>
 
   {#if stage === 'available' && u.info}
-    <ul class="notes" aria-label={t('upd.notes')}>{#each u.info.notes as n (n)}<li>{n}</li>{/each}</ul>
-    <p class="hint">{t('upd.size', { n: u.info.size_mb })} · {t('upd.kept')}</p>
+    {#if u.info.notes.length}<ul class="notes" aria-label={t('upd.notes')}>{#each u.info.notes as n (n)}<li>{n}</li>{/each}</ul>{/if}
+    <p class="hint">{hint}</p>
   {:else if stage === 'downloading'}
     <div class="line"><strong>{t('upd.downloading')}</strong><span class="mono">{`${p?.percent ?? 0} %`}</span></div>
     <Progress label={t('upd.progress')} value={p?.percent ?? 0} valuetext={t('upd.progressText', { n: p?.percent ?? 0, s: p?.eta_s ?? 0 })} />
@@ -64,7 +65,11 @@
   {#snippet footer()}
     {#if stage === 'available'}
       <Button variant="ghost" onclick={close}>{t('upd.later')}</Button>
-      <Button variant="primary" icon="download" onclick={() => store.installUpdate()}>{t('upd.install')}</Button>
+      {#if u.info?.manual_url}
+        <Button variant="primary" icon="ext" onclick={() => api.openUrl(u.info!.manual_url!)}>{t('upd.releasePage')}</Button>
+      {:else}
+        <Button variant="primary" icon="download" onclick={() => store.installUpdate()}>{t('upd.install')}</Button>
+      {/if}
     {:else if stage === 'downloading'}
       <Button variant="ghost" onclick={close}>{t('upd.hide')}</Button>
       <Button onclick={() => store.cancelUpdate()}>{t('upd.cancel')}</Button>
@@ -76,7 +81,7 @@
         <Button disabled>{t('upd.restartNow')}</Button>
       {:else}
         <Button variant="ghost" onclick={close}>{t('upd.restartLater')}</Button>
-        <Button variant="primary" icon="refresh" onclick={() => win.close()}>{t('upd.restartNow')}</Button>
+        <Button variant="primary" icon="refresh" onclick={() => api.updateRestart()}>{t('upd.restartNow')}</Button>
       {/if}
     {:else}
       <Button variant="ghost" icon="ext" onclick={() => api.openUrl(REPO_URL)}>{t('upd.website')}</Button>

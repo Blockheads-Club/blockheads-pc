@@ -1,28 +1,29 @@
-//! The client side of the 0xBC join (mod-sdk `docs/protocol-0xbc.md`) as a state machine without I/O on the game:
-//! the glue in `bhpc-run` feeds it the server's packets, the game's attempt to send its 0x1f, the player's answer
-//! and the time, and carries out the [`Action`]s it returns. Files go to the launcher's server-mod cache
-//! (`mods-cache/blobs/<sha256>.bhmod`, partial files as `.part`), and a finished join is recorded with
-//! [`bhpc_launcher::mods::cache::record_join`].
+//! The client side of the 0xBC join (mod-sdk `docs/protocol-0xbc.md`) for the PC game. The protocol itself (HELLO,
+//! the 1500 ms vanilla fallback, `MOD_LIST`, downloads with acknowledgements and resume, SHA-256 and package
+//! rules, `READY`, channel ids, `REJECT_TEXT`) is mod-sdk's sans-IO `bhmod_client::Session`, shared with the
+//! Android loader. [`JoinFlow`] wraps it for the glue in `bhpc-run`: it keeps what the prompt shows ([`Entry`] per
+//! client mod, with the index check and the player's per-mod switch), turns the session's outputs into [`Action`]s
+//! and records a finished join in the launcher's server cache. Files go to the launcher's server-mod cache
+//! (`mods-cache/blobs/<sha256>.bhmod`, partial files as `.part`).
 //!
 //! Flow: the server's first packet (0x23) → `HELLO` → wait 1500 ms for `SERVER_HELLO` (none: a vanilla server, the
 //! held 0x1f goes out unchanged and nothing 0xBC is sent again) → `LIST_REQUEST` → `MOD_LIST` → the player decides
-//! (the game's 0x1f is held meanwhile; nothing blocks the game thread) → downloads in list order with an
-//! acknowledgement every 4 chunks and resume from the `.part` file → SHA-256, package rules, native refusal →
-//! `READY` → the held 0x1f with `bhcModLoader{acceptedHash, proto: 1}`.
+//! (the game's 0x1f is held meanwhile; nothing blocks the game thread): required mods are fixed, optional ones have
+//! a switch, and `READY.loaded` carries the chosen subset → downloads → `READY` → the held 0x1f with
+//! `bhcModLoader{acceptedHash, proto: 1}`.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use bhmod_proto::{
-    hex, Channel, FileRequest, Hash, Hello, Message, ModInfo, ModList, Ready, RejectText, ServerHello, CHUNK_SIZE,
-    HELLO_TIMEOUT_MS, PROTO,
-};
-use bhpc_launcher::mods::cache::{self, CachedMod};
+use bhmod_client::cache::sha256;
+use bhmod_client::session::{self, Failure, Offer, Options, Output};
+use bhmod_client::{Caps, PackageCache, Session};
+use bhmod_manifest::manifest::Runtime;
+use bhmod_proto::{hex, Hash, ModInfo, RejectText, PROTO};
+use bhpc_launcher::mods::cache;
 use bhpc_launcher::mods::index::IndexFile;
-use bhpc_launcher::mods::install::{self, Candidate};
+use bhpc_launcher::mods::install::Candidate;
 use bhpc_launcher::mods::ModsDirs;
-use sha2::{Digest, Sha256};
 
 /// No chunk for this long: the download failed.
 pub const STALL: Duration = Duration::from_secs(20);
@@ -72,6 +73,9 @@ pub struct Entry {
     pub have: u64,
     /// Downloaded and checked.
     pub done: bool,
+    /// The player takes this mod. Always true for required mods; an optional mod can be switched off, and one with
+    /// a [`Refusal`] cannot be switched on.
+    pub enabled: bool,
 }
 
 impl Entry {
@@ -80,43 +84,18 @@ impl Entry {
         self.info.name.get("en").or_else(|| self.info.name.values().next()).cloned().unwrap_or(self.info.id.clone())
     }
 
-    /// Bytes to download.
+    /// Bytes to download (nothing for a mod that is cached or switched off).
     pub fn to_download(&self) -> u64 {
-        if self.cached {
+        if self.cached || !self.enabled {
             0
         } else {
             self.info.size
         }
     }
-}
 
-/// Why a join failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JoinError {
-    /// The server answered `FILE_ERROR` (not BUSY) for a mod.
-    File { id: String, code: u64 },
-    /// No data for [`STALL`].
-    Stalled { id: String, have: u64, size: u64 },
-    /// A chunk out of order or of the wrong size.
-    BadChunk { id: String },
-    /// The file's SHA-256 is not the listed one.
-    Checksum { id: String, expected: String, got: String },
-    /// The package rules refused the file.
-    Package { id: String, message: String },
-    /// The cache cannot be written.
-    Io(String),
-}
-
-impl std::fmt::Display for JoinError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            JoinError::File { id, code } => write!(f, "{id}: the server cannot send the file (error {code})"),
-            JoinError::Stalled { id, have, size } => write!(f, "{id}: the download stopped at {have} of {size} bytes"),
-            JoinError::BadChunk { id } => write!(f, "{id}: the server sent a broken piece of the file"),
-            JoinError::Checksum { id, expected, got } => write!(f, "{id}: expected sha256 {expected}, got {got}"),
-            JoinError::Package { id, message } => write!(f, "{id}: {message}"),
-            JoinError::Io(m) => write!(f, "cannot write the mod cache: {m}"),
-        }
+    /// The server needs this mod on the client (it cannot be switched off).
+    pub fn required(&self) -> bool {
+        self.info.client_required
     }
 }
 
@@ -139,7 +118,9 @@ pub enum Stage {
     Joined,
     /// The player said no to required mods (the connection is closed).
     Declined,
-    Failed(JoinError),
+    /// The server answered the `HELLO` with `REJECT_TEXT` (a protocol mismatch).
+    Rejected,
+    Failed(Failure),
 }
 
 /// What the glue must do.
@@ -181,50 +162,76 @@ pub enum PlayerInfo {
 }
 
 /// One join, from the server's first packet to the game's 0x1f.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct JoinFlow {
     cfg: JoinConfig,
-    stage: Stage,
-    since: Option<Instant>,
-    server: Option<ServerHello>,
+    session: Session,
+    /// Time zero of the session's millisecond clock (the first call that carries a time).
+    epoch: Option<Instant>,
     entries: Vec<Entry>,
-    /// The file being downloaded (index into `entries`), its bytes, chunks since the last acknowledgement.
-    current: Option<(usize, Vec<u8>, u32)>,
-    last_data: Option<Instant>,
-    retry_at: Option<Instant>,
+    required: bool,
+    failure: Option<Failure>,
     held: bool,
-    hash: Option<String>,
-    channels: BTreeMap<String, u16>,
+    /// What the session decided for the 0x1f (`Some(None)`: plain, `Some(Some(hash))`: with the key).
+    joined: Option<Option<Hash>>,
     reject: Option<RejectText>,
     server_name: String,
-}
-
-fn hash_hex(b: &[u8]) -> String {
-    hex(&Sha256::digest(b).into())
+    /// When the download began and what was there then (for the time left).
+    started: Option<(Instant, u64)>,
 }
 
 impl JoinFlow {
     pub fn new(cfg: JoinConfig) -> JoinFlow {
+        let runtimes: Vec<&str> = cfg.runtimes.iter().map(String::as_str).collect();
+        let mut opts = Options::new(&cfg.loader, &cfg.platform, &cfg.api, &runtimes);
+        opts.stall_timeout_ms = STALL.as_millis() as u64;
+        opts.busy_retry_ms = BUSY_RETRY.as_millis() as u64;
+        // Native packages are vetted here (index listing, "never allow native", the player's confirmation).
+        opts.allow_native = true;
+        let caps = Caps {
+            loader: semver::Version::parse(&cfg.loader).unwrap_or_else(|_| semver::Version::new(0, 0, 0)),
+            runtimes: cfg
+                .runtimes
+                .iter()
+                .filter_map(|r| match r.as_str() {
+                    "lua" => Some(Runtime::Lua),
+                    "wasm" => Some(Runtime::Wasm),
+                    _ => None,
+                })
+                .collect(),
+        };
+        let session = Session::new(opts, PackageCache::new(cfg.dirs.blobs()), caps);
         let server_name = cfg.address.clone();
         JoinFlow {
             cfg,
-            stage: Stage::Idle,
-            since: None,
-            server: None,
+            session,
+            epoch: None,
             entries: Vec::new(),
-            current: None,
-            last_data: None,
-            retry_at: None,
+            required: false,
+            failure: None,
             held: false,
-            hash: None,
-            channels: BTreeMap::new(),
+            joined: None,
             reject: None,
             server_name,
+            started: None,
         }
     }
 
-    pub fn stage(&self) -> &Stage {
-        &self.stage
+    pub fn stage(&self) -> Stage {
+        match self.session.state_name() {
+            "idle" => Stage::Idle,
+            "await-hello" => Stage::Hello,
+            "vanilla" => Stage::Vanilla,
+            "await-list" => Stage::Listing,
+            "prompt" => Stage::Prompt,
+            "download" | "loading" => Stage::Downloading,
+            "modded" => Stage::Joined,
+            _ => match &self.failure {
+                Some(Failure::Declined) => Stage::Declined,
+                Some(f) => Stage::Failed(f.clone()),
+                None => Stage::Rejected,
+            },
+        }
     }
 
     /// The client mods of the server's list.
@@ -232,9 +239,23 @@ impl JoinFlow {
         &self.entries
     }
 
-    /// The server's `SERVER_HELLO`.
-    pub fn server(&self) -> Option<&ServerHello> {
-        self.server.as_ref()
+    /// The server's `SERVER_HELLO.clientRequired`.
+    pub fn required(&self) -> bool {
+        self.required
+    }
+
+    /// The server as the player knows it (`host:port`).
+    pub fn address(&self) -> &str {
+        &self.cfg.address
+    }
+
+    /// Seconds left of the download at the pace since it began (`None` before there is a pace to go by).
+    pub fn eta_secs(&self, now: Instant) -> Option<u64> {
+        let (at, have0) = self.started?;
+        let (have, total) = self.progress();
+        let secs = now.saturating_duration_since(at).as_secs_f64();
+        let rate = have.saturating_sub(have0) as f64 / secs;
+        (secs >= 1.0 && rate > 0.0).then(|| (total.saturating_sub(have) as f64 / rate).ceil() as u64)
     }
 
     /// The server's display name (the address until the game tells a name).
@@ -252,377 +273,198 @@ impl JoinFlow {
         self.reject.as_ref()
     }
 
-    /// True while the server speaks 0xBC on this connection.
-    pub fn modded(&self) -> bool {
-        self.server.is_some()
-    }
-
-    /// Wire id of a channel name (`MOD_LIST.channels`, `CHANNEL_REGISTER`).
-    pub fn channel_id(&self, name: &str) -> Option<u16> {
-        self.channels.get(name).copied()
-    }
-
-    /// `(bytes held, bytes to download)` over every mod to download.
+    /// `(bytes held, bytes to download)` over the mods the player takes.
     pub fn progress(&self) -> (u64, u64) {
         let total = self.entries.iter().map(Entry::to_download).sum();
-        let have = self.entries.iter().filter(|e| !e.cached).map(|e| e.have.min(e.info.size)).sum();
+        let have = self.entries.iter().filter(|e| !e.cached && e.enabled).map(|e| e.have.min(e.info.size)).sum();
         (have, total)
     }
 
-    /// True when the player may accept (no mod is refused).
+    /// True when the player may accept (no mod they take is refused).
     pub fn acceptable(&self) -> bool {
-        self.entries.iter().all(|e| e.refusal.is_none())
+        self.entries.iter().all(|e| !e.enabled || e.refusal.is_none())
     }
 
-    /// True when a listed mod has native code (the prompt needs the red confirmation).
+    /// True when a mod the player takes has native code (the prompt needs the red confirmation).
     pub fn has_native(&self) -> bool {
-        self.entries.iter().any(|e| e.info.permissions.native)
+        self.entries.iter().any(|e| e.enabled && e.info.permissions.native)
     }
 
-    fn blob(&self, sha: &Hash, ext: &str) -> PathBuf {
-        self.cfg.dirs.cache.join("blobs").join(format!("{}.{ext}", hex(sha)))
+    /// Switches an optional mod (entry `index`) on or off. Required and refused mods keep their state.
+    pub fn toggle(&mut self, index: usize) {
+        if self.stage() != Stage::Prompt {
+            return;
+        }
+        if let Some(e) = self.entries.get_mut(index).filter(|e| !e.required() && e.refusal.is_none()) {
+            e.enabled = !e.enabled;
+        }
     }
 
-    fn cached(&self) -> Vec<Hash> {
-        let mut out: Vec<Hash> = std::fs::read_dir(self.cfg.dirs.cache.join("blobs"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                parse_hash(name.strip_suffix(".bhmod")?)
-            })
-            .collect();
-        out.sort();
-        out
+    fn ms(&mut self, now: Instant) -> u64 {
+        let epoch = *self.epoch.get_or_insert(now);
+        now.saturating_duration_since(epoch).as_millis() as u64
     }
 
     /// The server's first packet (0x23) arrived: send `HELLO`.
     pub fn contact(&mut self, now: Instant) -> Vec<Action> {
-        if self.stage != Stage::Idle {
-            return Vec::new();
-        }
-        self.stage = Stage::Hello;
-        self.since = Some(now);
-        let hello = Hello {
-            proto: PROTO,
-            loader: self.cfg.loader.clone(),
-            platform: self.cfg.platform.clone(),
-            api: self.cfg.api.clone(),
-            runtimes: self.cfg.runtimes.clone(),
-            cached: self.cached(),
-        };
-        vec![Action::Send(Message::Hello(hello).encode())]
+        let ms = self.ms(now);
+        let out = self.session.contact(ms);
+        self.handle(out)
     }
 
     /// The game is about to send its 0x1f.
     pub fn player_info(&mut self) -> PlayerInfo {
-        match self.stage {
-            Stage::Hello | Stage::Listing | Stage::Prompt | Stage::Downloading => {
+        // The join ended (declined, failed): the connection is closing, the game's 0x1f changes nothing.
+        if matches!(self.stage(), Stage::Declined | Stage::Failed(_)) {
+            return PlayerInfo::Send(None);
+        }
+        let out = self.session.join_requested();
+        if let Some(Output::Join(j)) = out.first() {
+            self.joined = Some(*j);
+        }
+        match self.joined {
+            Some(j) => PlayerInfo::Send(j.map(|h| hex(&h))),
+            None => {
                 self.held = true;
                 PlayerInfo::Hold
             }
-            Stage::Joined => PlayerInfo::Send(self.hash.clone()),
-            _ => PlayerInfo::Send(None),
-        }
-    }
-
-    /// Releases the held 0x1f (if any).
-    fn release(&mut self, hash: Option<String>) -> Vec<Action> {
-        if std::mem::take(&mut self.held) {
-            vec![Action::Release(hash)]
-        } else {
-            Vec::new()
         }
     }
 
     /// Time passes (call it every frame).
     pub fn tick(&mut self, now: Instant) -> Vec<Action> {
-        match &self.stage {
-            Stage::Hello if self.since.is_some_and(|s| now >= s + Duration::from_millis(HELLO_TIMEOUT_MS)) => {
-                self.stage = Stage::Vanilla;
-                self.release(None)
-            }
-            Stage::Downloading => {
-                if self.retry_at.is_some_and(|t| now >= t) {
-                    self.retry_at = None;
-                    self.last_data = Some(now);
-                    return self.request_current();
-                }
-                if self.retry_at.is_none() && self.last_data.is_some_and(|t| now >= t + STALL) {
-                    let (i, have, _) = self.current.as_ref().expect("downloading has a current file");
-                    let e = &self.entries[*i];
-                    return self.fail(JoinError::Stalled {
-                        id: e.info.id.clone(),
-                        have: have.len() as u64,
-                        size: e.info.size,
-                    });
-                }
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn fail(&mut self, e: JoinError) -> Vec<Action> {
-        self.stage = Stage::Failed(e);
-        self.current = None;
-        vec![Action::Disconnect]
+        let ms = self.ms(now);
+        let out = self.session.tick(ms);
+        self.handle(out)
     }
 
     /// A 0xBC packet from the server. Malformed packets are dropped.
     pub fn packet(&mut self, bytes: &[u8], now: Instant) -> Vec<Action> {
-        let Ok(msg) = Message::decode(bytes) else { return Vec::new() };
-        match (msg, &self.stage) {
-            (Message::ServerHello(h), Stage::Hello) => self.server_hello(h),
-            (Message::ModList(l), Stage::Listing) => self.mod_list(l),
-            (Message::FileChunk(c), Stage::Downloading) => self.chunk(c, now),
-            (Message::FileError(e), Stage::Downloading) => {
-                let (i, _, _) = self.current.as_ref().expect("downloading has a current file");
-                if e.sha256 != self.entries[*i].info.sha256 {
-                    return Vec::new();
-                }
-                if e.code == bhmod_proto::file_error::BUSY {
-                    self.retry_at = Some(now + BUSY_RETRY);
-                    return Vec::new();
-                }
-                self.fail(JoinError::File { id: self.entries[*i].info.id.clone(), code: e.code })
-            }
-            (Message::RejectText(r), _) => {
-                self.reject = Some(r.clone());
-                vec![Action::Rejected(r)]
-            }
-            (Message::ChannelRegister(c), _) => {
-                self.channels.insert(c.name, c.id);
-                Vec::new()
-            }
-            (Message::Channel(Channel { channel_id, payload }), Stage::Joined) => {
-                match self.channels.iter().find(|(_, id)| **id == channel_id) {
-                    Some((name, _)) => vec![Action::ChannelIn(name.clone(), payload)],
-                    None => Vec::new(),
-                }
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn server_hello(&mut self, h: ServerHello) -> Vec<Action> {
-        let none = h.count == 0;
-        self.hash = Some(hex(&h.mods_hash));
-        self.server = Some(h);
-        if none {
-            return self.finish();
-        }
-        self.stage = Stage::Listing;
-        vec![Action::Send(Message::ListRequest.encode())]
-    }
-
-    fn mod_list(&mut self, l: ModList) -> Vec<Action> {
-        for c in &l.channels {
-            self.channels.insert(c.name.clone(), c.id);
-        }
-        let entries: Vec<Entry> = l
-            .mods
-            .into_iter()
-            .filter(|m| m.sides.iter().any(|s| s == "client"))
-            .map(|info| {
-                let listed = self.cfg.index.as_ref().and_then(|i| i.find(&info.id)).is_some_and(|im| {
-                    im.versions
-                        .iter()
-                        .any(|v| v.version == info.version && v.sha256.eq_ignore_ascii_case(&hex(&info.sha256)))
-                });
-                let refusal = match (info.permissions.native, self.cfg.block_native, listed) {
-                    (false, _, _) => None,
-                    (true, true, _) => Some(Refusal::NativeBlocked),
-                    (true, false, false) => Some(Refusal::NativeNotListed),
-                    (true, false, true) => None,
-                };
-                let cached = self.blob(&info.sha256, "bhmod").is_file();
-                Entry { have: if cached { info.size } else { 0 }, done: cached, cached, listed, refusal, info }
-            })
-            .collect();
-        self.entries = entries;
-        if self.entries.is_empty() {
-            return self.finish();
-        }
-        self.stage = Stage::Prompt;
-        vec![Action::Prompt]
+        let ms = self.ms(now);
+        let out = self.session.receive(bytes, ms);
+        self.handle(out)
     }
 
     /// The player's answer to the prompt. `native_confirmed`: the red native warning was confirmed.
     pub fn decide(&mut self, accept: bool, native_confirmed: bool, now: Instant) -> Vec<Action> {
-        if self.stage != Stage::Prompt {
+        if self.stage() != Stage::Prompt {
             return Vec::new();
         }
-        let required = self.server.as_ref().is_some_and(|s| s.client_required);
-        if !accept || !self.acceptable() || (self.has_native() && !native_confirmed) {
-            if required {
-                self.stage = Stage::Declined;
-                return vec![Action::Disconnect];
+        let ms = self.ms(now);
+        let go = accept && self.acceptable() && (native_confirmed || !self.has_native());
+        let optional: Vec<String> =
+            self.entries.iter().filter(|e| e.enabled && !e.required()).map(|e| e.info.id.clone()).collect();
+        let out = self.session.decide_subset(go, &optional, ms);
+        self.started = Some((now, self.progress().0));
+        self.handle(out)
+    }
+
+    fn handle(&mut self, outputs: Vec<Output>) -> Vec<Action> {
+        let mut actions = Vec::new();
+        for o in outputs {
+            match o {
+                Output::Send(b) => actions.push(Action::Send(b)),
+                Output::Prompt { required, mods, .. } => {
+                    self.required = required;
+                    self.entries = mods.iter().filter(|o| o.client).map(|o| self.entry(o)).collect();
+                    actions.push(Action::Prompt);
+                }
+                Output::Progress { id, done, .. } => {
+                    if let Some(e) = self.entries.iter_mut().find(|e| e.info.id == id) {
+                        e.have = done;
+                        e.done = done >= e.info.size;
+                    }
+                }
+                Output::Load(accepted) => {
+                    let (next, run) = self.start(accepted);
+                    actions.extend(self.handle(next));
+                    if let Some(run) = run {
+                        actions.push(Action::Run(run));
+                    }
+                }
+                Output::Join(j) => {
+                    // Only a held 0x1f waits for this (`player_info` answers the others itself).
+                    self.joined = Some(j);
+                    self.held = false;
+                    actions.push(Action::Release(j.map(|h| hex(&h))));
+                }
+                Output::Failed(f) => {
+                    self.failure = Some(f);
+                    actions.push(Action::Disconnect);
+                }
+                Output::Reject(r) => {
+                    self.reject = Some(r.clone());
+                    actions.push(Action::Rejected(r));
+                }
+                Output::Channel { name, data } => actions.push(Action::ChannelIn(name, data)),
             }
-            // Only optional client mods: join without them.
-            self.entries.clear();
-            return self.finish();
         }
-        self.stage = Stage::Downloading;
-        self.next_download(now)
+        actions
     }
 
-    /// Starts the next file to download, or finishes.
-    fn next_download(&mut self, now: Instant) -> Vec<Action> {
-        let Some(i) = self.entries.iter().position(|e| !e.done) else { return self.finish() };
-        let mut have = std::fs::read(self.blob(&self.entries[i].info.sha256, "part")).unwrap_or_default();
-        have.truncate(have.len() / CHUNK_SIZE * CHUNK_SIZE);
-        self.entries[i].have = have.len() as u64;
-        self.current = Some((i, have, 0));
-        self.last_data = Some(now);
-        self.request_current()
+    fn entry(&self, o: &Offer) -> Entry {
+        let info = o.info.clone();
+        let listed = self.cfg.index.as_ref().and_then(|i| i.find(&info.id)).is_some_and(|im| {
+            im.versions.iter().any(|v| v.version == info.version && v.sha256.eq_ignore_ascii_case(&hex(&info.sha256)))
+        });
+        let refusal = match (info.permissions.native, self.cfg.block_native, listed) {
+            (false, _, _) => None,
+            (true, true, _) => Some(Refusal::NativeBlocked),
+            (true, false, false) => Some(Refusal::NativeNotListed),
+            (true, false, true) => None,
+        };
+        Entry {
+            have: if o.cached { info.size } else { 0 },
+            done: o.cached,
+            cached: o.cached,
+            listed,
+            enabled: info.client_required || refusal.is_none(),
+            refusal,
+            info,
+        }
     }
 
-    fn request_current(&self) -> Vec<Action> {
-        let (i, have, _) = self.current.as_ref().expect("a current file");
-        let req = FileRequest { sha256: self.entries[*i].info.sha256, offset: have.len() as u64 };
-        vec![Action::Send(Message::FileRequest(req).encode())]
-    }
-
-    fn chunk(&mut self, c: bhmod_proto::FileChunk, now: Instant) -> Vec<Action> {
-        let (i, mut have, mut since_ack) = self.current.take().expect("downloading has a current file");
-        let e = &self.entries[i];
-        if c.sha256 != e.info.sha256 {
-            self.current = Some((i, have, since_ack));
-            return Vec::new();
-        }
-        if c.offset != have.len() as u64
-            || c.total != e.info.size
-            || have.len() as u64 + c.data.len() as u64 > e.info.size
-        {
-            return self.fail(JoinError::BadChunk { id: e.info.id.clone() });
-        }
-        have.extend_from_slice(&c.data);
-        self.last_data = Some(now);
-        self.entries[i].have = have.len() as u64;
-        let part = self.blob(&self.entries[i].info.sha256, "part");
-        if let Err(err) =
-            std::fs::create_dir_all(part.parent().expect("blobs dir")).and_then(|_| std::fs::write(&part, &have))
-        {
-            return self.fail(JoinError::Io(err.to_string()));
-        }
-        since_ack += 1;
-        let size = self.entries[i].info.size;
-        if (have.len() as u64) < size {
-            let ack = since_ack >= 4;
-            let offset = have.len() as u64;
-            self.current = Some((i, have, if ack { 0 } else { since_ack }));
-            if ack {
-                let req = FileRequest { sha256: self.entries[i].info.sha256, offset };
-                return vec![Action::Send(Message::FileRequest(req).encode())];
-            }
-            return Vec::new();
-        }
-        let e = &self.entries[i];
-        let got = hash_hex(&have);
-        let expected = hex(&e.info.sha256);
-        let _ = std::fs::remove_file(&part);
-        if got != expected {
-            return self.fail(JoinError::Checksum { id: e.info.id.clone(), expected, got });
-        }
-        let final_ack = FileRequest { sha256: e.info.sha256, offset: size };
-        if let Err(err) = std::fs::write(self.blob(&e.info.sha256, "bhmod"), &have) {
-            return self.fail(JoinError::Io(err.to_string()));
-        }
-        self.entries[i].done = true;
-        let mut out = vec![Action::Send(Message::FileRequest(final_ack).encode())];
-        out.extend(self.next_download(now));
-        out
-    }
-
-    /// Every file is present: check them, send `READY`, record the join and release the 0x1f.
-    fn finish(&mut self) -> Vec<Action> {
-        let server = self.server.clone().expect("finish after SERVER_HELLO");
+    /// The session's packages are checked and in the cache: confirm that to the session (which sends `READY`) and
+    /// record the join for the launcher. Returns the session's next outputs and the mods to run.
+    fn start(&mut self, accepted: Vec<session::Accepted>) -> (Vec<Output>, Option<Vec<Accepted>>) {
         let mut cands = Vec::new();
         let mut run = Vec::new();
-        for e in &self.entries {
-            let path = self.blob(&e.info.sha256, "bhmod");
-            // A file that vanished reads as empty and fails the package rules.
-            let bytes = std::fs::read(&path).unwrap_or_default();
-            let checked = install::inspect(bytes, &format!("{}-{}.bhmod", e.info.id, e.info.version))
-                .map_err(|err| err.to_string())
-                .and_then(|c| {
-                    if c.sha256 != hex(&e.info.sha256) {
-                        Err(format!("the cached file is not {}", hex(&e.info.sha256)))
-                    } else if c.manifest.id != e.info.id {
-                        Err(format!("the file holds the mod {}", c.manifest.id))
-                    } else {
-                        Ok(c)
-                    }
-                });
-            match checked {
-                Ok(c) => {
-                    let grant = bhpc_launcher::mods::required_permissions(&c.manifest.permissions);
-                    run.push(Accepted { id: e.info.id.clone(), path, grant });
-                    cands.push(Candidate { source: "server".into(), ..c });
-                }
-                Err(message) => {
-                    let _ = std::fs::remove_file(&path);
-                    return self.fail(JoinError::Package { id: e.info.id.clone(), message });
-                }
+        for a in &accepted {
+            // The cache names files by hash; make sure the bytes really are that file.
+            let bytes = std::fs::read(&a.path).unwrap_or_default();
+            let sha = hex(&sha256(&bytes));
+            if sha != hex(&a.info.sha256) {
+                let _ = std::fs::remove_file(&a.path);
+                let why = format!("{}: the cached file is not {}", a.info.id, hex(&a.info.sha256));
+                return (self.session.loaded(Err(why)), None);
             }
+            let grant = bhpc_launcher::mods::required_permissions(&a.manifest.permissions);
+            run.push(Accepted { id: a.info.id.clone(), path: a.path.clone(), grant });
+            cands.push(Candidate {
+                manifest: a.manifest.clone(),
+                bytes,
+                sha256: sha,
+                source: "server".into(),
+                origin: format!("{}-{}.bhmod", a.info.id, a.info.version),
+            });
         }
-        self.stage = Stage::Joined;
-        let mut out = Vec::new();
-        if !self.entries.is_empty() {
-            let loaded = self.entries.iter().map(|e| (e.info.id.clone(), e.info.version.clone())).collect();
-            out.push(Action::Send(Message::Ready(Ready { accepted_hash: server.mods_hash, loaded }).encode()));
-            // The cache record is informational (the launcher's Server mods tab); a failure does not stop the join.
-            let _ = cache::record_join(
-                &self.cfg.dirs,
-                &self.server_name,
-                &self.cfg.address,
-                &cands,
-                bhpc_launcher::mods::now(),
-            );
-        }
-        out.extend(self.release(self.hash.clone()));
-        out.push(Action::Run(run));
-        out
+        let loaded = accepted.iter().map(|a| (a.info.id.clone(), a.info.version.clone())).collect();
+        let out = self.session.loaded(Ok(loaded));
+        // The cache record is informational (the launcher's Server mods tab); a failure does not stop the join.
+        let _ = cache::record_join(
+            &self.cfg.dirs,
+            &self.server_name,
+            &self.cfg.address,
+            &cands,
+            bhpc_launcher::mods::now(),
+        );
+        (out, Some(run))
     }
 
     /// The `CHANNEL` packet for a mod's message, `None` when the server has no id for the channel (yet).
     pub fn channel_packet(&self, name: &str, data: &[u8]) -> Option<Vec<u8>> {
-        if self.stage != Stage::Joined {
-            return None;
-        }
-        let id = self.channel_id(name)?;
-        Some(Message::Channel(Channel { channel_id: id, payload: data.to_vec() }).encode())
+        self.session.channel(name, data)
     }
-
-    /// What the cache records for this server (shown in the prompt as "already downloaded").
-    pub fn cached_mods(&self) -> Vec<CachedMod> {
-        self.entries
-            .iter()
-            .filter(|e| e.cached)
-            .map(|e| CachedMod {
-                id: e.info.id.clone(),
-                name: e.name(),
-                version: e.info.version.clone(),
-                sha256: hex(&e.info.sha256),
-                size: e.info.size,
-                native: e.info.permissions.native,
-            })
-            .collect()
-    }
-}
-
-/// A 64-character hex SHA-256.
-pub fn parse_hash(h: &str) -> Option<Hash> {
-    if h.len() != 64 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(h.get(2 * i..2 * i + 2)?, 16).ok()?;
-    }
-    Some(out)
 }
 
 /// Adds `bhcModLoader{acceptedHash, proto: 1}` to a 0x1f packet (`0x1f` + an XML property list), before the

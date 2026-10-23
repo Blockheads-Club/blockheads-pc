@@ -7,11 +7,13 @@
 //! Client API events available on PC now: `chat` (lines the server sends; cancel hides the line, the text can be
 //! changed), `command` and mod commands (lines the player types that start with `/`: a mod command runs on the
 //! client and is not sent), `tick` (every world update), `player-join` / `player-quit` (the player list the server
-//! sends), `world-loaded`, and channels to and from the server. Deferred (no client hook yet): `world-save`,
-//! `player-pre-login`, block/object/damage/death/move events and `player.pos`.
+//! sends), `world-loaded`, `world-save`, `block-place`, `block-break`, `block-changed`, `object-place`, `damage`,
+//! `death`, `player-move`, `player:pos()` and channels to and from the server. The world events are
+//! notifications: the server decides what happens, so a mod's cancel or changed amount has no effect on the
+//! client. Not on a client: `player-pre-login` (server only).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -19,12 +21,16 @@ use std::time::{Duration, Instant};
 use bhmod_core::runtime::{CommandId, InstanceLimits, ModFiles, SubscriptionId, TaskId};
 use bhmod_core::storage::FileStorage;
 use bhmod_core::types::{
-    ApiError, ChannelSource, ChannelTarget, CommandOutcome, CommandSender, Event, LogLevel, Outcome, Role, Side,
+    ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandOutcome, CommandSender, Event, LogLevel, ObjectKind,
+    Outcome, Pos, Role, SavePhase, Side,
 };
 use bhmod_core::{CallError, GameBridge, HostApi, HostOptions, Instance, ModHost, ModState, Runtime};
 
 /// Longest kept log.
 pub const MAX_LOG_LINES: usize = 500;
+
+/// Most tile types remembered for `block-break` (the table starts over when it is full).
+const MAX_TILES: usize = if cfg!(test) { 64 } else { 1 << 16 };
 
 /// Something a mod asked the game to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +179,10 @@ pub(crate) struct Bridge {
     players: RefCell<Vec<String>>,
     /// Connected to a server (channels to the server work).
     online: bool,
+    /// Where each player's blockhead stands (`player:pos()`), as the game last said.
+    positions: RefCell<HashMap<String, Pos>>,
+    /// The tile types the game filled in, by position (a `block-break` reports what was there).
+    tiles: RefCell<HashMap<(i32, i32), u32>>,
     effects: RefCell<Vec<Effect>>,
     log: RefCell<VecDeque<LogLine>>,
     fresh: RefCell<Vec<LogLine>>,
@@ -206,10 +216,19 @@ impl GameBridge for Bridge {
         self.push_log(mod_id, level, message);
     }
     fn online_players(&self) -> Vec<String> {
-        self.players.borrow().clone()
+        let mut all = self.players.borrow().clone();
+        // The player is in their own game, in single-player and before the server's list arrives.
+        let me = self.local.borrow();
+        if !all.contains(&me) && !me.is_empty() {
+            all.insert(0, me.clone());
+        }
+        all
     }
     fn player_alias(&self, id: &str) -> Option<String> {
-        self.players.borrow().iter().find(|p| p.as_str() == id).cloned()
+        self.online_players().into_iter().find(|p| p.as_str() == id)
+    }
+    fn player_pos(&self, id: &str) -> Option<Pos> {
+        self.positions.borrow().get(id).copied()
     }
     fn player_role(&self, _id: &str) -> Role {
         Role::Player
@@ -326,6 +345,8 @@ impl ClientHost {
             local: RefCell::new(setup.local_player),
             players: RefCell::new(Vec::new()),
             online: setup.online,
+            positions: RefCell::new(HashMap::new()),
+            tiles: RefCell::new(HashMap::new()),
             effects: RefCell::new(Vec::new()),
             log: RefCell::new(VecDeque::new()),
             fresh: RefCell::new(Vec::new()),
@@ -344,6 +365,23 @@ impl ClientHost {
     /// No mod loaded.
     pub fn is_empty(&self) -> bool {
         self.host.is_empty()
+    }
+
+    /// True when a mod listens to a world event (the glue skips reading the game's arguments otherwise).
+    pub fn watching(&self) -> bool {
+        use bhmod_core::types::EventKind as K;
+        [
+            K::WorldSave,
+            K::BlockPlace,
+            K::BlockBreak,
+            K::BlockChanged,
+            K::ObjectPlace,
+            K::Damage,
+            K::Death,
+            K::PlayerMove,
+        ]
+        .into_iter()
+        .any(|k| self.host.wants(k))
     }
 
     /// The world is ready: `on-enable` and `world-loaded`.
@@ -409,6 +447,92 @@ impl ClientHost {
         }
         for p in before.iter().filter(|p| !now.contains(p)) {
             self.host.fire(Event::PlayerQuit { player: p.clone(), was_kick: false });
+        }
+    }
+
+    /// Delivers a world event to the mods that listen. The server decides what happens in the world, so what the
+    /// handlers answer (cancel, a changed amount) is dropped. Events about a player the game does not list are
+    /// skipped (a mod cannot hold a handle to them).
+    fn watch(&mut self, ev: Event) {
+        if self.host.wants(ev.kind()) {
+            self.host.fire(ev);
+        }
+    }
+
+    fn listed(&self, player: &str) -> bool {
+        self.bridge.player_alias(player).is_some()
+    }
+
+    /// `world-save`: the game saves the world (`before` or after).
+    pub fn world_saved(&mut self, before: bool) {
+        self.watch(Event::WorldSave { phase: if before { SavePhase::Pre } else { SavePhase::Post } });
+    }
+
+    /// A tile of type `tile` was put at `at` by `player` (`block-place`, `block-changed`).
+    pub fn block_placed(&mut self, player: &str, at: (i32, i32), tile: u32, data: (u16, u16)) {
+        let pos = Pos { x: at.0, y: at.1 };
+        {
+            let mut tiles = self.bridge.tiles.borrow_mut();
+            if tiles.len() >= MAX_TILES {
+                tiles.clear();
+            }
+            tiles.insert(at, tile);
+        }
+        let known = self.listed(player);
+        if known {
+            self.watch(Event::BlockPlace {
+                player: player.to_string(),
+                pos,
+                item: tile,
+                data_a: data.0,
+                data_b: data.1,
+                cancelled: false,
+            });
+        }
+        self.watch(Event::BlockChanged { pos, tile, player: known.then(|| player.to_string()) });
+    }
+
+    /// The tile or back wall at `at` was removed by `player` (`block-break`, `block-changed`).
+    pub fn block_broken(&mut self, player: &str, at: (i32, i32), back_wall: bool) {
+        let pos = Pos { x: at.0, y: at.1 };
+        let tile = if back_wall { 0 } else { self.bridge.tiles.borrow_mut().remove(&at).unwrap_or(0) };
+        let known = self.listed(player);
+        if known {
+            let layer = if back_wall { BreakLayer::BackWall } else { BreakLayer::Block };
+            self.watch(Event::BlockBreak { player: player.to_string(), pos, layer, tile, cancelled: false });
+        }
+        if !back_wall {
+            self.watch(Event::BlockChanged { pos, tile: 0, player: known.then(|| player.to_string()) });
+        }
+    }
+
+    /// A workbench (`item` is its type) or an interaction object was placed (`object-place`).
+    pub fn object_placed(&mut self, player: &str, at: (i32, i32), workbench: bool, item: u32) {
+        if self.listed(player) {
+            let object = if workbench { ObjectKind::Workbench } else { ObjectKind::InteractionObject };
+            let pos = Pos { x: at.0, y: at.1 };
+            self.watch(Event::ObjectPlace { player: player.to_string(), pos, object, item, cancelled: false });
+        }
+    }
+
+    /// A blockhead (`blockhead` is its id) took damage (`damage`); `owner` is the player it belongs to.
+    pub fn damaged(&mut self, owner: Option<&str>, blockhead: u64, amount: f32) {
+        let player = owner.filter(|p| self.listed(p)).map(str::to_string);
+        self.watch(Event::Damage { player, blockhead, amount, attacker: None, cancelled: false });
+    }
+
+    /// A blockhead died (`death`).
+    pub fn died(&mut self, owner: Option<&str>, blockhead: u64) {
+        let player = owner.filter(|p| self.listed(p)).map(str::to_string);
+        self.watch(Event::Death { player, blockhead });
+    }
+
+    /// A player's blockhead stands on tile `to` now: `player:pos()` follows, `player-move` fires when it changed.
+    pub fn moved(&mut self, player: &str, to: (i32, i32)) {
+        let to = Pos { x: to.0, y: to.1 };
+        let from = self.bridge.positions.borrow_mut().insert(player.to_string(), to);
+        if let Some(from) = from.filter(|f| *f != to).filter(|_| self.listed(player)) {
+            self.watch(Event::PlayerMove { player: player.to_string(), from, to });
         }
     }
 
