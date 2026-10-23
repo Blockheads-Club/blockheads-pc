@@ -1,5 +1,5 @@
-//! The system tray: closing the launcher window hides it there; a click on the icon brings it back, the menu shows
-//! it or quits.
+//! The system tray: closing the launcher window hides it there; a click on the icon brings it back (or hides it
+//! again while it is open), the menu shows it or quits.
 //!
 //! Quitting goes through the main window (`quit-requested`), which asks first while a game runs and then calls
 //! `app_quit`. Without a tray (no StatusNotifier host, say) the close button takes that same path instead.
@@ -37,6 +37,17 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
+/// A left click on the icon: hides the launcher window while it is open, otherwise brings it back. Focus is no
+/// test here, the click itself takes it from the window on Windows.
+fn toggle_main(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    if w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false) {
+        let _ = w.hide();
+    } else {
+        show_main(app);
+    }
+}
+
 /// Quit, as the main window decides: it asks first while a game runs.
 fn request_quit(app: &AppHandle) {
     show_main(app);
@@ -68,7 +79,7 @@ pub fn tray_labels(tray: State<'_, Tray>, show: String, quit: String) {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use super::{request_quit, show_main, TITLE};
+    use super::{request_quit, show_main, toggle_main, TITLE};
     use ksni::blocking::TrayMethods;
     use ksni::menu::StandardItem;
     use ksni::{Category, Icon, MenuItem, ToolTip};
@@ -76,7 +87,7 @@ mod imp {
 
     pub type Handle = ksni::blocking::Handle<Sni>;
 
-    /// The StatusNotifierItem: a left click shows the window, the menu shows it or quits.
+    /// The StatusNotifierItem: a left click shows or hides the window, the menu shows it or quits.
     pub struct Sni {
         app: AppHandle,
         show: String,
@@ -101,7 +112,7 @@ mod imp {
             ToolTip { title: TITLE.into(), icon_pixmap: self.icon.clone(), ..Default::default() }
         }
         fn activate(&mut self, _x: i32, _y: i32) {
-            show_main(&self.app);
+            toggle_main(&self.app);
         }
         fn menu(&self) -> Vec<MenuItem<Self>> {
             vec![
@@ -144,7 +155,7 @@ mod imp {
 
 #[cfg(not(target_os = "linux"))]
 mod imp {
-    use super::{request_quit, show_main, TITLE};
+    use super::{request_quit, show_main, toggle_main, TITLE};
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     use tauri::{AppHandle, Wry};
@@ -166,7 +177,7 @@ mod imp {
             })
             .on_tray_icon_event(|tray, e| {
                 if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
-                    show_main(tray.app_handle());
+                    toggle_main(tray.app_handle());
                 }
             });
         if let Some(icon) = app.default_window_icon() {
