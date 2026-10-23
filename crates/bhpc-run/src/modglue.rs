@@ -48,6 +48,10 @@ pub struct ModsOptions {
     pub join: Option<String>,
     /// Accept a join prompt without asking (tests).
     pub auto_accept: bool,
+    /// Run Java and Kotlin client mods (`--mods-jvm`; needs a build with the `jvm` feature). They are unsandboxed.
+    pub jvm: bool,
+    /// The JRE to use (`--mods-java-home`); `None` searches `JAVA_HOME` and the `PATH`.
+    pub java_home: Option<PathBuf>,
 }
 
 /// State shared with the window thread (drawing, input).
@@ -391,6 +395,15 @@ impl ModGlue {
     }
 }
 
+/// The runtimes this client offers in `HELLO`: `jvm` only when the owner turned it on in a build that has it.
+fn runtime_names(opts: &ModsOptions) -> Vec<String> {
+    let mut v = vec!["lua".to_string(), "wasm".to_string()];
+    if opts.jvm && bhpc_mods::host::JVM_BUILT {
+        v.push("jvm".to_string());
+    }
+    v
+}
+
 fn join_config(opts: &ModsOptions, address: String) -> JoinConfig {
     let dirs = ModsDirs::new(&opts.data_dir);
     let index = std::fs::read(dirs.index_cache()).ok().and_then(|b| bhpc_launcher::mods::index::parse_index(&b).ok());
@@ -398,7 +411,7 @@ fn join_config(opts: &ModsOptions, address: String) -> JoinConfig {
         loader: bhpc_mods::LOADER_VERSION.into(),
         platform: bhpc_mods::platform(),
         api: bhpc_mods::API_VERSION.into(),
-        runtimes: vec!["lua".into(), "wasm".into()],
+        runtimes: runtime_names(opts),
         dirs,
         index,
         block_native: opts.block_native,
@@ -623,10 +636,14 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
         let n = o.send(c, cn.client, "localPlayerName", &[]);
         o.string(c, n)
     });
+    let (runtimes, note) = bhpc_mods::host::session_runtimes(&dirs.cache, opts.jvm, opts.java_home.as_deref());
+    if let Some(note) = note {
+        log(&note);
+    }
     let mut host = ClientHost::load(HostSetup {
         mods_dir: &dir,
         storage_dir: &opts.data_dir.join("mods-data").join(&key),
-        runtimes: bhpc_mods::host::default_runtimes(&dirs.cache.join("wasm")),
+        runtimes,
         online: server.is_some(),
         local_player: local.unwrap_or_default(),
     });

@@ -6,6 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 description = "Client mod loader of Blockheads PC: the 0xBC join flow (HELLO, mod list, downloads, READY), the mod host session (Luau + WASM through bhmod-core), and the in-game mod UI drawn as an overlay."
 
+[features]
+# JVM client mods (Java, Kotlin, ...): bhmod-core's JNI runtime on the user's JRE, loaded at run time. Off by default;
+# building with it needs a JDK (the Java SDK is compiled in).
+jvm = ["bhmod-core/jvm"]
+
 [dependencies]
 bhpc-launcher = { path = "../bhpc-launcher" }
 bhmod-core.workspace = true

@@ -205,6 +205,8 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             block_native: args.iter().any(|a| a == "--mods-block-native"),
             join: opt(args, "--join").cloned(),
             auto_accept: args.iter().any(|a| a == "--mods-auto-accept"),
+            jvm: args.iter().any(|a| a == "--mods-jvm"),
+            java_home: opt(args, "--mods-java-home").map(Into::into),
         });
     }
     cfg.shot = opt(args, "--shot").map(Into::into);

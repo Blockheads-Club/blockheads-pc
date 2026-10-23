@@ -49,7 +49,7 @@ pub fn apply(ov: &mut Overview, live: &[LiveMod]) {
     ov.attention = ov.mods.iter().filter(|m| super::ATTENTION.contains(&m.status.as_str())).count();
 }
 
-/// The runner's mod flags for these settings: developer folders (developer mode only) and the native block.
+/// The runner's mod flags for these settings: developer folders (developer mode only), the native block and JVM mods.
 pub fn args(prefs: &crate::prefs::Prefs) -> Vec<String> {
     let mut a = Vec::new();
     if prefs.mods_developer {
@@ -59,6 +59,12 @@ pub fn args(prefs: &crate::prefs::Prefs) -> Vec<String> {
     }
     if prefs.mods_block_native {
         a.push("--mods-block-native".to_string());
+    }
+    if prefs.mods_jvm {
+        a.push("--mods-jvm".to_string());
+        if !prefs.mods_java_home.is_empty() {
+            a.extend(["--mods-java-home".to_string(), prefs.mods_java_home.clone()]);
+        }
     }
     a
 }

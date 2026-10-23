@@ -383,3 +383,24 @@ fn timed_wrapper_forwards_and_counts() {
     let u = usage_for_tests(&timing, "m");
     assert!(u.ms_last_second < 3.0 && u.peak_ms >= 3.0);
 }
+
+#[test]
+fn the_jvm_is_opt_in() {
+    let d = tempfile::tempdir().unwrap();
+    let (rts, note) = session_runtimes(d.path(), false, None);
+    assert_eq!((rts.len(), note), (2, None));
+    let (rts, note) = session_runtimes(d.path(), true, None);
+    let note = note.unwrap();
+    if JVM_BUILT {
+        // Built with the JVM and a JRE on this machine: a third runtime, and the SDK jar is written for its class path.
+        assert_eq!(rts.len(), 3, "{note}");
+        assert!(note.starts_with("JVM mods are on:"), "{note}");
+        assert!(std::fs::read_dir(d.path().join("jvm"))
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("bhmod-sdk-")));
+    } else {
+        assert_eq!(rts.len(), 2);
+        assert!(note.contains("no JVM support"), "{note}");
+    }
+}

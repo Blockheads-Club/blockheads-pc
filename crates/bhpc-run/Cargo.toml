@@ -17,6 +17,8 @@ path = "src/main.rs"
 [features]
 # `bhpc-run --apk X` (no --init-only): SDL window and real GL/audio output. Needs the system libSDL2.
 play = ["bhpc-app/sdl"]
+# Java and Kotlin client mods (`--mods-jvm`; the user's JRE, loaded at run time). Needs a JDK to build.
+jvm = ["bhpc-mods/jvm"]
 
 [dependencies]
 bhpc-app = { path = "../bhpc-app" }

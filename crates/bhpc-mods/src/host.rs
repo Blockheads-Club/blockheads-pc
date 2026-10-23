@@ -276,6 +276,39 @@ pub fn default_runtimes(cache: &Path) -> Vec<Box<dyn Runtime>> {
     v
 }
 
+/// True when this build has the JVM runtime (feature `jvm`).
+pub const JVM_BUILT: bool = cfg!(feature = "jvm");
+
+/// The runtimes of a session: Luau and WASM, plus the JVM when `jvm` asks for it. `java_home` picks the JRE (`None`
+/// searches `BHMOD_JAVA_HOME`, `JAVA_HOME` and `java` on the `PATH`). The note says what happened with the JVM, for
+/// the log (`None` when it was not asked for). JVM mods are unsandboxed, so this is opt-in all the way down.
+pub fn session_runtimes(cache: &Path, jvm: bool, java_home: Option<&Path>) -> (Vec<Box<dyn Runtime>>, Option<String>) {
+    let mut runtimes = default_runtimes(&cache.join("wasm"));
+    let note = jvm.then(|| add_jvm(&mut runtimes, java_home, &cache.join("jvm")));
+    (runtimes, note)
+}
+
+#[cfg(feature = "jvm")]
+fn add_jvm(runtimes: &mut Vec<Box<dyn Runtime>>, java_home: Option<&Path>, work_dir: &Path) -> String {
+    let cfg = bhmod_core::jvm::JvmConfig {
+        java_home: java_home.map(Path::to_path_buf),
+        work_dir: Some(work_dir.to_path_buf()),
+        ..Default::default()
+    };
+    match bhmod_core::jvm::JvmRuntime::new(cfg) {
+        Ok(rt) => {
+            runtimes.push(Box::new(rt));
+            "JVM mods are on: they run unsandboxed".to_string()
+        }
+        Err(e) => format!("JVM mods are on but no JVM started: {e}"),
+    }
+}
+
+#[cfg(not(feature = "jvm"))]
+fn add_jvm(_: &mut Vec<Box<dyn Runtime>>, _: Option<&Path>, _: &Path) -> String {
+    "JVM mods were asked for but this build has no JVM support (build with the `jvm` feature)".to_string()
+}
+
 /// The running client mods of one session.
 pub struct ClientHost {
     host: ModHost,
