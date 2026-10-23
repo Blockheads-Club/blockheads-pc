@@ -72,9 +72,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bhmod-client"
+version = "0.1.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=30176f9#30176f9c297e4541c7bf6ca4bf0161e275394826"
+dependencies = [
+ "bhmod-manifest",
+ "bhmod-proto",
+ "semver",
+ "sha2",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "bhmod-core"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=3651df5#3651df5be5d1885f79bc5d75488c0357e30159f4"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=30176f9#30176f9c297e4541c7bf6ca4bf0161e275394826"
 dependencies = [
  "bhmod-manifest",
  "mlua",
@@ -87,7 +99,7 @@ dependencies = [
 [[package]]
 name = "bhmod-manifest"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=3651df5#3651df5be5d1885f79bc5d75488c0357e30159f4"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=30176f9#30176f9c297e4541c7bf6ca4bf0161e275394826"
 dependencies = [
  "semver",
  "serde",
@@ -99,7 +111,7 @@ dependencies = [
 [[package]]
 name = "bhmod-proto"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=3651df5#3651df5be5d1885f79bc5d75488c0357e30159f4"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=30176f9#30176f9c297e4541c7bf6ca4bf0161e275394826"
 dependencies = [
  "sha2",
 ]
@@ -107,7 +119,7 @@ dependencies = [
 [[package]]
 name = "bhmod-wasm"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=3651df5#3651df5be5d1885f79bc5d75488c0357e30159f4"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=30176f9#30176f9c297e4541c7bf6ca4bf0161e275394826"
 dependencies = [
  "bhmod-core",
  "bhmod-manifest",
@@ -224,11 +236,13 @@ name = "bhpc-mods"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "bhmod-client",
  "bhmod-core",
  "bhmod-manifest",
  "bhmod-proto",
  "bhmod-wasm",
  "bhpc-launcher",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

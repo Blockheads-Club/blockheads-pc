@@ -17,6 +17,10 @@ pub struct JoinMod {
     pub done: bool,
     pub native: bool,
     pub refused: bool,
+    /// The server needs this mod (it cannot be switched off).
+    pub required: bool,
+    /// The player takes this mod (a switched-off optional mod is not downloaded or run).
+    pub enabled: bool,
     /// Short permission names (`channels`, `world:read`, `players:chat`, `net-http`).
     pub permissions: Vec<String>,
     pub listed: bool,
@@ -81,12 +85,14 @@ impl JoinView {
                         done: e.done,
                         native: p.native,
                         refused: e.refusal.is_some(),
+                        required: e.required(),
+                        enabled: e.enabled,
                         permissions: perms,
                         listed: e.listed,
                     }
                 })
                 .collect(),
-            required: f.server().is_some_and(|s| s.client_required),
+            required: f.required(),
             progress: f.progress(),
         })
     }
@@ -102,11 +108,12 @@ impl JoinView {
         }
     }
 
-    /// True when "Download and join" may be pressed (`native_ok`: the red box is ticked).
+    /// True when "Download and join" may be pressed (`native_ok`: the red box is ticked). Mods the player switched
+    /// off do not count.
     pub fn can_accept(&self, native_ok: bool) -> bool {
         self.stage == JoinStage::Prompt
-            && self.mods.iter().all(|m| !m.refused)
-            && (native_ok || self.mods.iter().all(|m| !m.native))
+            && self.mods.iter().all(|m| !m.enabled || !m.refused)
+            && (native_ok || self.mods.iter().all(|m| !m.enabled || !m.native))
     }
 }
 
@@ -138,6 +145,8 @@ pub struct View {
 pub enum UiCmd {
     /// Join prompt answer.
     Decide { accept: bool, native_ok: bool },
+    /// Switch the optional mod `0` (index in the prompt's list) on or off.
+    Toggle(usize),
     /// Stop a download and leave the server.
     Cancel,
     /// Close a failure or rejection notice.

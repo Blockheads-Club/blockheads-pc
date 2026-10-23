@@ -321,6 +321,7 @@ impl ModGlue {
                 for cmd in &cmds {
                     match cmd {
                         UiCmd::Decide { accept, native_ok } => out.extend(f.decide(*accept, *native_ok, now)),
+                        UiCmd::Toggle(i) => f.toggle(*i),
                         UiCmd::Dismiss | UiCmd::Reload | UiCmd::Cancel => {}
                     }
                 }
@@ -349,7 +350,7 @@ impl ModGlue {
                     self.shared.view.lock().unwrap_or_else(PoisonError::into_inner).join = None;
                     self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-                UiCmd::Decide { .. } => {}
+                UiCmd::Decide { .. } | UiCmd::Toggle(_) => {}
             }
         }
         run_actions(&self.objc, &self.opts, &self.shared, c, actions);
@@ -595,7 +596,7 @@ fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
 fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     let (server, conn) = MAIN.with(|m| {
         let m = m.borrow();
-        let joined = m.flow.as_ref().is_some_and(|f| *f.stage() == Stage::Joined || *f.stage() == Stage::Vanilla);
+        let joined = m.flow.as_ref().is_some_and(|f| matches!(f.stage(), Stage::Joined | Stage::Vanilla));
         let server = if joined { m.flow.as_ref().map(|f| f.server_name().to_string()) } else { None };
         // Kept for a developer reload of the same session.
         let accepted = m.accepted.clone().unwrap_or_default();
