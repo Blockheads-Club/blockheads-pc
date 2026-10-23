@@ -177,3 +177,51 @@ fn log_lines_of_an_unknown_table_are_attributed_to_native() {
     w.f.cpu.call(log, &[0xdead, 3, msg]).unwrap();
     assert_eq!(w.n.take_logs(), [(3, "[native] from nowhere".to_string())]);
 }
+
+#[test]
+fn the_runner_hooks_its_own_functions_and_reads_import_targets() {
+    let mut w = World::new();
+    w.n.register(&w.f.cpu);
+    // a replacement: a host thunk that returns 7
+    let thunk =
+        w.f.cpu.register_shared_thunk("test:seven", std::sync::Arc::new(|c: &mut bhpc_cpu::Cpu| c.ret_u32(7))).unwrap();
+    w.n.add_snap(ModSnap {
+        name: "libfake.so".into(),
+        base: BASE,
+        dynamic: 0,
+        exports: HashMap::from([("fn".into(), BASE + 0x40)]),
+        segments: vec![],
+    });
+    let orig = w.n.hook_internal(&mut w.f.cpu, "fn", thunk).unwrap();
+    assert_eq!(w.call(BASE + 0x40, 1, 2), 7);
+    assert_eq!(w.call(orig, 1, 2), 3, "the trampoline runs the original");
+    assert!(w.n.hook_internal(&mut w.f.cpu, "nothing", thunk).is_err());
+    w.n.unhook_internal(&mut w.f.cpu);
+    assert_eq!(w.call(BASE + 0x40, 1, 2), 3);
+    // a module with an import: dynamic section, symbol table, relocation and GOT slot in guest memory
+    let mem = w.f.cpu.mem().clone();
+    let m = 0x2020_0000;
+    mem.map(m, 0x1000).unwrap();
+    let w32 = |at: u32, v: u32| mem.write_u32(m + at, v).unwrap();
+    mem.write_bytes(m + 0x200, b"\0glBindTexture\0").unwrap();
+    w32(0x310, 1); // symbol 1: name at strtab+1
+    w32(0x400, 0x600); // relocation: GOT slot at +0x600, R_ARM_JUMP_SLOT against symbol 1
+    w32(0x404, 1 << 8 | 22);
+    w32(0x600, 0xabcd_0000);
+    for (i, (t, v)) in [(5, 0x200), (6, 0x300), (23, 0x400), (2, 8), (0, 0)].into_iter().enumerate() {
+        w32(0x100 + 8 * i as u32, t);
+        w32(0x104 + 8 * i as u32, v);
+    }
+    w.n.add_snap(ModSnap {
+        name: "/data/libgot.so".into(),
+        base: m,
+        dynamic: m + 0x100,
+        exports: HashMap::new(),
+        segments: vec![],
+    });
+    assert_eq!(w.n.import_target(&mut w.f.cpu, "libgot.so", "glBindTexture"), Some(0xabcd_0000));
+    assert_eq!(w.n.import_target(&mut w.f.cpu, "libgot.so", "nothing"), None);
+    assert_eq!(w.n.import_target(&mut w.f.cpu, "libnope.so", "glBindTexture"), None);
+    assert_eq!(w.n.module_base("libgot.so"), Some(m));
+    assert_eq!(w.n.module_base("libnope.so"), None);
+}

@@ -1,0 +1,18 @@
+schema = 1
+id = "arms"
+version = "1.0.0"
+name = { en = "Arms" }
+description = { en = "A weapon skin: a checker picture on the held item (weapon cosmetics, native hooks)" }
+authors = ["Blockheads Club"]
+license = "MIT"
+api = "^0.3"
+
+[sides]
+client = true
+
+[entry.client]
+runtime = "lua"
+path = "client/main.luau"
+
+[content]
+cosmetics = [{ key = "arms:blade", slot = "weapon", texture = "assets/blade.png", base = "iron-sword" }]

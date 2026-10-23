@@ -27,6 +27,8 @@ use bhpc_mem::Prot;
 
 use crate::objchook::Runtime;
 
+/// The engine owner of the runner's own hooks (mods count from 0).
+const INTERNAL: u32 = u32::MAX - 1;
 /// Size of one executable arena for trampolines.
 const ARENA: u32 = 64 << 10;
 /// Page size of the guest.
@@ -250,6 +252,37 @@ impl Natives {
     /// Adds one module to the snapshot (the fake game of the tests).
     pub fn add_snap(&self, snap: ModSnap) {
         self.inner.snap.write().unwrap_or_else(PoisonError::into_inner).push(snap);
+    }
+
+    /// Inline-hooks the exported function `symbol` for the runner itself (not for a mod): `replacement` is a guest
+    /// address (a host thunk) and the result is the trampoline that runs the original. Undone by
+    /// [`Natives::unhook_internal`].
+    pub fn hook_internal(&self, cpu: &mut Cpu, symbol: &str, replacement: u32) -> Result<u32, String> {
+        let mut engine = self.inner.engine.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut host = GuestHost { cpu, inner: &self.inner };
+        engine.hook_symbol(&mut host, INTERNAL, None, symbol, replacement).map(|h| h.original).map_err(|e| e.message)
+    }
+
+    /// Undoes the hooks of [`Natives::hook_internal`].
+    pub fn unhook_internal(&self, cpu: &mut Cpu) {
+        let mut engine = self.inner.engine.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut host = GuestHost { cpu, inner: &self.inner };
+        engine.unhook_owner(&mut host, INTERNAL);
+    }
+
+    /// The address a module's import `symbol` currently resolves to (what the module calls), read from its GOT.
+    pub fn import_target(&self, cpu: &mut Cpu, module: &str, symbol: &str) -> Option<u32> {
+        let host = GuestHost { cpu, inner: &self.inner };
+        let m = host.modules().into_iter().find(|m| m.name == module || m.name.rsplit('/').next() == Some(module))?;
+        let imports = bhmod_native::elf::imports(&|a, n| host.read(a, n), m.base, m.dynamic).ok()?;
+        let slot = imports.into_iter().find(|i| i.name == symbol)?.slot;
+        host.read(slot, 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    /// The base address of a module in the snapshot.
+    pub fn module_base(&self, module: &str) -> Option<u32> {
+        let snap = self.inner.snap.read().unwrap_or_else(PoisonError::into_inner);
+        snap.iter().find(|m| m.name == module || m.name.rsplit('/').next() == Some(module)).map(|m| m.base)
     }
 
     /// An exported symbol of a module in the snapshot.

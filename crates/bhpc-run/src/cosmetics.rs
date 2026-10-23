@@ -176,6 +176,7 @@ pub fn apply(msg: &Cosmetics) {
 
 /// The session ends: nobody wears anything, blockheads are looked at again next time.
 pub fn clear() {
+    crate::weapons::drawing(0);
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         s.content.clear();
@@ -436,9 +437,82 @@ fn apply_to(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32, which: Which) {
     }
 }
 
+thread_local! {
+    /// What the weapon-skin hooks need from the game (set by [`register`], used on the main thread).
+    static GLUE: RefCell<Option<(Arc<Objc>, Ivars)>> = const { RefCell::new(None) };
+}
+
+/// True while a loaded mod declares a weapon cosmetic.
+pub fn has_weapons() -> bool {
+    STATE.with(|s| s.borrow().content.has_weapons())
+}
+
+/// The skin of a held sprite item (`item`, an `ItemType`) on blockhead `bh`: the GL name of the mod's texture and
+/// its rectangle `[u, v, w, h]`. `dev_item`: the dev aid, the item the player's weapon cosmetic shows on whatever
+/// its `base` says.
+pub fn weapon_skin(c: &mut Cpu, bh: u32, item: u16, dev_item: Option<u16>) -> Option<(u32, [f32; 4])> {
+    if !on_main() {
+        return None;
+    }
+    let (o, iv) = GLUE.with(|g| g.borrow().clone())?;
+    let dev = STATE.with(|s| !s.borrow().dev.is_empty());
+    let player = player_of(&o, c, &iv, bh, dev);
+    let id = STATE.with(|s| {
+        let s = s.borrow();
+        match dev_item {
+            Some(d) if d == item => s.content.worn_in(&player, "weapon"),
+            _ => s.content.weapon(&player, item),
+        }
+    })?;
+    let tex = texture(&o, c, id, Part::Main);
+    if tex == 0 {
+        return None;
+    }
+    let uv = STATE.with(|s| s.borrow_mut().content.texture(id, Part::Main).ok().flatten().map(|g| g.uv()))?;
+    let name = o.send(c, tex, "name", &[]);
+    (name != 0).then_some((name, uv))
+}
+
 /// Registers the hooks.
 pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
     let t = |s: &str| Target::parse(s).expect("valid target");
+    GLUE.with(|g| *g.borrow_mut() = Some((o.clone(), iv.clone())));
+    // Which blockhead is drawing (weapon skins): before hooks, nothing is changed. The matrices are unions
+    // (`v156@0:4f8(_GLKMatrix4=...)12(...)76i140i144i148i152`), which a runtime signature cannot describe.
+    let matrix = crate::objchook::Ty::Struct { words: 16, align8: false };
+    let draw = crate::objchook::Sig {
+        ret: crate::objchook::Ty::Void,
+        args: vec![
+            crate::objchook::Ty::F32,
+            matrix,
+            matrix,
+            crate::objchook::Ty::Word,
+            crate::objchook::Ty::Word,
+            crate::objchook::Ty::Word,
+            crate::objchook::Ty::Word,
+        ],
+    };
+    hooks.hook(
+        t("-[Blockhead draw:projectionMatrix:modelViewMatrix:cameraMinXWorld:cameraMaxXWorld:cameraMinYWorld:cameraMaxYWorld:]"),
+        Some(draw),
+        move |inv| {
+            if on_main() {
+                crate::weapons::entered("draw", inv.receiver());
+            }
+        },
+    );
+    // The other entry points the game draws a blockhead with: the item in its hand while it is used (named like an
+    // inventory preview in the game) and the portrait in the HUD.
+    for target in [
+        "-[Blockhead drawForButtonProjectionMatrix:modelViewMatrix:]",
+        "-[Blockhead drawTransparentInventoryItem:projectionMatrix:modelViewMatrix:cameraMinXWorld:cameraMaxXWorld:cameraMinYWorld:cameraMaxYWorld:]",
+    ] {
+        hooks.hook(t(target), Some(other_draw(target)), move |inv| {
+            if on_main() {
+                crate::weapons::entered(if target.contains("Button") { "button" } else { "ghost" }, inv.receiver());
+            }
+        });
+    }
     // Dev trace: the first pixels the game itself hands to CPTexture2D (to compare with the PNG).
     hooks.hook(
         t("-[CPTexture2D initWithData:pixelFormat:pixelsWide:pixelsHigh:contentSize:mipmap:]"),
@@ -534,4 +608,14 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
 fn is_net(c: &mut Cpu, iv: &Ivars, bh: u32) -> bool {
     let off = iv.offset(c, "isNet");
     c.mem().read_u8(bh + off).unwrap_or(0) != 0
+}
+
+/// The signatures of the other two draw entry points (matrices are unions, so they are written by hand).
+fn other_draw(target: &str) -> crate::objchook::Sig {
+    use crate::objchook::{Sig, Ty};
+    let matrix = Ty::Struct { words: 16, align8: false };
+    if target.contains("drawForButton") {
+        return Sig { ret: Ty::Void, args: vec![matrix, matrix] };
+    }
+    Sig { ret: Ty::Void, args: vec![Ty::F32, matrix, matrix, Ty::Word, Ty::Word, Ty::Word, Ty::Word] }
 }

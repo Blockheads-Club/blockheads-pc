@@ -94,6 +94,66 @@ c="$run/blocked.err"
 reject "$c" "native code of native-hello loaded" "nothing is loaded"
 reject "$c" "hello from native code" "the library did not run"
 [[ -s "$run/shots-blocked/inworld.png" ]] && echo "  ok: screenshot inworld" || { echo "  FAILED: no inworld.png" >&2; fail=1; }
+# Weapon skins: the arms fixture (a weapon cosmetic with a magenta/yellow picture) is worn by every blockhead (dev
+# aid) on the flint spade (item 16, the dev aid's item). The game draws the held tool while the blockhead digs: the
+# inline hook on texCoordsForItemType binds the mod's texture for it. Digging: select the second tool, tap the
+# blocks beside the blockhead (the world is random: any of the four taps may reach a block), shoot the swings.
+echo "e2e-native: weapon skins"
+cat > "$run/weapon.script" << 'EOF'
+0     clicktext Allow
++0    clicktext OK
++5000 click 512 400
++2500 click 512 588
++5000 click 370 552
++1500 click 512 588
++4000 click 985 187
++1500 click 590 395
++500  shot swing1
++500  shot swing2
++500  shot swing3
++1500 click 590 330
++500  shot swing4
++500  shot swing5
++500  shot swing6
++1500 click 440 395
++500  shot swing7
++500  shot swing8
++500  shot swing9
++1500 click 440 330
++500  shot swing10
++500  shot swing11
++500  shot swing12
++300  quit
+EOF
+rm -rf "$run/data"
+mkdir -p "$run/shots-weapon" "$run/data"
+env -u WAYLAND_DISPLAY -u DISPLAY HOME="$run/home" SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11 GDK_BACKEND=x11 \
+  BHPC_DEV_COSMETICS=weapon=arms:blade BHPC_DEV_WEAPON_ITEM=16 \
+  timeout --kill-after=10 "$((limit + 20))" dbus-run-session --config-file="$run/bus.conf" -- \
+  xvfb-run -a -s "-screen 0 1280x800x24" "$bin" --apk "$apk" --data-dir "$run/data" --script "$run/weapon.script" \
+  --shot-dir "$run/shots-weapon" --seconds "$limit" --mods-dev "$PWD/fixtures/mods/arms" \
+  > "$run/weapon.out" 2> "$run/weapon.err" || true
+c="$run/weapon.err"
+expect "$c" "1 cosmetic(s) loaded" "the weapon cosmetic is loaded"
+expect "$c" "[weapons] hook installed on texCoordsForItemType" "inline hook on the game's own function"
+if command -v magick > /dev/null; then
+  best=0
+  for f in "$run"/shots-weapon/swing*.png; do
+    m=$(magick "$f" -fuzz 8% -fill black +opaque '#ff00ff' -channel R -separate -format '%[fx:mean*10000]' info: 2> /dev/null || echo 0)
+    m=${m%.*}
+    ((m > best)) && best=$m
+  done
+  if ((best > 20)); then
+    echo "  ok: the mod's picture is drawn on the held tool (magenta share $best / 10000)"
+  else
+    echo "  FAILED: no magenta (the skin) on the held tool (share $best / 10000)" >&2
+    fail=1
+  fi
+else
+  echo "  skipped: the picture check needs ImageMagick"
+fi
+[[ -n "${SHOTS:-}" ]] && cp "$run"/shots-weapon/*.png "$SHOTS/" || true
+
 if ((fail)); then
   echo "e2e-native: FAILED (KEEP=1 keeps the logs)" >&2
   exit 1

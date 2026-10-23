@@ -33,6 +33,8 @@ pub mod png;
 pub mod script;
 pub mod tracks;
 pub mod vfd;
+#[cfg(feature = "play")]
+pub mod weapons;
 
 use bhpc_cpu::{Cpu, CpuError, CpuOptions, Stop};
 use bhpc_loader::{Linker, LoadError};

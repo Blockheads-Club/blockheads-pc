@@ -350,6 +350,7 @@ impl ModGlue {
             for l in n.take_logs() {
                 log_native(&l);
             }
+            crate::weapons::sync(c);
         }
         let cmds = self.shared.take();
         let actions = MAIN.with(|m| {
@@ -780,6 +781,7 @@ fn stop_natives(c: &mut Cpu) {
 
 fn stop_session(sh: &Shared, why: &str, keep_join: bool, c: &mut Cpu) {
     crate::cosmetics::clear();
+    crate::weapons::remove(c);
     stop_natives(c);
     let stopped = MAIN.with(|m| {
         let mut m = m.borrow_mut();
