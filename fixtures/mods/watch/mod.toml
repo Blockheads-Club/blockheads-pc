@@ -1,0 +1,18 @@
+schema = 1
+id = "watch"
+version = "1.0.0"
+name = { en = "Watch" }
+description = { en = "Logs the world events a client mod can see" }
+authors = ["Blockheads Club"]
+license = "MIT"
+api = "^0.2"
+
+[sides]
+client = true
+
+[entry.client]
+runtime = "lua"
+path = "client/main.luau"
+
+[permissions]
+world = "read"
