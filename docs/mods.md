@@ -53,3 +53,17 @@ log lines. Stdin (embedded view): `mods-reload`. In the game: F9 opens the Mods 
   Enter, download, join, the client mod runs, channel round trip, the server's chat reaches the client mod, F9 panel,
   a second join through the game's Join form from the cache, and a vanilla server (no `SERVER_HELLO`, join after
   1.5 s). The server ends by itself when its last player leaves; the script restarts it.
+
+## JVM client mods (Java, Kotlin; milestone M9)
+
+Off by default, twice: build the runner with `--features jvm` (`cargo build --release -p bhpc-run --features play,jvm`;
+needs a JDK, the Java SDK is compiled in) and start it with `--mods-jvm` (the launcher passes it when the preference
+`mods_jvm` is true in `prefs.json`; `mods_java_home` names a JRE, otherwise `BHMOD_JAVA_HOME`, `JAVA_HOME` and `java` on
+the `PATH` are tried). The runtime is mod-sdk's `bhmod-core` JVM runtime ([`docs/jvm.md`](https://github.com/Blockheads-Club/mod-sdk/blob/dev/docs/jvm.md)):
+one JVM per process on the user's JRE, one class loader per mod, `client/mod.jar` with `Bhmod-Main` in its manifest.
+A JVM mod is `native` (unsandboxed): the join prompt shows the red native zone, it is refused with "never allow native
+mods", and a server can only push one that the index lists with the same SHA-256 and the player confirmed. With the JVM
+on, `HELLO.runtimes` also lists `jvm`. There is no Settings toggle yet: edit `prefs.json`.
+
+`cargo test -p bhpc-mods --features jvm` runs a Java client mod through `ClientHost` (needs a JDK and a JRE); CI has a
+job for it.
