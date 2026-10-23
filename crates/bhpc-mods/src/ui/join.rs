@@ -90,8 +90,14 @@ fn short_hash(h: &str) -> String {
     }
 }
 
+/// Two letters for a tile; an address or a name without letters gets `?`.
 fn initials(name: &str) -> String {
-    name.chars().filter(|c| c.is_alphanumeric()).take(2).collect::<String>().to_uppercase()
+    let letters: String = name.chars().filter(|c| c.is_alphabetic()).take(2).collect::<String>().to_uppercase();
+    if letters.is_empty() {
+        "?".to_string()
+    } else {
+        letters
+    }
 }
 
 fn mods_word(n: usize) -> String {

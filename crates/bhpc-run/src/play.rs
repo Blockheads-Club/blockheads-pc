@@ -732,6 +732,11 @@ fn spawn_commands(
                         m.post(bhpc_mods::view::UiCmd::Reload);
                     }
                 }
+                Some(Cmd::ModsChat(line)) => {
+                    if let Some(m) = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+                        m.post(bhpc_mods::view::UiCmd::Say(line));
+                    }
+                }
                 Some(cmd) => {
                     if cmd_event(&cmd).is_some_and(|ev| tx.send(ev).is_err()) {
                         break;
@@ -745,16 +750,19 @@ fn spawn_commands(
 }
 
 /// A game in a window of its own: the launcher's control lines on stdin (it is its pipe to the game). Only
-/// `mods-reload` means something here; input and size belong to the window. The end of input just ends the reading:
+/// `mods-reload` and `mods-chat` mean something here; input and size belong to the window. The end of input just ends the reading:
 /// the window keeps the game going.
 fn spawn_control(flags: Arc<Flags>) {
     std::thread::spawn(move || {
         for line in std::io::BufRead::lines(std::io::stdin().lock()) {
             let Ok(line) = line else { break };
-            if let Some(Cmd::ModsReload) = Cmd::parse(&line) {
-                if let Some(m) = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
-                    m.post(bhpc_mods::view::UiCmd::Reload);
-                }
+            let cmd = match Cmd::parse(&line) {
+                Some(Cmd::ModsReload) => bhpc_mods::view::UiCmd::Reload,
+                Some(Cmd::ModsChat(text)) => bhpc_mods::view::UiCmd::Say(text),
+                _ => continue,
+            };
+            if let Some(m) = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+                m.post(cmd);
             }
         }
     });

@@ -885,6 +885,7 @@ mod embed_tests {
             Cmd::Layout(Layout::GlRgba),
             Cmd::Layout(Layout::Bgra),
             Cmd::ModsReload,
+            Cmd::ModsChat("/echo hi\\there".into()),
             Cmd::Quit,
         ];
         for c in all {

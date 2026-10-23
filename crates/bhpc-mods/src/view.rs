@@ -244,6 +244,8 @@ pub enum UiCmd {
     Reload,
     /// Put this text on the clipboard.
     Copy(String),
+    /// Say this line in the game's chat as if it had been typed (tests, developer tools).
+    Say(String),
 }
 
 #[derive(serde::Serialize)]

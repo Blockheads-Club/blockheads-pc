@@ -83,6 +83,11 @@ fn join_prompt_keys_and_clicks() {
     // F9 does nothing while the prompt shows; clicks outside buttons are taken.
     assert_eq!(ui.input(UiInput::Key(HID_F9), &v), (true, None));
     assert_eq!(ui.input(UiInput::Click(1.0, 1.0), &v), (true, None));
+    // A server known by its address (no letters) gets a question mark on its tile.
+    let mut by_address = v.clone();
+    by_address.join.as_mut().unwrap().server = "127.0.0.1:15151".into();
+    render(&mut ui, &by_address, 5, "prompt-address");
+    render(&mut ui, &v, 6, "prompt");
     assert_eq!(click(&mut ui, &v, Hit::Accept), (true, Some(UiCmd::Decide { accept: true, native_ok: false })));
     assert_eq!(click(&mut ui, &v, Hit::Decline), (true, Some(UiCmd::Decide { accept: false, native_ok: false })));
 }
