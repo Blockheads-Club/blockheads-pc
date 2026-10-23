@@ -288,6 +288,12 @@ pub(crate) fn client_dep(d: &Dependency) -> bool {
 }
 
 /// `req` (a semver requirement) accepts `version`.
+/// True when the host serves an API version the requirement accepts: it serves every version in
+/// `SUPPORTED_API_VERSIONS` (0.x minors only add), not only the newest.
+pub(crate) fn api_ok(req: &str) -> bool {
+    bhmod_manifest::SUPPORTED_API_VERSIONS.iter().any(|v| req_ok(req, v))
+}
+
 pub(crate) fn req_ok(req: &str, version: &str) -> bool {
     match (VersionReq::parse(req), Version::parse(version)) {
         (Ok(r), Ok(v)) => r.matches(&v),
