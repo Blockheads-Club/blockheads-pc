@@ -9,7 +9,7 @@ use bhmod_manifest::manifest::Permissions;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
-use super::{req_ok, required_permissions, MRes, ModError, API_VERSION, LOADER_VERSION};
+use super::{api_ok, req_ok, required_permissions, MRes, ModError, LOADER_VERSION};
 
 /// Where the public mod list is published (later also `https://blockheads.club/mods/index.json`).
 pub const INDEX_URL: &str = "https://github.com/Blockheads-Club/mods/releases/download/index/index.json";
@@ -113,7 +113,7 @@ pub struct IndexVersion {
 impl IndexVersion {
     /// This launcher can run it (API and loader requirements met, semver version).
     pub fn compatible(&self) -> bool {
-        req_ok(&self.api, API_VERSION) && self.loader.as_deref().is_none_or(|r| req_ok(r, LOADER_VERSION))
+        api_ok(&self.api) && self.loader.as_deref().is_none_or(|r| req_ok(r, LOADER_VERSION))
     }
     /// Not yanked, compatible and has a client part.
     pub fn usable(&self) -> bool {

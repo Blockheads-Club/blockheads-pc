@@ -162,8 +162,11 @@ export interface DisplayInfo {
 export type UpdateStage = 'idle' | 'checking' | 'uptodate' | 'available' | 'downloading' | 'installing' | 'ready' | 'error';
 export interface UpdateInfo {
   version: string;
+  /** 0 when the release feed does not say. */
   size_mb: number;
   notes: string[];
+  /** Set when this install cannot update itself (Linux deb/rpm): the release page to download the package from. */
+  manual_url?: string | null;
 }
 export interface UpdateProgress {
   stage: 'downloading' | 'installing' | 'ready';

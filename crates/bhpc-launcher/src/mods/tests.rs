@@ -208,7 +208,14 @@ fn mod_prefs_are_sanitized() {
     assert_eq!(Prefs { mods_cache_limit_mb: 7, ..Prefs::default() }.sanitized().mods_cache_limit_mb, 1024);
     assert_eq!(Prefs { mods_cache_limit_mb: 0, ..Prefs::default() }.sanitized().mods_cache_limit_mb, 0);
     let p: Prefs = toml::from_str("language = \"tr\"").unwrap();
-    assert!(p.mods_auto_update && p.mods_dev_watch && !p.mods_developer && !p.mods_block_native);
+    assert!(
+        p.mods_auto_update
+            && p.mods_dev_watch
+            && !p.mods_developer
+            && !p.mods_block_native
+            && !p.mods_jvm
+            && p.mods_java_home.is_empty()
+    );
 }
 
 #[test]
@@ -986,4 +993,11 @@ fn live_reports_from_the_game() {
     assert_eq!((b.status.as_str(), b.live.is_some()), ("ready", true));
     assert_eq!(ov.attention, 1);
     assert_eq!(live::args(&crate::prefs::Prefs::default()), Vec::<String>::new());
+    // JVM mods: the flag, and the JRE only when one is named.
+    let jvm = crate::prefs::Prefs { mods_jvm: true, ..Default::default() };
+    assert_eq!(live::args(&jvm), ["--mods-jvm"]);
+    let jvm = crate::prefs::Prefs { mods_jvm: true, mods_java_home: "/opt/jre".into(), ..Default::default() };
+    assert_eq!(live::args(&jvm), ["--mods-jvm", "--mods-java-home", "/opt/jre"]);
+    let home_only = crate::prefs::Prefs { mods_java_home: "/opt/jre".into(), ..Default::default() };
+    assert!(live::args(&home_only).is_empty());
 }

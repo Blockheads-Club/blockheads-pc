@@ -34,6 +34,10 @@ pub struct Prefs {
     pub mods_cache_limit_mb: u32,
     /// Never allow native mods (from any source, on any server).
     pub mods_block_native: bool,
+    /// Run Java and Kotlin client mods (they are unsandboxed). Needs a runner built with the `jvm` feature and a JRE.
+    pub mods_jvm: bool,
+    /// The JRE for JVM mods; empty searches `JAVA_HOME` and the `PATH`.
+    pub mods_java_home: String,
     /// Developer mode: the Developer tab with folder mods.
     pub mods_developer: bool,
     /// Mod source folders loaded in developer mode.
@@ -54,6 +58,8 @@ impl Default for Prefs {
             mods_auto_update: true,
             mods_cache_limit_mb: 1024,
             mods_block_native: false,
+            mods_jvm: false,
+            mods_java_home: String::new(),
             mods_developer: false,
             mods_dev_folders: Vec::new(),
             mods_dev_watch: true,

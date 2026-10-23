@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use bhmod_client::session::Failure;
 use bhmod_proto::{
     file_error, hex, ChannelInfo, ChannelRegister, FileChunk, FileError, FileRequest, Message, ModInfo, ModList,
     ModPermissions, RejectText, ServerHello, CHUNK_SIZE,
@@ -74,6 +75,12 @@ pub(crate) fn cfg(dir: &Path) -> JoinConfig {
     }
 }
 
+/// The same mod, but the client may run without it.
+pub(crate) fn optional(mut i: ModInfo) -> ModInfo {
+    i.client_required = false;
+    i
+}
+
 fn hello(count: u64, required: bool) -> Vec<u8> {
     Message::ServerHello(ServerHello { proto: 1, mods_hash: [7; 32], client_required: required, count }).encode()
 }
@@ -121,7 +128,7 @@ fn at_prompt(dir: &Path, mods: Vec<ModInfo>, c: JoinConfig) -> (JoinFlow, Instan
     assert_eq!(f.player_info(), PlayerInfo::Hold);
     assert_eq!(sent(&f.packet(&hello(mods.len() as u64, true), now)), vec![Message::ListRequest]);
     assert_eq!(f.packet(&list(mods), now), vec![Action::Prompt]);
-    assert_eq!(f.stage(), &Stage::Prompt);
+    assert_eq!(f.stage(), Stage::Prompt);
     (f, now)
 }
 
@@ -129,22 +136,32 @@ fn at_prompt(dir: &Path, mods: Vec<ModInfo>, c: JoinConfig) -> (JoinFlow, Instan
 fn vanilla_server_times_out_and_releases_unchanged() {
     let d = tempfile::tempdir().unwrap();
     let mut f = JoinFlow::new(cfg(d.path()));
-    assert_eq!(f.player_info(), PlayerInfo::Send(None));
+    assert_eq!(f.stage(), Stage::Idle);
     let t = Instant::now();
     let a = f.contact(t);
     let Message::Hello(h) = &sent(&a)[0] else { panic!() };
     assert_eq!((h.proto, h.cached.len()), (1, 0));
+    assert_eq!(f.stage(), Stage::Hello);
     assert!(f.contact(t).is_empty());
     assert_eq!(f.player_info(), PlayerInfo::Hold);
     assert!(f.tick(t + Duration::from_millis(1499)).is_empty());
     assert_eq!(f.tick(t + Duration::from_millis(1500)), vec![Action::Release(None)]);
-    assert_eq!(f.stage(), &Stage::Vanilla);
-    assert!(!f.modded());
+    assert_eq!(f.stage(), Stage::Vanilla);
     // Late or stray packets change nothing; the 0x1f goes out unchanged from now on.
     assert!(f.packet(&hello(0, false), t).is_empty());
     assert!(f.packet(&[0xbc, 0xff], t).is_empty());
     assert_eq!(f.player_info(), PlayerInfo::Send(None));
     assert!(f.tick(t + Duration::from_secs(9)).is_empty());
+    // Runtimes this loader does not have are not announced to the mods' checks.
+    let mut c = cfg(d.path());
+    c.runtimes = vec!["lua".into(), "jvm".into()];
+    c.loader = "dev-build".into();
+    assert!(
+        matches!(&sent(&JoinFlow::new(c).contact(t))[0], Message::Hello(h) if h.runtimes == ["lua", "jvm"] && h.loader == "dev-build")
+    );
+    // A game that sends before any 0x23 is treated like vanilla.
+    let mut g = JoinFlow::new(cfg(d.path()));
+    assert_eq!(g.player_info(), PlayerInfo::Send(None));
 }
 
 #[test]
@@ -155,11 +172,10 @@ fn server_without_mods_joins_with_the_hash() {
     f.contact(t);
     f.player_info();
     let a = f.packet(&hello(0, false), t);
-    assert_eq!(a, vec![Action::Release(Some(hex(&[7; 32]))), Action::Run(vec![])]);
-    assert_eq!(f.stage(), &Stage::Joined);
+    assert_eq!(a, vec![Action::Release(Some(hex(&[7; 32])))]);
+    assert_eq!(f.stage(), Stage::Joined);
     assert_eq!(f.player_info(), PlayerInfo::Send(Some(hex(&[7; 32]))));
-    assert!(f.modded());
-    assert_eq!(f.server().unwrap().count, 0);
+    assert!(f.entries().is_empty());
 }
 
 #[test]
@@ -172,15 +188,17 @@ fn full_download_with_acks_resume_and_cache() {
     std::fs::create_dir_all(&blobs).unwrap();
     std::fs::write(blobs.join(format!("{}.part", hex(&sha(&big)))), &big[..CHUNK_SIZE + CHUNK_SIZE / 2]).unwrap();
     let (mut f, t) = at_prompt(d.path(), vec![info("big", &big, false), info("small", &small, false)], cfg(d.path()));
-    assert!(f.acceptable() && !f.has_native());
+    assert!(f.acceptable() && !f.has_native() && f.required());
     assert_eq!(f.entries()[0].name(), "Mod big");
     assert_eq!(f.progress(), (0, (big.len() + small.len()) as u64));
     // Wrong stage for a decision before; the accept starts at offset 32768.
     let a = f.decide(true, false, t);
     assert_eq!(sent(&a), vec![Message::FileRequest(FileRequest { sha256: sha(&big), offset: CHUNK_SIZE as u64 })]);
+    assert_eq!(f.stage(), Stage::Downloading);
     assert!(f.decide(true, false, t).is_empty());
+    assert_eq!(f.entries()[0].have, CHUNK_SIZE as u64);
     let cs = chunks(&big);
-    // A chunk for another file is ignored; one out of order fails.
+    // A chunk for another file is ignored.
     let mut other = cs[2].clone();
     other[2] ^= 1;
     assert!(f.packet(&other, t).is_empty());
@@ -195,7 +213,7 @@ fn full_download_with_acks_resume_and_cache() {
     let msgs = sent(&a);
     assert_eq!(msgs[0], Message::FileRequest(FileRequest { sha256: sha(&big), offset: big.len() as u64 }));
     assert_eq!(msgs[1], Message::FileRequest(FileRequest { sha256: sha(&small), offset: 0 }));
-    assert!(f.entries()[0].done);
+    assert!(f.entries()[0].done && !f.entries()[1].done);
     let a = f.packet(&chunks(&small)[0], t);
     let msgs = sent(&a);
     assert!(matches!(&msgs[1], Message::Ready(r) if r.accepted_hash == [7; 32] && r.loaded.len() == 2));
@@ -205,7 +223,7 @@ fn full_download_with_acks_resume_and_cache() {
     assert_eq!(run[0].grant, ["channels"]);
     assert!(run[0].path.is_file());
     assert!(!blobs.join(format!("{}.part", hex(&sha(&big)))).exists());
-    assert_eq!(f.stage(), &Stage::Joined);
+    assert_eq!(f.stage(), Stage::Joined);
     // The launcher's cache record.
     let rec = std::fs::read_to_string(d.path().join("mods-cache/servers/127.0.0.1_15151.toml")).unwrap();
     assert!(rec.contains("Mod big"), "{rec}");
@@ -220,12 +238,11 @@ fn full_download_with_acks_resume_and_cache() {
     g.player_info();
     g.packet(&hello(2, true), t);
     g.packet(&list(vec![info("big", &big, false), info("small", &small, false)]), t);
-    assert_eq!(g.cached_mods().len(), 2);
+    assert!(g.entries().iter().all(|e| e.cached && e.done));
     assert_eq!(g.progress(), (0, 0));
     let a = g.decide(true, false, t);
     assert!(matches!(&sent(&a)[0], Message::Ready(_)));
     // Channels: from MOD_LIST and CHANNEL_REGISTER; unknown ids are dropped.
-    assert_eq!(g.channel_id("echo:ping"), Some(3));
     let reg = Message::ChannelRegister(ChannelRegister { name: "echo:late".into(), id: 9 }).encode();
     assert!(g.packet(&reg, t).is_empty());
     let pkt = g.channel_packet("echo:late", b"hi").unwrap();
@@ -245,9 +262,8 @@ fn full_download_with_acks_resume_and_cache() {
 fn channels_need_a_finished_join() {
     let d = tempfile::tempdir().unwrap();
     let small = pkg("small", "1.0.0", "", "", 0);
-    let (f, t) = at_prompt(d.path(), vec![info("small", &small, false)], cfg(d.path()));
+    let (mut f, t) = at_prompt(d.path(), vec![info("small", &small, false)], cfg(d.path()));
     assert_eq!(f.channel_packet("echo:ping", b""), None);
-    let mut f = f;
     let ch = Message::Channel(bhmod_proto::Channel { channel_id: 3, payload: vec![] }).encode();
     assert!(f.packet(&ch, t).is_empty());
 }
@@ -269,16 +285,15 @@ fn busy_retry_stall_and_file_errors() {
     f.packet(&chunks(&a)[0], t + BUSY_RETRY);
     assert!(f.tick(t + BUSY_RETRY + Duration::from_secs(1)).is_empty());
     assert_eq!(f.tick(t + BUSY_RETRY + STALL), vec![Action::Disconnect]);
-    let Stage::Failed(e) = f.stage() else { panic!() };
-    assert_eq!(e, &JoinError::Stalled { id: "aa".into(), have: CHUNK_SIZE as u64, size: a.len() as u64 });
-    assert!(e.to_string().contains("stopped at 32768"));
+    assert_eq!(f.stage(), Stage::Failed(Failure::Stalled("aa".into())));
     // NOT_FOUND fails at once.
     let d2 = tempfile::tempdir().unwrap();
     let (mut g, t) = at_prompt(d2.path(), vec![info("aa", &a, false)], cfg(d2.path()));
     g.decide(true, false, t);
     assert_eq!(g.packet(&err(file_error::NOT_FOUND), t), vec![Action::Disconnect]);
-    assert_eq!(g.stage(), &Stage::Failed(JoinError::File { id: "aa".into(), code: 1 }));
-    assert!(matches!(g.stage(), Stage::Failed(e) if e.to_string().contains("error 1")));
+    assert_eq!(g.stage(), Stage::Failed(Failure::Download { id: "aa".into(), code: 1 }));
+    // A failed join sends the game's 0x1f unchanged (the connection is closing anyway).
+    assert_eq!(g.player_info(), PlayerInfo::Send(None));
 }
 
 #[test]
@@ -289,7 +304,7 @@ fn bad_chunks_checksums_and_package_rules() {
     f.decide(true, false, t);
     let bad = Message::FileChunk(FileChunk { sha256: sha(&a), offset: 0, total: a.len() as u64 + 5, data: vec![1] });
     assert_eq!(f.packet(&bad.encode(), t), vec![Action::Disconnect]);
-    assert!(matches!(f.stage(), Stage::Failed(e @ JoinError::BadChunk { .. }) if e.to_string().contains("broken")));
+    assert!(matches!(f.stage(), Stage::Failed(Failure::Protocol(_))));
     // The server lists a hash the bytes do not have.
     let d = tempfile::tempdir().unwrap();
     let mut wrong = info("aa", &a, false);
@@ -298,36 +313,33 @@ fn bad_chunks_checksums_and_package_rules() {
     f.decide(true, false, t);
     let c = Message::FileChunk(FileChunk { sha256: [9; 32], offset: 0, total: a.len() as u64, data: a.clone() });
     assert_eq!(f.packet(&c.encode(), t), vec![Action::Disconnect]);
-    let Stage::Failed(e @ JoinError::Checksum { .. }) = f.stage() else { panic!("{:?}", f.stage()) };
-    assert!(e.to_string().contains(&hex(&sha(&a))));
-    // Not a package (right hash, broken zip): refused by the package rules and deleted.
+    assert_eq!(f.stage(), Stage::Failed(Failure::HashMismatch("aa".into())));
+    // Not a package (right hash, broken zip): refused by the package rules.
     let d = tempfile::tempdir().unwrap();
     let junk = b"not a zip".to_vec();
     let (mut f, t) = at_prompt(d.path(), vec![info("aa", &junk, false)], cfg(d.path()));
     f.decide(true, false, t);
     assert_eq!(f.packet(&chunks(&junk)[0], t).last(), Some(&Action::Disconnect));
-    let Stage::Failed(e @ JoinError::Package { .. }) = f.stage() else { panic!() };
+    let Stage::Failed(e @ Failure::Refused { .. }) = f.stage() else { panic!() };
     assert!(e.to_string().starts_with("aa: "));
-    assert!(std::fs::read_dir(d.path().join("mods-cache/blobs")).unwrap().next().is_none());
-    // A valid package listed under another id; and a cached file whose name lies about its hash.
+    // A valid package listed under another id.
     let d = tempfile::tempdir().unwrap();
     let (mut f, t) = at_prompt(d.path(), vec![info("bb", &a, false)], cfg(d.path()));
     f.decide(true, false, t);
     f.packet(&chunks(&a)[0], t);
-    assert!(
-        matches!(f.stage(), Stage::Failed(JoinError::Package { message, .. }) if message.contains("holds the mod aa")),
-        "{:?}",
-        f.stage()
-    );
+    assert!(matches!(f.stage(), Stage::Failed(Failure::Refused { .. })), "{:?}", f.stage());
+    // A cached file whose name lies about its hash is deleted and not run.
     let d = tempfile::tempdir().unwrap();
     let blobs = d.path().join("mods-cache/blobs");
     std::fs::create_dir_all(&blobs).unwrap();
-    std::fs::write(blobs.join(format!("{}.bhmod", hex(&[5; 32]))), &a).unwrap();
+    let lie_path = blobs.join(format!("{}.bhmod", hex(&[5; 32])));
+    std::fs::write(&lie_path, &a).unwrap();
     let mut lie = info("aa", &a, false);
     lie.sha256 = [5; 32];
     let (mut f, t) = at_prompt(d.path(), vec![lie], cfg(d.path()));
-    f.decide(true, false, t);
-    assert!(matches!(f.stage(), Stage::Failed(JoinError::Package { message, .. }) if message.contains("not 0505")));
+    assert_eq!(f.decide(true, false, t).last(), Some(&Action::Disconnect));
+    assert!(matches!(f.stage(), Stage::Failed(Failure::LoadFailed(m)) if m.contains("not 0505")));
+    assert!(!lie_path.exists());
 }
 
 #[test]
@@ -340,14 +352,14 @@ fn cache_write_failures() {
     std::fs::create_dir_all(d.path().join("mods-cache")).unwrap();
     std::fs::write(d.path().join("mods-cache/blobs"), b"").unwrap();
     assert_eq!(f.packet(&chunks(&a)[0], t), vec![Action::Disconnect]);
-    assert!(matches!(f.stage(), Stage::Failed(e @ JoinError::Io(_)) if e.to_string().contains("mod cache")));
+    assert!(matches!(f.stage(), Stage::Failed(e @ Failure::Disk(_)) if e.to_string().contains("save")));
     // The finished file cannot be stored (a folder in its place).
     let d = tempfile::tempdir().unwrap();
     let (mut f, t) = at_prompt(d.path(), vec![info("aa", &a, false)], cfg(d.path()));
     f.decide(true, false, t);
     std::fs::create_dir_all(d.path().join(format!("mods-cache/blobs/{}.bhmod", hex(&sha(&a))))).unwrap();
-    assert_eq!(f.packet(&chunks(&a)[0], t), vec![Action::Disconnect]);
-    assert!(matches!(f.stage(), Stage::Failed(JoinError::Io(_))));
+    assert_eq!(f.packet(&chunks(&a)[0], t).last(), Some(&Action::Disconnect));
+    assert!(matches!(f.stage(), Stage::Failed(Failure::Disk(_))));
 }
 
 #[test]
@@ -356,7 +368,7 @@ fn decline_required_and_optional() {
     let a = pkg("aa", "1.0.0", "", "", 0);
     let (mut f, t) = at_prompt(d.path(), vec![info("aa", &a, false)], cfg(d.path()));
     assert_eq!(f.decide(false, false, t), vec![Action::Disconnect]);
-    assert_eq!(f.stage(), &Stage::Declined);
+    assert_eq!(f.stage(), Stage::Declined);
     assert_eq!(f.player_info(), PlayerInfo::Send(None));
     // Optional client mods only: declining joins without them (still with the hash).
     let t = Instant::now();
@@ -364,18 +376,72 @@ fn decline_required_and_optional() {
     g.contact(t);
     g.player_info();
     g.packet(&hello(1, false), t);
-    let mut opt = info("aa", &a, false);
-    opt.client_required = false;
-    g.packet(&list(vec![opt]), t);
-    let a = g.decide(false, false, t);
-    assert_eq!(a, vec![Action::Release(Some(hex(&[7; 32]))), Action::Run(vec![])]);
+    g.packet(&list(vec![optional(info("aa", &a, false))]), t);
+    assert!(!g.required());
+    let acts = g.decide(false, false, t);
+    assert_eq!(acts, vec![Action::Release(Some(hex(&[7; 32])))]);
     // A list with only server mods needs no prompt.
     let mut h = JoinFlow::new(cfg(d.path()));
     h.contact(t);
-    h.packet(&hello(1, false), t);
     let mut srv = info("s", b"x", false);
     srv.sides = vec!["server".into()];
-    assert_eq!(h.packet(&list(vec![srv]), t), vec![Action::Run(vec![])]);
+    assert!(h.packet(&hello(1, false), t).iter().all(|a| matches!(a, Action::Send(_))));
+    assert!(h.packet(&list(vec![srv]), t).is_empty());
+    assert_eq!(h.stage(), Stage::Joined);
+    assert!(h.entries().is_empty());
+}
+
+#[test]
+fn optional_mods_are_switched_per_mod() {
+    let d = tempfile::tempdir().unwrap();
+    let (req, aa, bb) = (pkg("req", "1.0.0", "", "", 0), pkg("aa", "1.0.0", "", "", 0), pkg("bb", "1.0.0", "", "", 0));
+    let mods = vec![info("req", &req, false), optional(info("aa", &aa, false)), optional(info("bb", &bb, false))];
+    let (mut f, t) = at_prompt(d.path(), mods, cfg(d.path()));
+    assert!(f.entries().iter().all(|e| e.enabled));
+    assert!(f.entries()[0].required() && !f.entries()[1].required());
+    let all = (req.len() + aa.len() + bb.len()) as u64;
+    assert_eq!(f.progress(), (0, all));
+    // Required mods stay on; an optional one can be switched off and on; an index out of range is ignored.
+    f.toggle(0);
+    f.toggle(9);
+    assert!(f.entries()[0].enabled);
+    f.toggle(1);
+    assert!(!f.entries()[1].enabled);
+    assert_eq!(f.entries()[1].to_download(), 0);
+    assert_eq!(f.progress(), (0, all - aa.len() as u64));
+    f.toggle(1);
+    f.toggle(1);
+    assert_eq!(f.progress(), (0, all - aa.len() as u64));
+    // Accepting downloads and runs the required mod and the optional one that stayed on.
+    let a = f.decide(true, false, t);
+    assert_eq!(sent(&a), vec![Message::FileRequest(FileRequest { sha256: sha(&req), offset: 0 })]);
+    f.toggle(2);
+    assert!(f.entries()[2].enabled, "no switching while downloading");
+    let a = f.packet(&chunks(&req)[0], t);
+    assert_eq!(sent(&a)[1], Message::FileRequest(FileRequest { sha256: sha(&bb), offset: 0 }));
+    let a = f.packet(&chunks(&bb)[0], t);
+    let msgs = sent(&a);
+    let Message::Ready(ready) = &msgs[1] else { panic!("{msgs:?}") };
+    assert_eq!(ready.loaded.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["req", "bb"]);
+    let Some(Action::Run(run)) = a.last() else { panic!("{a:?}") };
+    assert_eq!(run.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["req", "bb"]);
+    f.toggle(1);
+    assert!(!f.entries()[1].enabled, "no switching after the prompt");
+}
+
+#[test]
+fn a_refused_optional_mod_stays_off_and_does_not_block() {
+    let d = tempfile::tempdir().unwrap();
+    let (req, nat) = (pkg("req", "1.0.0", "", "", 0), pkg("nat", "1.0.0", "", "[permissions]\nnative = true", 0));
+    let (mut f, t) =
+        at_prompt(d.path(), vec![info("req", &req, false), optional(info("nat", &nat, true))], cfg(d.path()));
+    assert_eq!(f.entries()[1].refusal, Some(Refusal::NativeNotListed));
+    assert!(!f.entries()[1].enabled);
+    f.toggle(1);
+    assert!(!f.entries()[1].enabled);
+    // Not taken, so it neither blocks "Download and join" nor needs the red confirmation.
+    assert!(f.acceptable() && !f.has_native());
+    assert!(matches!(&sent(&f.decide(true, false, t))[0], Message::FileRequest(r) if r.sha256 == sha(&req)));
 }
 
 #[test]
@@ -385,7 +451,7 @@ fn native_mods_need_the_index_and_a_confirmation() {
     // Not listed: refused (accepting is impossible and counts as declining).
     let (mut f, t) = at_prompt(d.path(), vec![info("nat", &n, true)], cfg(d.path()));
     assert_eq!(f.entries()[0].refusal, Some(Refusal::NativeNotListed));
-    assert!(!f.acceptable() && f.has_native());
+    assert!(!f.acceptable() && f.has_native() && f.entries()[0].enabled);
     assert_eq!(f.decide(true, true, t), vec![Action::Disconnect]);
     // Blocked by the setting.
     let mut c = cfg(d.path());
@@ -400,10 +466,13 @@ fn native_mods_need_the_index_and_a_confirmation() {
     let mut c = cfg(d.path());
     c.index = Some(parse_index(idx.as_bytes()).unwrap());
     let (mut f, t) = at_prompt(d.path(), vec![info("nat", &n, true)], c.clone());
-    assert!(f.entries()[0].listed && f.acceptable());
+    assert!(f.entries()[0].listed && f.acceptable() && f.has_native());
     assert_eq!(f.decide(true, false, t), vec![Action::Disconnect]);
     let (mut f, t) = at_prompt(d.path(), vec![info("nat", &n, true)], c);
     assert!(matches!(&sent(&f.decide(true, true, t))[0], Message::FileRequest(_)));
+    let a = f.packet(&chunks(&n)[0], t);
+    let Some(Action::Run(run)) = a.last() else { panic!("{a:?}") };
+    assert_eq!(run[0].id, "nat");
 }
 
 #[test]
@@ -412,19 +481,32 @@ fn reject_text_is_reported() {
     let t = Instant::now();
     let mut f = JoinFlow::new(cfg(d.path()));
     f.contact(t);
+    assert_eq!(f.player_info(), PlayerInfo::Hold);
     let r = RejectText { reason_code: 3, text: "Update your mod loader".into(), url: None };
-    assert_eq!(f.packet(&Message::RejectText(r.clone()).encode(), t), vec![Action::Rejected(r.clone())]);
+    // The text first, then the game's 0x1f goes out plain so the server's 0x26 follows.
+    assert_eq!(
+        f.packet(&Message::RejectText(r.clone()).encode(), t),
+        vec![Action::Rejected(r.clone()), Action::Release(None)]
+    );
     assert_eq!(f.reject(), Some(&r));
+    assert_eq!(f.stage(), Stage::Rejected);
 }
 
 #[test]
-fn hashes_and_names() {
-    assert_eq!(parse_hash(&"ab".repeat(32)), Some([0xab; 32]));
-    assert_eq!(parse_hash("ab"), None);
-    assert_eq!(parse_hash(&"zz".repeat(32)), None);
-    assert_eq!(parse_hash(&format!("é{}", "a".repeat(62))), None);
-    let mut e = Entry { info: info("x", b"", false), cached: true, listed: false, refusal: None, have: 0, done: true };
+fn entry_names() {
+    let mut e = Entry {
+        info: info("x", b"", false),
+        cached: true,
+        listed: false,
+        refusal: None,
+        have: 0,
+        done: true,
+        enabled: true,
+    };
     assert_eq!(e.to_download(), 0);
+    e.cached = false;
+    e.info.size = 5;
+    assert_eq!(e.to_download(), 5);
     e.info.name = [("tr".to_string(), "Kip".to_string())].into();
     assert_eq!(e.name(), "Kip");
     e.info.name.clear();

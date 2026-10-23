@@ -39,6 +39,7 @@ bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "479e7b
 bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "479e7b9" }
 bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "479e7b9" }
 bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "479e7b9" }
+bhmod-client = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "479e7b9" }
 bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "479e7b9" }
 
 [profile.release]

@@ -113,6 +113,8 @@ pub struct PlayConfig {
     pub embed: Option<PathBuf>,
     /// A link to hand the game once it runs (`--open-uri`; `VerdeActivity.nativeHandleUri`, e.g. a join link).
     pub open_uri: Option<String>,
+    /// A game in a window of its own listens to the launcher on stdin (`--control`): today `mods-reload` only.
+    pub control: bool,
 }
 
 impl PlayConfig {
@@ -152,6 +154,7 @@ impl PlayConfig {
             bindings: Bindings::default(),
             embed: None,
             open_uri: None,
+            control: false,
         }
     }
 }
@@ -671,6 +674,9 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
             }
         });
     }
+    if cfg.control && cfg.embed.is_none() {
+        spawn_control(flags.clone());
+    }
     if !cfg.script.is_empty() {
         let (script, tx, f, dir) = (cfg.script.clone(), tx.clone(), flags.clone(), cfg.shot_dir.clone());
         std::thread::spawn(move || run_script(&script, &tx, &f, &dir));
@@ -726,6 +732,11 @@ fn spawn_commands(
                         m.post(bhpc_mods::view::UiCmd::Reload);
                     }
                 }
+                Some(Cmd::ModsChat(line)) => {
+                    if let Some(m) = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+                        m.post(bhpc_mods::view::UiCmd::Say(line));
+                    }
+                }
                 Some(cmd) => {
                     if cmd_event(&cmd).is_some_and(|ev| tx.send(ev).is_err()) {
                         break;
@@ -735,6 +746,25 @@ fn spawn_commands(
             }
         }
         flags.done.store(true, Ordering::SeqCst);
+    });
+}
+
+/// A game in a window of its own: the launcher's control lines on stdin (it is its pipe to the game). Only
+/// `mods-reload` and `mods-chat` mean something here; input and size belong to the window. The end of input just ends the reading:
+/// the window keeps the game going.
+fn spawn_control(flags: Arc<Flags>) {
+    std::thread::spawn(move || {
+        for line in std::io::BufRead::lines(std::io::stdin().lock()) {
+            let Ok(line) = line else { break };
+            let cmd = match Cmd::parse(&line) {
+                Some(Cmd::ModsReload) => bhpc_mods::view::UiCmd::Reload,
+                Some(Cmd::ModsChat(text)) => bhpc_mods::view::UiCmd::Say(text),
+                _ => continue,
+            };
+            if let Some(m) = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+                m.post(cmd);
+            }
+        }
     });
 }
 
@@ -1715,8 +1745,16 @@ impl UiThread {
                         let view = m.view.lock().unwrap_or_else(PoisonError::into_inner);
                         m.ui.lock().unwrap_or_else(PoisonError::into_inner).input(input, &view)
                     };
-                    if let Some(cmd) = cmd {
-                        m.post(cmd);
+                    match cmd {
+                        // The clipboard belongs to this thread (SDL) or the launcher (`@copy`).
+                        Some(bhpc_mods::view::UiCmd::Copy(text)) if cfg.embed.is_some() => {
+                            println!("{}", bhpc_launcher::embed::copy_line(&text));
+                        }
+                        Some(bhpc_mods::view::UiCmd::Copy(text)) => {
+                            *flags.clipboard.lock().unwrap_or_else(PoisonError::into_inner) = Some(text);
+                        }
+                        Some(cmd) => m.post(cmd),
+                        None => {}
                     }
                     if took && !passive {
                         m.serial.fetch_add(1, Ordering::SeqCst);

@@ -48,6 +48,10 @@ pub struct ModsOptions {
     pub join: Option<String>,
     /// Accept a join prompt without asking (tests).
     pub auto_accept: bool,
+    /// Run Java and Kotlin client mods (`--mods-jvm`; needs a build with the `jvm` feature). They are unsandboxed.
+    pub jvm: bool,
+    /// The JRE to use (`--mods-java-home`); `None` searches `JAVA_HOME` and the `PATH`.
+    pub java_home: Option<PathBuf>,
 }
 
 /// State shared with the window thread (drawing, input).
@@ -92,13 +96,17 @@ struct Held {
 }
 
 #[derive(Default)]
-struct Main {
+pub(crate) struct Main {
     flow: Option<JoinFlow>,
+    /// The local player's name (`BHNetClient localPlayerName`) once a session runs.
+    pub(crate) local: String,
+    /// The `World` that updates (the game's current one).
+    pub(crate) world: u32,
     conn: Option<Conn>,
     held: Option<Held>,
     /// Server mods accepted for the coming world.
     accepted: Option<Vec<Accepted>>,
-    host: Option<ClientHost>,
+    pub(crate) host: Option<ClientHost>,
     /// The running session belongs to the joined server (not single-player).
     host_online: bool,
     placed: Vec<session::Placed>,
@@ -110,16 +118,16 @@ struct Main {
 }
 
 thread_local! {
-    static MAIN: RefCell<Main> = RefCell::new(Main::default());
+    pub(crate) static MAIN: RefCell<Main> = RefCell::new(Main::default());
     /// Set while the glue itself calls a hooked method (the hook then passes the call through).
     static BYPASS: Cell<bool> = const { Cell::new(false) };
 }
 
-fn on_main() -> bool {
+pub(crate) fn on_main() -> bool {
     sched::ctx().tid == 0
 }
 
-fn bypassed() -> bool {
+pub(crate) fn bypassed() -> bool {
     BYPASS.with(Cell::get)
 }
 
@@ -128,6 +136,15 @@ fn bypass<T>(f: impl FnOnce() -> T) -> T {
     let r = f();
     BYPASS.with(|b| b.set(was));
     r
+}
+
+/// Runs `f` on the session's mod host, if one runs.
+pub(crate) fn with_host(f: impl FnOnce(&mut ClientHost)) {
+    MAIN.with(|m| {
+        if let Some(h) = m.borrow_mut().host.as_mut() {
+            f(h);
+        }
+    });
 }
 
 /// Guest Objective-C calls with cached selectors and classes.
@@ -197,6 +214,15 @@ impl Objc {
         with_bytes(c, bytes, |c, at| rt.send(c, cls, s, &[at, bytes.len() as u32]).map_or(0, |r| r.r0))
     }
 
+    /// `[obj sel]` with a 64-bit result.
+    pub(crate) fn send_wide(&self, c: &mut Cpu, obj: u32, sel: &str) -> u64 {
+        if obj == 0 {
+            return 0;
+        }
+        let s = self.sel(c, sel);
+        self.rt.send(c, obj, s, &[]).map_or(0, |r| r.as_u64())
+    }
+
     pub(crate) fn string(&self, c: &mut Cpu, s: u32) -> String {
         let p = self.send(c, s, "UTF8String", &[]);
         if p == 0 {
@@ -218,11 +244,11 @@ pub struct ModGlue {
     pub hooks: Arc<ObjcHooks>,
     pub rt: Runtime,
     pub shared: Arc<Shared>,
-    objc: Arc<Objc>,
+    pub(crate) objc: Arc<Objc>,
     opts: Arc<ModsOptions>,
 }
 
-fn log(msg: &str) {
+pub(crate) fn log(msg: &str) {
     eprintln!("[mods] {msg}");
 }
 
@@ -240,6 +266,7 @@ impl ModGlue {
             Some(iv) => crate::cosmetics::register(&g.hooks, g.objc.clone(), iv),
             None => log("cosmetics are off: the game does not export what they need"),
         }
+        crate::modevents::register(&g);
         g
     }
 
@@ -268,7 +295,8 @@ impl ModGlue {
         let (o, op, sh) = (self.objc.clone(), self.opts.clone(), self.shared.clone());
         self.hooks.hook(t("-[World update:accurateDT:pinchScale:dragInProgress:]"), None, move |inv| {
             if on_main() {
-                world_update(&o, &op, &sh, inv.cpu());
+                let world = inv.receiver();
+                world_update(&o, &op, &sh, world, inv.cpu());
             }
         });
         let sh = self.shared.clone();
@@ -325,7 +353,8 @@ impl ModGlue {
                 for cmd in &cmds {
                     match cmd {
                         UiCmd::Decide { accept, native_ok } => out.extend(f.decide(*accept, *native_ok, now)),
-                        UiCmd::Dismiss | UiCmd::Reload | UiCmd::Cancel => {}
+                        UiCmd::Toggle(i) => f.toggle(*i),
+                        UiCmd::Dismiss | UiCmd::Reload | UiCmd::Cancel | UiCmd::Copy(_) | UiCmd::Say(_) => {}
                     }
                 }
             }
@@ -353,7 +382,18 @@ impl ModGlue {
                     self.shared.view.lock().unwrap_or_else(PoisonError::into_inner).join = None;
                     self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-                UiCmd::Decide { .. } => {}
+                UiCmd::Decide { .. } | UiCmd::Copy(_) => {}
+                UiCmd::Say(line) => {
+                    let conn = MAIN.with(|m| m.borrow().conn);
+                    if let Some(conn) = conn {
+                        log(&format!("saying {line:?} in the chat"));
+                        let text = self.objc.new_string(c, line);
+                        // As the chat field does: our hook sees it, a mod's command runs and is not sent.
+                        self.objc.send(c, conn.client, "sendChatMessage:sendToClients:", &[text, 0]);
+                    }
+                }
+                // The switch already changed the flow; show it.
+                UiCmd::Toggle(_) => sync_join(&self.shared),
             }
         }
         run_actions(&self.objc, &self.opts, &self.shared, c, actions);
@@ -395,6 +435,15 @@ impl ModGlue {
     }
 }
 
+/// The runtimes this client offers in `HELLO`: `jvm` only when the owner turned it on in a build that has it.
+fn runtime_names(opts: &ModsOptions) -> Vec<String> {
+    let mut v = vec!["lua".to_string(), "wasm".to_string()];
+    if opts.jvm && bhpc_mods::host::JVM_BUILT {
+        v.push("jvm".to_string());
+    }
+    v
+}
+
 fn join_config(opts: &ModsOptions, address: String) -> JoinConfig {
     let dirs = ModsDirs::new(&opts.data_dir);
     let index = std::fs::read(dirs.index_cache()).ok().and_then(|b| bhpc_launcher::mods::index::parse_index(&b).ok());
@@ -402,7 +451,7 @@ fn join_config(opts: &ModsOptions, address: String) -> JoinConfig {
         loader: bhpc_mods::LOADER_VERSION.into(),
         platform: bhpc_mods::platform(),
         api: bhpc_mods::API_VERSION.into(),
-        runtimes: vec!["lua".into(), "wasm".into()],
+        runtimes: runtime_names(opts),
         dirs,
         index,
         block_native: opts.block_native,
@@ -563,8 +612,13 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
             }
         }
     }
-    // The prompt follows the flow.
-    let jv = MAIN.with(|m| m.borrow().flow.as_ref().and_then(JoinView::of));
+    sync_join(sh);
+}
+
+/// The prompt follows the flow.
+fn sync_join(sh: &Shared) {
+    let now = Instant::now();
+    let jv = MAIN.with(|m| m.borrow().flow.as_ref().and_then(|f| JoinView::of(f, now)));
     let mut v = sh.view.lock().unwrap_or_else(PoisonError::into_inner);
     if jv.is_some() || !matches!(v.join.as_ref().map(|j| &j.stage), Some(bhpc_mods::view::JoinStage::Rejected(..))) {
         v.join = jv;
@@ -573,8 +627,13 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
 }
 
 /// Starts the session's mods at the first update of a world, then fires `tick`.
-fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
-    MAIN.with(|m| m.borrow_mut().menu_since = None);
+fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, world: u32, c: &mut Cpu) {
+    crate::modevents::next_frame();
+    MAIN.with(|m| {
+        let mut m = m.borrow_mut();
+        m.menu_since = None;
+        m.world = world;
+    });
     // A world that updates while a join is being negotiated is the one being left (the menu's): no session for it.
     let (started, joining) = MAIN.with(|m| {
         let m = m.borrow();
@@ -600,7 +659,7 @@ fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
 fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     let (server, conn) = MAIN.with(|m| {
         let m = m.borrow();
-        let joined = m.flow.as_ref().is_some_and(|f| *f.stage() == Stage::Joined || *f.stage() == Stage::Vanilla);
+        let joined = m.flow.as_ref().is_some_and(|f| matches!(f.stage(), Stage::Joined | Stage::Vanilla));
         let server = if joined { m.flow.as_ref().map(|f| f.server_name().to_string()) } else { None };
         // Kept for a developer reload of the same session.
         let accepted = m.accepted.clone().unwrap_or_default();
@@ -631,10 +690,15 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
         let n = o.send(c, cn.client, "localPlayerName", &[]);
         o.string(c, n)
     });
+    let (runtimes, note) = bhpc_mods::host::session_runtimes(&dirs.cache, opts.jvm, opts.java_home.as_deref());
+    if let Some(note) = note {
+        log(&note);
+    }
+    MAIN.with(|m| m.borrow_mut().local = local.clone().unwrap_or_default());
     let mut host = ClientHost::load(HostSetup {
         mods_dir: &dir,
         storage_dir: &opts.data_dir.join("mods-data").join(&key),
-        runtimes: bhpc_mods::host::default_runtimes(&dirs.cache.join("wasm")),
+        runtimes,
         online: server.is_some(),
         local_player: local.unwrap_or_default(),
     });
@@ -701,7 +765,7 @@ fn log_line(l: &bhpc_mods::host::LogLine) {
 }
 
 /// Mods' chat lines and channel packets.
-fn apply_effects(o: &Objc, c: &mut Cpu) {
+pub(crate) fn apply_effects(o: &Objc, c: &mut Cpu) {
     let (effects, logs) = MAIN.with(|m| {
         let m = m.borrow();
         m.host.as_ref().map(|h| (h.take_effects(), h.take_new_logs())).unwrap_or_default()

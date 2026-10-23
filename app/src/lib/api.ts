@@ -52,6 +52,7 @@ export const api = {
   updateCheck: () => invoke<UpdateInfo | null>('update_check'),
   updateInstall: () => invoke<void>('update_install'),
   updateProgress: () => invoke<UpdateProgress>('update_progress'),
+  updateRestart: () => invoke<void>('update_restart'),
   openUrl: (url: string) => openUrl(url),
 
   /** Client mods (src-tauri/src/mods.rs). Failures reject with a `ModError` object. */

@@ -563,7 +563,7 @@ export class AppStore {
     return copyText(text);
   }
 
-  // ---- updates (UI only until a release feed exists) ---------------------------------------------------------
+  // ---- updates (a notice only: nothing downloads until the user clicks install) ------------------------------
 
   async checkUpdate(quiet = false) {
     this.update.stage = 'checking';

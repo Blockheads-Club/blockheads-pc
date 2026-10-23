@@ -80,6 +80,7 @@ export function makeApi(over: Record<string, unknown> = {}) {
     saveLog: vi.fn(async () => {}),
     updateCheck: vi.fn(async () => ({ version: '0.2.0', size_mb: 43, notes: ['one', 'two'] })),
     updateInstall: vi.fn(async () => {}),
+    updateRestart: vi.fn(async () => {}),
     updateProgress: vi.fn(async () => ({ stage: 'downloading', percent: 42, done_mb: 18, total_mb: 43, mb_per_s: 1.4, eta_s: 30 })),
     openUrl: vi.fn(async () => {}),
     ...makeModsApi(),

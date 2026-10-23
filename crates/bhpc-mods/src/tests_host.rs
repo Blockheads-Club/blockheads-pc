@@ -81,6 +81,7 @@ fn chat_commands_ticks_players_and_channels() {
         .any(|l| l.text == "enabled" && l.level == "warn" && l.mod_id.as_deref() == Some("echo")));
     assert!(h.take_new_logs().is_empty());
     h.set_local_player("ME");
+    assert!(!h.watching(), "the echo mod does not listen to the world");
     assert_eq!(h.chat_received("BOB", "hide"), None);
     assert_eq!(h.chat_received("BOB", "up"), Some("UP".into()));
     assert_eq!(h.chat_received("", "up"), Some("UP".into()));
@@ -382,4 +383,134 @@ fn timed_wrapper_forwards_and_counts() {
     add_for_tests(&timing, "m", Instant::now() + Duration::from_secs(2), Duration::from_millis(3));
     let u = usage_for_tests(&timing, "m");
     assert!(u.ms_last_second < 3.0 && u.peak_ms >= 3.0);
+}
+
+#[test]
+fn the_jvm_is_opt_in() {
+    let d = tempfile::tempdir().unwrap();
+    let (rts, note) = session_runtimes(d.path(), false, None);
+    assert_eq!((rts.len(), note), (2, None));
+    let (rts, note) = session_runtimes(d.path(), true, None);
+    let note = note.unwrap();
+    if JVM_BUILT {
+        // Built with the JVM and a JRE on this machine: a third runtime, and the SDK jar is written for its class path.
+        assert_eq!(rts.len(), 3, "{note}");
+        assert!(note.starts_with("JVM mods are on:"), "{note}");
+        assert!(std::fs::read_dir(d.path().join("jvm"))
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("bhmod-sdk-")));
+    } else {
+        assert_eq!(rts.len(), 2);
+        assert!(note.contains("no JVM support"), "{note}");
+    }
+}
+
+const WATCHER: &str = r#"
+local function at(p) return p.x .. "," .. p.y end
+local function who(p) return p and p:alias() or "-" end
+bh.events.on("world-save", function(ev) bh.log.info("save " .. ev.phase) end)
+bh.events.on("block-place", function(ev)
+    bh.log.info("place " .. who(ev.player) .. " " .. at(ev.pos) .. " " .. ev.item .. " " .. ev.data_a .. " " .. ev.data_b)
+    ev.cancelled = true
+end)
+bh.events.on("block-break", function(ev)
+    bh.log.info("break " .. who(ev.player) .. " " .. at(ev.pos) .. " " .. ev.layer .. " " .. ev.tile)
+end)
+bh.events.on("block-changed", function(ev) bh.log.info("changed " .. at(ev.pos) .. " " .. ev.tile .. " " .. who(ev.player)) end)
+bh.events.on("object-place", function(ev) bh.log.info("object " .. who(ev.player) .. " " .. ev.object .. " " .. ev.item) end)
+bh.events.on("damage", function(ev) bh.log.info("damage " .. who(ev.player) .. " " .. ev.blockhead .. " " .. ev.amount) end)
+bh.events.on("death", function(ev) bh.log.info("death " .. who(ev.player) .. " " .. ev.blockhead) end)
+bh.events.on("player-move", function(ev) bh.log.info("move " .. ev.player:alias() .. " " .. at(ev.from) .. " " .. at(ev.to)) end)
+bh.commands.register({ name = "where" }, function(sender)
+    local p = sender.player:pos()
+    return { handled = true, reply = p and at(p) or "nowhere" }
+end)
+return {}
+"#;
+
+#[test]
+fn world_events_positions_and_a_single_player() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("watch.bhmod");
+    std::fs::write(&p, pkg("watch", "1.0.0", WATCHER, "", 0)).unwrap();
+    let plan = Plan { own: None, dev: vec![], server: vec![Accepted { id: "watch".into(), path: p, grant: vec![] }] };
+    let (mut h, _, _) = setup(d.path(), false, plan);
+    // Nothing runs before the world is ready.
+    h.world_saved(true);
+    assert!(!h.watching());
+    h.enable("W", "w");
+    assert!(h.watching());
+    h.take_new_logs();
+    // (A slow call adds a budget warning of the host; only the mod's own lines count.)
+    let logs = |h: &ClientHost| {
+        h.take_new_logs()
+            .into_iter()
+            .filter(|l| l.mod_id.as_deref() == Some("watch") && !l.text.contains("budget"))
+            .map(|l| l.text)
+            .collect::<Vec<_>>()
+    };
+    h.world_saved(true);
+    h.world_saved(false);
+    assert_eq!(logs(&h), ["save pre", "save post"]);
+    // The player is in their own game even offline; others only once the server lists them.
+    h.players(vec!["BOB".into()]);
+    h.block_placed("ME", (3, 4), 11, (1, 2));
+    h.block_placed("GHOST", (5, 6), 12, (0, 0));
+    assert_eq!(logs(&h), ["place ME 3,4 11 1 2", "changed 3,4 11 ME", "changed 5,6 12 -"]);
+    h.block_broken("BOB", (3, 4), false);
+    h.block_broken("BOB", (3, 4), false);
+    h.block_broken("BOB", (3, 4), true);
+    h.block_broken("GHOST", (9, 9), false);
+    assert_eq!(
+        logs(&h),
+        [
+            "break BOB 3,4 block 11",
+            "changed 3,4 0 BOB",
+            "break BOB 3,4 block 0",
+            "changed 3,4 0 BOB",
+            "break BOB 3,4 back-wall 0",
+            "changed 9,9 0 -"
+        ]
+    );
+    h.object_placed("BOB", (1, 1), true, 7);
+    h.object_placed("ME", (2, 2), false, 40);
+    h.object_placed("GHOST", (2, 2), false, 40);
+    h.damaged(Some("BOB"), 77, 0.25);
+    h.damaged(Some("GHOST"), 78, 0.5);
+    h.damaged(None, 79, 1.0);
+    h.died(Some("ME"), 5);
+    h.died(None, 6);
+    assert_eq!(
+        logs(&h),
+        [
+            "object BOB workbench 7",
+            "object ME interaction-object 40",
+            "damage BOB 77 0.25",
+            "damage - 78 0.5",
+            "damage - 79 1",
+            "death ME 5",
+            "death - 6"
+        ]
+    );
+    // `player:pos()` follows what the game says; `player-move` only fires for a change.
+    assert!(h.typed("/where"));
+    assert_eq!(h.take_effects(), vec![Effect::Chat("nowhere".into())]);
+    h.moved("ME", (10, 20));
+    h.moved("ME", (10, 20));
+    h.moved("ME", (11, 20));
+    h.moved("GHOST", (0, 0));
+    h.moved("GHOST", (1, 0));
+    assert_eq!(logs(&h), ["move ME 10,20 11,20"]);
+    assert!(h.typed("/where"));
+    assert_eq!(h.take_effects(), vec![Effect::Chat("11,20".into())]);
+    // The tile table starts over when it is full.
+    for i in 0..66 {
+        h.block_placed("ME", (i, 0), 1, (0, 0));
+    }
+    h.take_new_logs();
+    h.block_broken("ME", (65, 0), false);
+    assert!(logs(&h)[0].ends_with("block 1"));
+    h.block_broken("ME", (0, 0), false);
+    assert!(logs(&h)[0].ends_with("block 0"));
 }

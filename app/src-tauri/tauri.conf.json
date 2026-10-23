@@ -75,5 +75,16 @@
       }
     }
   },
-  "mainBinaryName": "blockheads-pc"
+  "mainBinaryName": "blockheads-pc",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVEMDJGRUVCNjkwOTdCQ0UKUldUT2V3bHA2LzRDWGN4ZkJVNWJLZ0xYQXlJb2ZIdnB2bTQwb1dsZGlOODNLR1NhZkdXOVptM1QK",
+      "endpoints": [
+        "https://github.com/Blockheads-Club/blockheads-pc/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }
