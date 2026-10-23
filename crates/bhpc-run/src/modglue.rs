@@ -131,7 +131,7 @@ fn bypass<T>(f: impl FnOnce() -> T) -> T {
 }
 
 /// Guest Objective-C calls with cached selectors and classes.
-struct Objc {
+pub(crate) struct Objc {
     rt: Runtime,
     cache: Mutex<HashMap<String, u32>>,
 }
@@ -161,11 +161,11 @@ impl Objc {
         v
     }
 
-    fn sel(&self, c: &mut Cpu, name: &str) -> u32 {
+    pub(crate) fn sel(&self, c: &mut Cpu, name: &str) -> u32 {
         self.cached(format!("sel:{name}"), || self.rt.sel(c, name).unwrap_or(0))
     }
 
-    fn class(&self, c: &mut Cpu, name: &str) -> u32 {
+    pub(crate) fn class(&self, c: &mut Cpu, name: &str) -> u32 {
         let f = self.rt.get_class;
         self.cached(format!("cls:{name}"), || {
             with_bytes(c, name.as_bytes(), |c, s| c.call(f, &[s]).map_or(0, |r| r.r0))
@@ -173,7 +173,7 @@ impl Objc {
     }
 
     /// `[obj sel args...]` (word arguments and result).
-    fn send(&self, c: &mut Cpu, obj: u32, sel: &str, args: &[u32]) -> u32 {
+    pub(crate) fn send(&self, c: &mut Cpu, obj: u32, sel: &str, args: &[u32]) -> u32 {
         if obj == 0 {
             return 0;
         }
@@ -181,7 +181,7 @@ impl Objc {
         self.rt.send(c, obj, s, args).map_or(0, |r| r.r0)
     }
 
-    fn data_bytes(&self, c: &mut Cpu, data: u32) -> Vec<u8> {
+    pub(crate) fn data_bytes(&self, c: &mut Cpu, data: u32) -> Vec<u8> {
         let len = self.send(c, data, "length", &[]);
         let ptr = self.send(c, data, "bytes", &[]);
         if ptr == 0 {
@@ -190,14 +190,14 @@ impl Objc {
         c.mem().read_bytes(ptr, len.min(16 << 20)).unwrap_or_default()
     }
 
-    fn new_data(&self, c: &mut Cpu, bytes: &[u8]) -> u32 {
+    pub(crate) fn new_data(&self, c: &mut Cpu, bytes: &[u8]) -> u32 {
         let cls = self.class(c, "NSData");
         let s = self.sel(c, "dataWithBytes:length:");
         let rt = self.rt;
         with_bytes(c, bytes, |c, at| rt.send(c, cls, s, &[at, bytes.len() as u32]).map_or(0, |r| r.r0))
     }
 
-    fn string(&self, c: &mut Cpu, s: u32) -> String {
+    pub(crate) fn string(&self, c: &mut Cpu, s: u32) -> String {
         let p = self.send(c, s, "UTF8String", &[]);
         if p == 0 {
             return String::new();
@@ -205,7 +205,7 @@ impl Objc {
         c.mem().read_cstr(p).unwrap_or_default()
     }
 
-    fn new_string(&self, c: &mut Cpu, text: &str) -> u32 {
+    pub(crate) fn new_string(&self, c: &mut Cpu, text: &str) -> u32 {
         let cls = self.class(c, "NSString");
         let s = self.sel(c, "stringWithUTF8String:");
         let rt = self.rt;
@@ -228,7 +228,7 @@ fn log(msg: &str) {
 
 impl ModGlue {
     /// Registers the hooks (install them with [`ModGlue::install`]).
-    pub fn new(rt: Runtime, opts: ModsOptions) -> ModGlue {
+    pub fn new(rt: Runtime, opts: ModsOptions, ivars: Option<crate::cosmetics::Ivars>) -> ModGlue {
         let hooks = Arc::new(ObjcHooks::new());
         let objc = Arc::new(Objc { rt, cache: Mutex::new(HashMap::new()) });
         let shared = Arc::new(Shared::default());
@@ -236,6 +236,10 @@ impl ModGlue {
         let opts = Arc::new(opts);
         let g = ModGlue { hooks, rt, shared, objc, opts };
         g.register();
+        match ivars {
+            Some(iv) => crate::cosmetics::register(&g.hooks, g.objc.clone(), iv),
+            None => log("cosmetics are off: the game does not export what they need"),
+        }
         g
     }
 
@@ -549,6 +553,7 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
                 let mut v = sh.view.lock().unwrap_or_else(PoisonError::into_inner);
                 v.join = Some(JoinView::rejected(&server, &r.text, r.url.as_deref()));
             }
+            Action::Cosmetics(msg) => crate::cosmetics::apply(&msg),
             Action::ChannelIn(name, data) => {
                 MAIN.with(|m| {
                     if let Some(h) = m.borrow_mut().host.as_mut() {
@@ -601,6 +606,7 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
         let accepted = m.accepted.clone().unwrap_or_default();
         (server.map(|s| (s, accepted)), m.conn)
     });
+    let registry = MAIN.with(|m| m.borrow().flow.as_ref().map(|f| f.registry().clone()).unwrap_or_default());
     let dirs = ModsDirs::new(&opts.data_dir);
     let plan = Plan {
         own: Some(dirs.mods.clone()),
@@ -618,6 +624,8 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     for p in &problems {
         log(p);
     }
+    let wire = if server.is_some() { registry } else { Default::default() };
+    crate::cosmetics::load(&dir, &wire);
     let key = server.as_ref().map_or("local".to_string(), |(s, _)| bhpc_launcher::mods::cache::server_key(s));
     let local = conn.map(|cn| {
         let n = o.send(c, cn.client, "localPlayerName", &[]);
@@ -647,6 +655,7 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
 }
 
 fn stop_session(sh: &Shared, why: &str, keep_join: bool) {
+    crate::cosmetics::clear();
     let stopped = MAIN.with(|m| {
         let mut m = m.borrow_mut();
         m.placed.clear();

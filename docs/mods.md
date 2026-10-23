@@ -12,6 +12,7 @@ The PC client runs Luau and WASM client mods (mod-sdk `bhmod-core` + `bhmod-wasm
 | `crates/bhpc-mods/src/host.rs` | `ClientHost`: `ModHost` with the PC `GameBridge`, effects (chat lines, channel packets) carried out by the glue, a 500-line log, per-mod time (`ms` per second, longest call). |
 | `crates/bhpc-mods/src/ui.rs`, `view.rs` | The in-game UI in the IG pixel kit (IG-Spec/IG-Kit/IG-Join/IG-Mods/IG-HUD; font Tiny5, OFL, `crates/bhpc-mods/fonts`): join prompt (permissions, "Not reviewed", red native zone with a checkbox), downloading, download/file-check failure, the server's rejection text, the F9 panel (state, origin, time, log), toasts ("… was turned off. It slowed the game."). Drawn into a premultiplied RGBA picture. |
 | `crates/bhpc-run/src/modglue.rs` (play build) | ObjC hooks (`objchook`) and the main-thread state. |
+| `crates/bhpc-run/src/cosmetics.rs` (play build) | M8: the cosmetics hooks on `Blockhead` (see below). What a blockhead shows is decided by mod-sdk's `bhmod-content`, shared with the Android loader. |
 | `crates/bhpc-run/src/overlay.rs` `Composer` | Blends the mod UI over the Java views' overlay: one path for the launcher's embedded view and the SDL window; screenshots include it. |
 | `crates/bhpc-launcher/src/mods/live.rs` | `@mods` report parsing, live status on the Mods screens, runner flags from the settings. |
 
@@ -31,6 +32,22 @@ The PC client runs Luau and WASM client mods (mod-sdk `bhmod-core` + `bhmod-wasm
 - `-[MainMenuUI render:projectionMatrix:]` (explicit signature: the matrix is a union): `--join HOST:PORT` waits
   until the menu has shown for 3 s, then `selectJoinOption`, `gameLaunchedWithUrlToJoinHost:port:`,
   `joinOnlineWorldButtonTapped`.
+
+## Cosmetics (M8)
+
+A server mod that declares `[content] cosmetics` (mod-sdk `docs/content.md`) re-skins what a player wears (the hair always; clothing only while the vanilla item is worn). The join
+flow keeps `MOD_LIST.registry` and hands `COSMETICS` (0xBC op 0x12, after the join) to
+`bhpc-run/src/cosmetics.rs`; the session start reads the cosmetics of the session's packages
+(`bhmod_content::Content`). Hooks (main thread, inactive while no cosmetic is declared):
+
+- `-[Blockhead updateClothingCubes]` (this client's own blockheads): original, then the texture ivars
+  (`hatTexture`, `shirtBodyTexture`, `shirtArmTexture`, `pantsTexture`, `shoesTexture`) are replaced with
+  `CPTexture2D`s made from the mod's PNG (`initWithData:pixelFormat:1:pixelsWide:pixelsHigh:contentSize:mipmap:`,
+  the game's own loader path; PNGs are padded to powers of two and converted to premultiplied RGBA4444 by `bhmod-content`).
+- `-[Blockhead updateSkin]` (hair texture `headHairTexture`), `-[Blockhead setupFromNetCreationData:]` (other
+  players' blockheads: clothing and hair), `-[Blockhead update:accurateDT:isSimulation:]` (refresh when the cosmetics changed).
+- Dev aids: `BHPC_DEV_COSMETICS=hat=<key>,hair=<key>` puts cosmetics of a `--mods-dev` folder on every blockhead in a
+  single-player world (ids from an in-memory registry); `BHPC_COSMETICS_TRACE=1` logs what the hooks do.
 
 Client API events now: `chat`, `command` + mod commands, `tick`, `player-join`, `player-quit`, `world-loaded`,
 channels to and from the server, `player.send-chat` / `players.broadcast` (shown locally). Deferred (no client hook

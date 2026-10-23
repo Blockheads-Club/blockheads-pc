@@ -11,6 +11,7 @@ bhpc-launcher = { path = "../bhpc-launcher" }
 bhmod-core.workspace = true
 bhmod-wasm.workspace = true
 bhmod-proto.workspace = true
+bhmod-content.workspace = true
 bhmod-manifest.workspace = true
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }

@@ -1054,7 +1054,10 @@ fn boot(
         let rt = crate::objchook::Runtime::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
             .inspect_err(|e| eprintln!("[mods] no ObjC runtime, mods are off: {e}"))
             .ok()?;
-        let g = Arc::new(crate::modglue::ModGlue::new(rt, opts));
+        let ivars = crate::cosmetics::Ivars::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
+            .inspect_err(|e| eprintln!("[cosmetics] off: {e}"))
+            .ok();
+        let g = Arc::new(crate::modglue::ModGlue::new(rt, opts, ivars));
         g.install(&mut sess.cpu);
         Some(g)
     });

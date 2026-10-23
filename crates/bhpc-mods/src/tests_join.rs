@@ -82,7 +82,7 @@ fn list(mods: Vec<ModInfo>) -> Vec<u8> {
     Message::ModList(ModList {
         mods,
         channels: vec![ChannelInfo { name: "echo:ping".into(), id: 3 }],
-        registry: Default::default(),
+        registry: [("cosmetics".to_string(), [("echo:crown".to_string(), 1u64)].into())].into(),
     })
     .encode()
 }
@@ -234,6 +234,11 @@ fn full_download_with_acks_resume_and_cache() {
     let ch = |id| Message::Channel(bhmod_proto::Channel { channel_id: id, payload: b"yo".to_vec() }).encode();
     assert_eq!(g.packet(&ch(3), t), vec![Action::ChannelIn("echo:ping".into(), b"yo".to_vec())]);
     assert!(g.packet(&ch(4), t).is_empty());
+    // The registry of MOD_LIST is kept; COSMETICS is handed to the glue after the join.
+    assert_eq!(g.registry()["cosmetics"]["echo:crown"], 1);
+    let wear =
+        bhmod_proto::Cosmetics { full: true, players: [("p".to_string(), [("hat".to_string(), 1u64)].into())].into() };
+    assert_eq!(g.packet(&Message::Cosmetics(wear.clone()).encode(), t), vec![Action::Cosmetics(wear)]);
 }
 
 #[test]

@@ -14,9 +14,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use bhmod_content::registry::Wire;
 use bhmod_proto::{
-    hex, Channel, FileRequest, Hash, Hello, Message, ModInfo, ModList, Ready, RejectText, ServerHello, CHUNK_SIZE,
-    HELLO_TIMEOUT_MS, PROTO,
+    hex, Channel, Cosmetics, FileRequest, Hash, Hello, Message, ModInfo, ModList, Ready, RejectText, ServerHello,
+    CHUNK_SIZE, HELLO_TIMEOUT_MS, PROTO,
 };
 use bhpc_launcher::mods::cache::{self, CachedMod};
 use bhpc_launcher::mods::index::IndexFile;
@@ -159,6 +160,8 @@ pub enum Action {
     Rejected(RejectText),
     /// A mod channel message from the server: `(channel name, payload)`.
     ChannelIn(String, Vec<u8>),
+    /// Which cosmetics players wear (`COSMETICS`, after the join).
+    Cosmetics(Cosmetics),
 }
 
 /// A server mod the player accepted, downloaded and checked.
@@ -195,6 +198,7 @@ pub struct JoinFlow {
     held: bool,
     hash: Option<String>,
     channels: BTreeMap<String, u16>,
+    registry: Wire,
     reject: Option<RejectText>,
     server_name: String,
 }
@@ -218,6 +222,7 @@ impl JoinFlow {
             held: false,
             hash: None,
             channels: BTreeMap::new(),
+            registry: Wire::new(),
             reject: None,
             server_name,
         }
@@ -255,6 +260,11 @@ impl JoinFlow {
     /// True while the server speaks 0xBC on this connection.
     pub fn modded(&self) -> bool {
         self.server.is_some()
+    }
+
+    /// The content id map of the server's `MOD_LIST` (empty before it or without content).
+    pub fn registry(&self) -> &Wire {
+        &self.registry
     }
 
     /// Wire id of a channel name (`MOD_LIST.channels`, `CHANNEL_REGISTER`).
@@ -396,6 +406,7 @@ impl JoinFlow {
                 self.channels.insert(c.name, c.id);
                 Vec::new()
             }
+            (Message::Cosmetics(c), Stage::Joined) => vec![Action::Cosmetics(c)],
             (Message::Channel(Channel { channel_id, payload }), Stage::Joined) => {
                 match self.channels.iter().find(|(_, id)| **id == channel_id) {
                     Some((name, _)) => vec![Action::ChannelIn(name.clone(), payload)],
@@ -418,6 +429,7 @@ impl JoinFlow {
     }
 
     fn mod_list(&mut self, l: ModList) -> Vec<Action> {
+        self.registry = l.registry;
         for c in &l.channels {
             self.channels.insert(c.name.clone(), c.id);
         }
