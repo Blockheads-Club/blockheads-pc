@@ -1089,6 +1089,10 @@ fn boot(
             .ok();
         let g = Arc::new(crate::modglue::ModGlue::new(rt, opts, ivars));
         g.install(&mut sess.cpu);
+        // Native mods: the libbhmod functions as thunks, the game's modules as the hooks' view of the guest.
+        let natives = crate::native::Natives::new(rt, sess.st.clone(), sess.linker.modules());
+        natives.register(&sess.cpu);
+        crate::native::set(natives);
         Some(g)
     });
     if let Some(g) = &mod_glue {

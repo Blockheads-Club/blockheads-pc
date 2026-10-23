@@ -35,6 +35,7 @@ fn minimal_image_without_dynamic_section() {
     assert_eq!(m.name, "t.so");
     assert!(m.exports.is_empty() && m.needed.is_empty() && m.soname.is_none());
     assert_eq!(m.relocs_applied, 0);
+    assert_eq!(m.dynamic, 0, "no PT_DYNAMIC");
     assert_eq!(l.modules().len(), 1);
     assert_eq!(l.mem.read_u32(scratch).unwrap(), 0xdead_beef);
 }
@@ -168,6 +169,7 @@ fn needed_soname_and_lookup_by_either_name() {
     let m = &l.modules()[0];
     assert_eq!(m.needed, vec!["libc.so", "libm.so"]);
     assert_eq!(m.soname.as_deref(), Some("libfoo.so"));
+    assert!(m.dynamic > m.start && m.dynamic < m.start + m.size, "PT_DYNAMIC lies inside the image");
     assert!(l.module("t.so").is_some());
     assert!(l.module("libfoo.so").is_some());
     assert!(l.module("other").is_none());

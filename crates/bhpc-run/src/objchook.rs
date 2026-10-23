@@ -449,7 +449,7 @@ impl Runtime {
     }
 
     /// The class (or metaclass) named `name`, 0 if the runtime does not know it.
-    fn class(&self, c: &mut Cpu, name: &str, meta: bool) -> Result<u32, Stop> {
+    pub(crate) fn class(&self, c: &mut Cpu, name: &str, meta: bool) -> Result<u32, Stop> {
         let f = if meta { self.get_meta_class } else { self.get_class };
         with_cstr(c, name, |c, s| c.call(f, &[s])).map(|r| r.r0)
     }

@@ -32,6 +32,8 @@ mod tests_host;
 mod tests_join;
 #[cfg(all(test, feature = "jvm"))]
 mod tests_jvm;
+#[cfg(test)]
+mod tests_session;
 
 /// The `blockheads:api` version the client host implements.
 pub const API_VERSION: &str = bhmod_core::API_VERSION;

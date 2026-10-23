@@ -100,3 +100,62 @@ pub fn build(dir: &Path, plan: &Plan) -> io::Result<(Vec<Placed>, Vec<String>)> 
     std::fs::write(dir.join(mods::CONFIG_FILE), body)?;
     Ok((placed, problems))
 }
+
+/// A native mod of a session and the libraries to load into the guest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeMod {
+    pub id: String,
+    /// `client/native/armeabi-v7a/*.so`, extracted for packages (below the folder given to [`native_libs`]).
+    pub libs: Vec<PathBuf>,
+}
+
+/// The id a session entry (`m-<id>.bhmod`, `s00-<id>.bhmod`, `d00-<id>/`) stands for.
+fn entry_id(name: &str) -> Option<&str> {
+    let stem = name.strip_suffix(".bhmod").unwrap_or(name);
+    if let Some(id) = stem.strip_prefix("m-") {
+        return Some(id);
+    }
+    let b = stem.as_bytes();
+    (b.len() > 4 && matches!(b[0], b's' | b'd') && b[1].is_ascii_digit() && b[2].is_ascii_digit() && b[3] == b'-')
+        .then(|| &stem[4..])
+}
+
+/// The native libraries of the mods placed in `dir` by [`build`] that were granted `native` (the player's
+/// confirmation, the index listing and "never allow native" were settled when the grant was made). Packages are
+/// unpacked below `extract_root`. Returns the mods and problems (a granted mod without a library for this ABI).
+pub fn native_libs(dir: &Path, extract_root: &Path) -> (Vec<NativeMod>, Vec<String>) {
+    let config = mods::read_config(dir).unwrap_or_default();
+    let mut found = Vec::new();
+    let mut problems = Vec::new();
+    let mut entries: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(id) = entry_id(&name) else { continue };
+        if !config.get(id).is_some_and(|c| c.enabled && c.grant.iter().any(|g| g == "native")) {
+            continue;
+        }
+        let path = e.path();
+        let libs = if path.is_dir() {
+            let lib_dir = path.join("client/native").join(bhmod_client::native::ABI);
+            let mut v: Vec<PathBuf> = std::fs::read_dir(lib_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|f| f.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "so"))
+                .collect();
+            v.sort();
+            Ok(v)
+        } else {
+            let sha = std::fs::read(&path).map(|b| bhmod_proto::hex(&bhmod_client::cache::sha256(&b)));
+            sha.and_then(|sha| bhmod_client::native::extract(&path, &sha, bhmod_client::native::ABI, extract_root))
+        };
+        match libs {
+            Ok(l) if !l.is_empty() => found.push(NativeMod { id: id.to_string(), libs: l }),
+            Ok(_) => problems.push(format!("{id}: no {} library for native code", bhmod_client::native::ABI)),
+            Err(e) => problems.push(format!("{id}: cannot unpack the native library: {e}")),
+        }
+    }
+    (found, problems)
+}

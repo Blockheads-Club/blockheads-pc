@@ -22,6 +22,7 @@ pub mod modevents;
 #[cfg(feature = "play")]
 pub mod modglue;
 pub mod music;
+pub mod native;
 pub mod objchook;
 pub mod overlay;
 pub mod pace;
@@ -251,6 +252,8 @@ mod tests_mktimer;
 mod tests_mmapio;
 #[cfg(test)]
 mod tests_music;
+#[cfg(test)]
+mod tests_native;
 #[cfg(all(test, target_os = "linux"))]
 mod tests_net;
 #[cfg(test)]

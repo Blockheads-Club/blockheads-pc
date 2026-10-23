@@ -110,6 +110,8 @@ pub(crate) struct Main {
     /// The running session belongs to the joined server (not single-player).
     host_online: bool,
     placed: Vec<session::Placed>,
+    /// Mods whose native library is loaded.
+    natives: Vec<String>,
     menu: u32,
     /// Since when the main menu renders without a world in between.
     menu_since: Option<Instant>,
@@ -300,9 +302,9 @@ impl ModGlue {
             }
         });
         let sh = self.shared.clone();
-        self.hooks.hook(t("-[World dealloc]"), None, move |_inv| {
+        self.hooks.hook(t("-[World dealloc]"), None, move |inv| {
             if on_main() {
-                stop_session(&sh, "left the world", false);
+                stop_session(&sh, "left the world", false, inv.cpu());
             }
         });
         let o = self.objc.clone();
@@ -344,6 +346,11 @@ impl ModGlue {
             return;
         }
         let now = Instant::now();
+        if let Some(n) = crate::native::get() {
+            for l in n.take_logs() {
+                log_native(&l);
+            }
+        }
         let cmds = self.shared.take();
         let actions = MAIN.with(|m| {
             let mut m = m.borrow_mut();
@@ -367,7 +374,7 @@ impl ModGlue {
                     v.join = None;
                     self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-                UiCmd::Reload => reload(&self.opts, &self.shared),
+                UiCmd::Reload => reload(&self.opts, &self.shared, c),
                 UiCmd::Cancel => {
                     log("download cancelled by the player");
                     let conn = MAIN.with(|m| {
@@ -703,6 +710,7 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
         local_player: local.unwrap_or_default(),
     });
     let world = server.as_ref().map_or("single-player".to_string(), |(s, _)| s.clone());
+    start_natives(opts, &dir, c);
     host.enable(&world, &key);
     log(&format!("session started ({world}): {} mod(s)", placed.len()));
     MAIN.with(|m| {
@@ -718,8 +726,61 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     publish(sh, true);
 }
 
-fn stop_session(sh: &Shared, why: &str, keep_join: bool) {
+/// Loads the native libraries of the session's mods that were granted `native` into the guest (unless "never allow
+/// native mods" is on).
+fn start_natives(opts: &ModsOptions, dir: &std::path::Path, c: &mut Cpu) {
+    let Some(n) = crate::native::get() else { return };
+    if opts.block_native {
+        return;
+    }
+    let dirs = ModsDirs::new(&opts.data_dir);
+    let (mods, problems) = session::native_libs(dir, &dirs.cache.join("native"));
+    for p in problems {
+        log(&p);
+    }
+    for m in mods {
+        let data = opts.data_dir.join("mods-data").join("native").join(&m.id);
+        let _ = std::fs::create_dir_all(&data);
+        let mut ok = true;
+        for lib in &m.libs {
+            match n.load(c, &m.id, lib, &data) {
+                Ok(()) => log(&format!("native code of {} loaded ({})", m.id, lib.display())),
+                Err(e) => {
+                    log(&format!("native code of {} failed: {e}", m.id));
+                    ok = false;
+                }
+            }
+        }
+        if ok {
+            MAIN.with(|m2| m2.borrow_mut().natives.push(m.id.clone()));
+        } else {
+            n.unload(c, &m.id);
+        }
+    }
+    for l in n.take_logs() {
+        log_native(&l);
+    }
+}
+
+fn log_native((level, text): &(i32, String)) {
+    eprintln!("[native] {}{text}", if *level >= 3 { "warning: " } else { "" });
+}
+
+/// Runs the shutdown functions of the loaded native mods and undoes their hooks.
+fn stop_natives(c: &mut Cpu) {
+    let Some(n) = crate::native::get() else { return };
+    let ids: Vec<String> = MAIN.with(|m| std::mem::take(&mut m.borrow_mut().natives));
+    for id in ids {
+        n.unload(c, &id);
+    }
+    for l in n.take_logs() {
+        log_native(&l);
+    }
+}
+
+fn stop_session(sh: &Shared, why: &str, keep_join: bool, c: &mut Cpu) {
     crate::cosmetics::clear();
+    stop_natives(c);
     let stopped = MAIN.with(|m| {
         let mut m = m.borrow_mut();
         m.placed.clear();
@@ -747,9 +808,9 @@ fn stop_session(sh: &Shared, why: &str, keep_join: bool) {
 }
 
 /// Developer reload: the session's mods are stopped and loaded again from their folders.
-fn reload(opts: &ModsOptions, sh: &Shared) {
+fn reload(opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     let _ = opts;
-    stop_session(sh, "reload", true);
+    stop_session(sh, "reload", true, c);
     // The next world update starts it again (with the same server mods).
     log("reloading mods at the next world update");
 }

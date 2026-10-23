@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 const CODE: u32 = 0x2000_0000;
 const DATA: u32 = 0x2000_8000;
-const BX_LR: u32 = 0xE12F_FF1E;
+pub(crate) const BX_LR: u32 = 0xE12F_FF1E;
 const UDF: u32 = 0xE7F0_00F0;
 
 #[derive(Default)]
@@ -21,17 +21,17 @@ struct Model {
     methods: HashMap<(u32, u32), u32>,
 }
 
-struct Fake {
-    cpu: Box<Cpu>,
-    _st: bhpc_bionic::Shared,
-    rt: Runtime,
+pub(crate) struct Fake {
+    pub(crate) cpu: Box<Cpu>,
+    pub(crate) st: bhpc_bionic::Shared,
+    pub(crate) rt: Runtime,
     model: Arc<Mutex<Model>>,
     code: u32,
     data: u32,
 }
 
 impl Fake {
-    fn new() -> Fake {
+    pub(crate) fn new() -> Fake {
         let (cpu, st) = new_env(Box::new(std::io::sink()), None).unwrap();
         cpu.mem().map(CODE, 0x10000).unwrap();
         let model = Arc::new(Mutex::new(Model::default()));
@@ -93,10 +93,10 @@ impl Fake {
             set_imp: reg("fake:method_setImplementation", set_imp),
             msg_send: reg("fake:objc_msgSend", msg_send),
         };
-        Fake { cpu, _st: st, rt, model, code: CODE, data: DATA }
+        Fake { cpu, st, rt, model, code: CODE, data: DATA }
     }
 
-    fn code(&mut self, words: &[u32]) -> u32 {
+    pub(crate) fn code(&mut self, words: &[u32]) -> u32 {
         let at = self.code;
         for (i, w) in words.iter().enumerate() {
             self.cpu.mem().write_u32(at + 4 * i as u32, *w).unwrap();
@@ -105,36 +105,36 @@ impl Fake {
         at
     }
 
-    fn alloc(&mut self, bytes: &[u8]) -> u32 {
+    pub(crate) fn alloc(&mut self, bytes: &[u8]) -> u32 {
         let at = self.data;
         self.cpu.mem().write_bytes(at, bytes).unwrap();
         self.data += (bytes.len() as u32 + 7) & !7;
         at
     }
 
-    fn cstr(&mut self, s: &str) -> u32 {
+    pub(crate) fn cstr(&mut self, s: &str) -> u32 {
         let mut b = s.as_bytes().to_vec();
         b.push(0);
         self.alloc(&b)
     }
 
     /// A class object (whose isa is its metaclass) and its metaclass.
-    fn class(&mut self, name: &str) -> u32 {
+    pub(crate) fn class(&mut self, name: &str) -> u32 {
         let meta = self.alloc(&[0; 8]);
         let class = self.alloc(&meta.to_le_bytes());
         self.model.lock().unwrap().classes.insert(name.into(), (class, meta));
         class
     }
 
-    fn meta(&self, class: u32) -> u32 {
+    pub(crate) fn meta(&self, class: u32) -> u32 {
         self.cpu.mem().read_u32(class).unwrap()
     }
 
-    fn sel(&mut self, name: &str) -> u32 {
+    pub(crate) fn sel(&mut self, name: &str) -> u32 {
         self.rt.sel(&mut self.cpu, name).unwrap()
     }
 
-    fn method(&mut self, class: u32, sel: &str, types: &str, imp: u32) -> u32 {
+    pub(crate) fn method(&mut self, class: u32, sel: &str, types: &str, imp: u32) -> u32 {
         let s = self.sel(sel);
         let t = self.cstr(types);
         let mut b = s.to_le_bytes().to_vec();
@@ -145,23 +145,23 @@ impl Fake {
         m
     }
 
-    fn object(&mut self, class: u32) -> u32 {
+    pub(crate) fn object(&mut self, class: u32) -> u32 {
         self.alloc(&class.to_le_bytes())
     }
 
-    fn send(&mut self, obj: u32, sel: &str, args: &[u32]) -> Result<CallResult, Stop> {
+    pub(crate) fn send(&mut self, obj: u32, sel: &str, args: &[u32]) -> Result<CallResult, Stop> {
         let s = self.sel(sel);
         let rt = self.rt;
         rt.send(&mut self.cpu, obj, s, args)
     }
 
-    fn imp(&self, method: u32) -> u32 {
+    pub(crate) fn imp(&self, method: u32) -> u32 {
         self.cpu.mem().read_u32(method + 8).unwrap()
     }
 }
 
 /// `add r0, r2, r3; bx lr`: `-[Calc add:to:]`.
-const ADD: [u32; 2] = [0xE082_0003, BX_LR];
+pub(crate) const ADD: [u32; 2] = [0xE082_0003, BX_LR];
 /// r2 + r3 + [sp] + [sp, #4]: `-[Calc sum:b:c:d:]`.
 const SUM4: [u32; 6] = [0xE59D_C000, 0xE082_000C, 0xE59D_C004, 0xE080_000C, 0xE080_0003, BX_LR];
 /// The double in r2:r3 back in r0:r1: `-[Calc same:]`.

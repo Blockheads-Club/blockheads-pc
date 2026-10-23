@@ -171,6 +171,9 @@ pub struct Module {
     pub symbolic: bool,
     /// `PT_LOAD` segments with their protections.
     pub segments: Vec<Segment>,
+    /// Guest address of the `PT_DYNAMIC` segment (0 for a module without one): the hook engine reads the module's
+    /// relocations from it.
+    pub dynamic: u32,
     /// Defined symbols sorted by address.
     pub symbols: Vec<SymInfo>,
 }
@@ -443,6 +446,7 @@ impl Linker {
             relocs_applied: 0,
             symbolic: dynamic.symbolic,
             segments: elf.loads().map(|p| segment(bias, p)).collect(),
+            dynamic: elf.dynamic_vaddr().map_or(0, |v| bias.wrapping_add(v)),
             symbols: Vec::new(),
         };
         for s in syms.iter().filter(|s| s.is_defined()) {
