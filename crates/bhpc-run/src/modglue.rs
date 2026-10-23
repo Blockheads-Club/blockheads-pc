@@ -322,7 +322,7 @@ impl ModGlue {
                     match cmd {
                         UiCmd::Decide { accept, native_ok } => out.extend(f.decide(*accept, *native_ok, now)),
                         UiCmd::Toggle(i) => f.toggle(*i),
-                        UiCmd::Dismiss | UiCmd::Reload | UiCmd::Cancel => {}
+                        UiCmd::Dismiss | UiCmd::Reload | UiCmd::Cancel | UiCmd::Copy(_) => {}
                     }
                 }
             }
@@ -350,7 +350,9 @@ impl ModGlue {
                     self.shared.view.lock().unwrap_or_else(PoisonError::into_inner).join = None;
                     self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-                UiCmd::Decide { .. } | UiCmd::Toggle(_) => {}
+                UiCmd::Decide { .. } | UiCmd::Copy(_) => {}
+                // The switch already changed the flow; show it.
+                UiCmd::Toggle(_) => sync_join(&self.shared),
             }
         }
         run_actions(&self.objc, &self.opts, &self.shared, c, actions);
@@ -559,8 +561,13 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
             }
         }
     }
-    // The prompt follows the flow.
-    let jv = MAIN.with(|m| m.borrow().flow.as_ref().and_then(JoinView::of));
+    sync_join(sh);
+}
+
+/// The prompt follows the flow.
+fn sync_join(sh: &Shared) {
+    let now = Instant::now();
+    let jv = MAIN.with(|m| m.borrow().flow.as_ref().and_then(|f| JoinView::of(f, now)));
     let mut v = sh.view.lock().unwrap_or_else(PoisonError::into_inner);
     if jv.is_some() || !matches!(v.join.as_ref().map(|j| &j.stage), Some(bhpc_mods::view::JoinStage::Rejected(..))) {
         v.join = jv;

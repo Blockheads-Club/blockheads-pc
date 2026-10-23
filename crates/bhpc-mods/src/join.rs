@@ -176,6 +176,8 @@ pub struct JoinFlow {
     joined: Option<Option<Hash>>,
     reject: Option<RejectText>,
     server_name: String,
+    /// When the download began and what was there then (for the time left).
+    started: Option<(Instant, u64)>,
 }
 
 impl JoinFlow {
@@ -211,6 +213,7 @@ impl JoinFlow {
             joined: None,
             reject: None,
             server_name,
+            started: None,
         }
     }
 
@@ -239,6 +242,20 @@ impl JoinFlow {
     /// The server's `SERVER_HELLO.clientRequired`.
     pub fn required(&self) -> bool {
         self.required
+    }
+
+    /// The server as the player knows it (`host:port`).
+    pub fn address(&self) -> &str {
+        &self.cfg.address
+    }
+
+    /// Seconds left of the download at the pace since it began (`None` before there is a pace to go by).
+    pub fn eta_secs(&self, now: Instant) -> Option<u64> {
+        let (at, have0) = self.started?;
+        let (have, total) = self.progress();
+        let secs = now.saturating_duration_since(at).as_secs_f64();
+        let rate = have.saturating_sub(have0) as f64 / secs;
+        (secs >= 1.0 && rate > 0.0).then(|| (total.saturating_sub(have) as f64 / rate).ceil() as u64)
     }
 
     /// The server's display name (the address until the game tells a name).
@@ -338,6 +355,7 @@ impl JoinFlow {
         let optional: Vec<String> =
             self.entries.iter().filter(|e| e.enabled && !e.required()).map(|e| e.info.id.clone()).collect();
         let out = self.session.decide_subset(go, &optional, ms);
+        self.started = Some((now, self.progress().0));
         self.handle(out)
     }
 

@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::host::{LogLine, ModStatus, Usage};
 use crate::ui::*;
-use crate::view::{JoinMod, JoinStage, JoinView, UiCmd, View};
+use crate::view::{Fail, FailKind, JoinMod, JoinStage, JoinView, UiCmd, View};
 
 fn jm(name: &str, native: bool, perms: &[&str]) -> JoinMod {
     JoinMod {
@@ -18,6 +18,7 @@ fn jm(name: &str, native: bool, perms: &[&str]) -> JoinMod {
         enabled: true,
         permissions: perms.iter().map(|s| s.to_string()).collect(),
         listed: !native,
+        with_server: true,
     }
 }
 
@@ -25,10 +26,12 @@ fn prompt(mods: Vec<JoinMod>) -> View {
     View {
         join: Some(JoinView {
             server: "Sunny Isle".into(),
+            address: "mira.example.net:15151".into(),
             stage: JoinStage::Prompt,
             mods,
             required: true,
             progress: (0, 778_240),
+            eta: None,
         }),
         ..View::default()
     }
@@ -51,6 +54,17 @@ fn render(ui: &mut ModUi, v: &View, serial: u64, name: &str) -> std::sync::Arc<V
     px
 }
 
+/// Clicks the centre of the first hit area of `hit` (the picture must have been rendered).
+fn click(ui: &mut ModUi, v: &View, hit: Hit) -> (bool, Option<UiCmd>) {
+    let r = ui.hits_for_tests().into_iter().find(|(_, h)| *h == hit).unwrap_or_else(|| panic!("no {hit:?}")).0;
+    ui.input(UiInput::Click((r.x + r.w / 2) as f32, (r.y + r.h / 2) as f32), v)
+}
+
+fn optional(mut m: JoinMod) -> JoinMod {
+    m.required = false;
+    m
+}
+
 #[test]
 fn join_prompt_keys_and_clicks() {
     let mut ui = ModUi::new();
@@ -63,23 +77,65 @@ fn join_prompt_keys_and_clicks() {
     assert_eq!(ui.input(UiInput::Key(HID_ESCAPE), &v), (true, Some(UiCmd::Decide { accept: false, native_ok: false })));
     assert_eq!(ui.input(UiInput::Key(99), &v), (true, None));
     assert_eq!(ui.input(UiInput::Other, &v), (true, None));
+    // Nothing to step through when every mod is required.
+    assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, None));
+    assert_eq!(ui.input(UiInput::Key(HID_DOWN), &v), (true, None));
     // F9 does nothing while the prompt shows; clicks outside buttons are taken.
     assert_eq!(ui.input(UiInput::Key(HID_F9), &v), (true, None));
     assert_eq!(ui.input(UiInput::Click(1.0, 1.0), &v), (true, None));
-    // Click the primary button: it is the right-most hit area at the bottom of the dialog.
-    let mut found = None;
-    for y in (300..720).step_by(4) {
-        for x in (640..1280).rev().step_by(8) {
-            if let (true, Some(cmd)) = ui.input(UiInput::Click(x as f32, y as f32), &v) {
-                found = Some(cmd);
-                break;
-            }
-        }
-        if found.is_some() {
-            break;
-        }
+    assert_eq!(click(&mut ui, &v, Hit::Accept), (true, Some(UiCmd::Decide { accept: true, native_ok: false })));
+    assert_eq!(click(&mut ui, &v, Hit::Decline), (true, Some(UiCmd::Decide { accept: false, native_ok: false })));
+}
+
+#[test]
+fn optional_mods_have_switches_and_focus() {
+    let mut ui = ModUi::new();
+    let mut off = optional(jm("Shop Signs", false, &["net-http"]));
+    off.enabled = false;
+    let mut cached = optional(jm("Coin Bank", false, &["world:write", "players:chat", "other"]));
+    cached.cached = true;
+    cached.with_server = false;
+    let mut unreviewed = optional(jm("Unreviewed", false, &[]));
+    unreviewed.listed = false;
+    let v = prompt(vec![
+        jm("Land Claims", false, &["world:read"]),
+        optional(jm("Minimap", false, &[])),
+        off,
+        cached,
+        unreviewed,
+    ]);
+    render(&mut ui, &v, 1, "prompt-optional");
+    // Focus starts on the first switch; Down/Up wrap around the optional mods.
+    assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, Some(UiCmd::Toggle(1))));
+    ui.input(UiInput::Key(HID_DOWN), &v);
+    assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, Some(UiCmd::Toggle(2))));
+    ui.input(UiInput::Key(HID_DOWN), &v);
+    ui.input(UiInput::Key(HID_DOWN), &v);
+    assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, Some(UiCmd::Toggle(4))));
+    ui.input(UiInput::Key(HID_DOWN), &v);
+    assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, Some(UiCmd::Toggle(1))), "wraps around");
+    ui.input(UiInput::Key(HID_UP), &v);
+    assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, Some(UiCmd::Toggle(4))));
+    ui.input(UiInput::Key(HID_UP), &v);
+    assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, Some(UiCmd::Toggle(3))));
+    // The focus ring changes the picture; clicking a row toggles it, the required one has no switch.
+    let moved = render(&mut ui, &v, 1, "prompt-optional-focus");
+    assert!(!std::sync::Arc::ptr_eq(&moved, &ui.render(&v, 2, 1280, 720).unwrap()));
+    assert_eq!(click(&mut ui, &v, Hit::Toggle(2)), (true, Some(UiCmd::Toggle(2))));
+    assert!(ui.hits_for_tests().iter().all(|(_, h)| *h != Hit::Toggle(0)));
+    // A refused optional mod cannot be switched.
+    let mut refused = v.clone();
+    let j = refused.join.as_mut().unwrap();
+    j.mods[1].refused = true;
+    j.mods[1].enabled = false;
+    render(&mut ui, &refused, 3, "prompt-optional-refused");
+    assert!(ui.hits_for_tests().iter().all(|(_, h)| *h != Hit::Toggle(1)));
+    // Nothing to download: the tag says so.
+    let mut none = v.clone();
+    for m in &mut none.join.as_mut().unwrap().mods {
+        m.cached = true;
     }
-    assert_eq!(found, Some(UiCmd::Decide { accept: true, native_ok: false }));
+    render(&mut ui, &none, 4, "prompt-cached");
 }
 
 #[test]
@@ -96,14 +152,8 @@ fn native_prompt_needs_the_box() {
     render(&mut ui, &v, 1, "native-ok");
     assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v), (true, Some(UiCmd::Decide { accept: true, native_ok: true })));
     // The box toggles by click too.
-    let mut toggled = false;
-    for y in (0..720).step_by(3) {
-        if ui.input(UiInput::Click(500.0, y as f32), &v) == (true, None) && !ui.native_ok {
-            toggled = true;
-            break;
-        }
-    }
-    assert!(toggled);
+    assert_eq!(click(&mut ui, &v, Hit::NativeBox), (true, None));
+    assert!(!ui.native_ok);
     // A refused native mod: no checkbox, cannot accept.
     if let Some(j) = v.join.as_mut() {
         j.mods[0].refused = true;
@@ -112,6 +162,14 @@ fn native_prompt_needs_the_box() {
         j.mods[2].name = "1".into();
     }
     render(&mut ui, &v, 2, "native-refused");
+    assert!(ui.hits_for_tests().iter().all(|(_, h)| *h != Hit::NativeBox));
+    assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v), (true, None));
+    // An optional native mod that is switched off asks for nothing.
+    let mut off = prompt(vec![jm("Req", false, &[]), optional(jm("Turbo", true, &[]))]);
+    off.join.as_mut().unwrap().mods[1].enabled = false;
+    render(&mut ui, &off, 3, "native-off");
+    assert!(ui.hits_for_tests().iter().all(|(_, h)| *h != Hit::NativeBox));
+    assert_eq!(ui.input(UiInput::Key(HID_ENTER), &off), (true, Some(UiCmd::Decide { accept: true, native_ok: false })));
 }
 
 #[test]
@@ -123,34 +181,83 @@ fn downloading_failed_and_rejected() {
     let mut b = jm("Coin Bank", false, &[]);
     b.have = 130_000;
     let c = jm("Shop Signs", false, &[]);
-    let mut v = prompt(vec![a, b, c]);
+    let mut off = optional(jm("Skipped", false, &[]));
+    off.enabled = false;
+    let mut v = prompt(vec![a, b, c, off]);
     let j = v.join.as_mut().unwrap();
     j.stage = JoinStage::Downloading;
     j.progress = (519_120, 1_167_360);
+    j.eta = Some(4);
     render(&mut ui, &v, 1, "downloading");
     assert_eq!(ui.input(UiInput::Key(HID_ESCAPE), &v), (true, Some(UiCmd::Cancel)));
+    assert_eq!(click(&mut ui, &v, Hit::Cancel), (true, Some(UiCmd::Cancel)));
     assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v), (true, None));
     let j = v.join.as_mut().unwrap();
     j.progress = (0, 0);
+    j.eta = None;
     render(&mut ui, &v, 9, "downloading-empty");
+    let check = FailKind::Check { name: "Coin Bank".into(), version: "1.2.0".into(), expected: "77ae".repeat(16) };
+    let fail = |kind, text: &str| JoinStage::Failed(Fail { kind, text: text.into() });
     for (i, (stage, name)) in [
-        (JoinStage::Failed("coin-bank: expected sha256 41aa, got 77d1".into()), "check-failed"),
-        (JoinStage::Failed("coin-bank: the download stopped at 130 of 210 bytes".into()), "download-failed"),
+        (fail(check, "It may be broken."), "check-failed"),
         (
-            JoinStage::Rejected("You need the mod loader 0.2".into(), Some("https://blockheads.club/mods".into())),
-            "rejected",
+            fail(FailKind::Download { name: "Coin Bank".into(), percent: 40 }, "The connection was lost."),
+            "download-failed",
         ),
+        (fail(FailKind::Newer, "Sunny Isle needs a newer mod loader."), "needs-newer"),
+        (fail(FailKind::Other, "the mods did not start: boom"), "failed-other"),
+        (
+            JoinStage::Rejected("Update your mod loader to 0.2".into(), Some("https://blockheads.club/mods".into())),
+            "rejected-newer",
+        ),
+        (JoinStage::Rejected("Stale mods".into(), Some("https://blockheads.club/mods".into())), "rejected"),
         (JoinStage::Rejected("Stale mods".into(), None), "rejected-plain"),
     ]
     .into_iter()
     .enumerate()
     {
+        let copy = matches!(&stage, JoinStage::Failed(f) if matches!(f.kind, FailKind::Check { .. }));
         let v = View { join: Some(JoinView { stage, ..v.join.clone().unwrap() }), ..View::default() };
         render(&mut ui, &v, 20 + i as u64, name);
         assert_eq!(ui.input(UiInput::Key(HID_ESCAPE), &v), (true, Some(UiCmd::Dismiss)));
         assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v), (true, Some(UiCmd::Dismiss)));
+        assert_eq!(click(&mut ui, &v, Hit::Dismiss), (true, Some(UiCmd::Dismiss)));
         assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, None));
+        // "Copy details" only exists for a failed file check.
+        let key = ui.input(UiInput::Key(HID_Y), &v);
+        assert_eq!(matches!(key.1, Some(UiCmd::Copy(_))), copy);
+        assert_eq!(ui.hits_for_tests().iter().any(|(_, h)| *h == Hit::Copy), copy);
+        if copy {
+            let (_, Some(UiCmd::Copy(text))) = click(&mut ui, &v, Hit::Copy) else { panic!() };
+            assert!(text.contains("expected sha256 77ae77ae") && text.contains("Coin Bank 1.2.0"), "{text}");
+        }
     }
+    // A short hash is shown whole, and a stale Copy hit on another view does nothing.
+    let short = FailKind::Check { name: "A".into(), version: "1".into(), expected: "ab".into() };
+    let v = View { join: Some(JoinView { stage: fail(short, "x"), ..v.join.clone().unwrap() }), ..View::default() };
+    render(&mut ui, &v, 40, "check-failed-short");
+    let r = ui.hits_for_tests().into_iter().find(|(_, h)| *h == Hit::Copy).unwrap().0;
+    let plain = prompt(vec![jm("A", false, &[])]);
+    assert_eq!(ui.input(UiInput::Click((r.x + 2) as f32, (r.y + 2) as f32), &plain), (true, None));
+    // Details of the other failures, and Copy outside a failure does nothing.
+    let f = |kind| Fail { kind, text: "t".into() };
+    assert_eq!(crate::ui::details_for_tests(&f(FailKind::Other)), "t");
+    assert!(crate::ui::details_for_tests(&f(FailKind::Download { name: "n".into(), percent: 3 }))
+        .starts_with("n stopped at 3 %"));
+    assert_eq!(ui.input(UiInput::Key(HID_Y), &plain), (true, None));
+}
+
+#[test]
+fn a_crowded_prompt_is_cut_to_the_window() {
+    let mut ui = ModUi::new();
+    let mods: Vec<JoinMod> =
+        (0..14).map(|i| jm(&format!("Mod {i}"), i == 3, &["channels", "world:read", "net-http"])).collect();
+    let v = prompt(mods);
+    let px = ui.render(&v, 1, 800, 450).unwrap();
+    dump("prompt-crowded", 800, 450, &px);
+    // A phone-sized window still draws (the scale has a floor).
+    let px = ui.render(&v, 2, 320, 200).unwrap();
+    dump("prompt-tiny", 320, 200, &px);
 }
 
 fn status(id: &str, state: &'static str) -> ModStatus {

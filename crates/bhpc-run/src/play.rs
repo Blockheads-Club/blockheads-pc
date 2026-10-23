@@ -1734,8 +1734,16 @@ impl UiThread {
                         let view = m.view.lock().unwrap_or_else(PoisonError::into_inner);
                         m.ui.lock().unwrap_or_else(PoisonError::into_inner).input(input, &view)
                     };
-                    if let Some(cmd) = cmd {
-                        m.post(cmd);
+                    match cmd {
+                        // The clipboard belongs to this thread (SDL) or the launcher (`@copy`).
+                        Some(bhpc_mods::view::UiCmd::Copy(text)) if cfg.embed.is_some() => {
+                            println!("{}", bhpc_launcher::embed::copy_line(&text));
+                        }
+                        Some(bhpc_mods::view::UiCmd::Copy(text)) => {
+                            *flags.clipboard.lock().unwrap_or_else(PoisonError::into_inner) = Some(text);
+                        }
+                        Some(cmd) => m.post(cmd),
+                        None => {}
                     }
                     if took && !passive {
                         m.serial.fetch_add(1, Ordering::SeqCst);

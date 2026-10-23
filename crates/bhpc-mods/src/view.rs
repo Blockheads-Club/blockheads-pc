@@ -4,7 +4,11 @@
 use std::time::Instant;
 
 use crate::host::{LogLine, ModStatus};
-use crate::join::{JoinFlow, Refusal, Stage};
+use bhmod_client::session::Failure;
+use bhmod_client::verify::Refusal as PackageRefusal;
+use bhmod_proto::hex;
+
+use crate::join::{Entry, JoinFlow, Refusal, Stage};
 
 /// One mod in the join prompt.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +28,35 @@ pub struct JoinMod {
     /// Short permission names (`channels`, `world:read`, `players:chat`, `net-http`).
     pub permissions: Vec<String>,
     pub listed: bool,
+    /// The mod also has a server half ("Client + server"); else it only runs here.
+    pub with_server: bool,
+}
+
+/// What went wrong, for the layout of the failure notice.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FailKind {
+    /// A download stopped or the server could not send a file (`percent` of that file was there).
+    Download {
+        name: String,
+        percent: u8,
+    },
+    /// The file's SHA-256 is not the one listed (`expected`: 64 hex characters).
+    Check {
+        name: String,
+        version: String,
+        expected: String,
+    },
+    /// The server needs a newer mod loader (or API) than this one.
+    Newer,
+    Other,
+}
+
+/// A failed join.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fail {
+    pub kind: FailKind,
+    /// The explanation under the headline.
+    pub text: String,
 }
 
 /// The join prompt's stage.
@@ -31,8 +64,7 @@ pub struct JoinMod {
 pub enum JoinStage {
     Prompt,
     Downloading,
-    /// The text of the failure.
-    Failed(String),
+    Failed(Fail),
     /// The server refused the join (`REJECT_TEXT`): text and optional link.
     Rejected(String, Option<String>),
 }
@@ -41,24 +73,29 @@ pub enum JoinStage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct JoinView {
     pub server: String,
+    /// `host:port` as the player knows the server.
+    pub address: String,
     pub stage: JoinStage,
     pub mods: Vec<JoinMod>,
     pub required: bool,
     /// `(bytes held, bytes to download)`.
     pub progress: (u64, u64),
+    /// Seconds left of the download at the pace so far.
+    pub eta: Option<u64>,
 }
 
 impl JoinView {
     /// The prompt for a flow, `None` when nothing is to be shown (no prompt yet, joined, vanilla).
-    pub fn of(f: &JoinFlow) -> Option<JoinView> {
+    pub fn of(f: &JoinFlow, now: Instant) -> Option<JoinView> {
         let stage = match f.stage() {
             Stage::Prompt => JoinStage::Prompt,
             Stage::Downloading => JoinStage::Downloading,
-            Stage::Failed(e) => JoinStage::Failed(e.to_string()),
+            Stage::Failed(e) => JoinStage::Failed(fail_of(&e, f.server_name(), f.entries())),
             _ => return None,
         };
         Some(JoinView {
             server: f.server_name().to_string(),
+            address: f.address().to_string(),
             stage,
             mods: f
                 .entries()
@@ -89,11 +126,13 @@ impl JoinView {
                         enabled: e.enabled,
                         permissions: perms,
                         listed: e.listed,
+                        with_server: e.info.sides.iter().any(|s| s == "server"),
                     }
                 })
                 .collect(),
             required: f.required(),
             progress: f.progress(),
+            eta: f.eta_secs(now),
         })
     }
 
@@ -101,10 +140,12 @@ impl JoinView {
     pub fn rejected(server: &str, text: &str, url: Option<&str>) -> JoinView {
         JoinView {
             server: server.to_string(),
+            address: String::new(),
             stage: JoinStage::Rejected(text.to_string(), url.map(str::to_string)),
             mods: Vec::new(),
             required: false,
             progress: (0, 0),
+            eta: None,
         }
     }
 
@@ -115,6 +156,54 @@ impl JoinView {
             && self.mods.iter().all(|m| !m.enabled || !m.refused)
             && (native_ok || self.mods.iter().all(|m| !m.enabled || !m.native))
     }
+}
+
+fn entry_named<'a>(entries: &'a [Entry], id: &str) -> Option<&'a Entry> {
+    entries.iter().find(|e| e.info.id == id)
+}
+
+/// The failure notice for a join failure.
+fn fail_of(f: &Failure, server: &str, entries: &[Entry]) -> Fail {
+    let named = |id: &str| entry_named(entries, id).map_or_else(|| id.to_string(), Entry::name);
+    let percent = |id: &str| {
+        entry_named(entries, id)
+            .map_or(0, |e| (e.have.min(e.info.size) * 100).checked_div(e.info.size).unwrap_or(0) as u8)
+    };
+    match f {
+        Failure::Download { id, code } => Fail {
+            kind: FailKind::Download { name: named(id), percent: percent(id) },
+            text: format!("The server could not send the file (error {code}). Nothing was saved and you didn't join."),
+        },
+        Failure::Stalled(id) => Fail {
+            kind: FailKind::Download { name: named(id), percent: percent(id) },
+            text: "The connection to the server was lost. Nothing was saved and you didn't join.".into(),
+        },
+        Failure::HashMismatch(id) => {
+            let e = entry_named(entries, id);
+            Fail {
+                kind: FailKind::Check {
+                    name: named(id),
+                    version: e.map(|e| e.info.version.clone()).unwrap_or_default(),
+                    expected: e.map(|e| hex(&e.info.sha256)).unwrap_or_default(),
+                },
+                text:
+                    "It may be broken or changed. We deleted it and didn't run it. Ask the server owner to fix the mod."
+                        .into(),
+            }
+        }
+        Failure::Refused {
+            refusal: PackageRefusal::NeedsNewerApi(_) | PackageRefusal::NeedsNewerLoader(_), ..
+        } => Fail {
+            kind: FailKind::Newer,
+            text: format!("{server} needs a newer mod loader than this one. Update Blockheads PC, then join again."),
+        },
+        other => Fail { kind: FailKind::Other, text: other.to_string() },
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fail_for_tests(f: &Failure) -> Fail {
+    fail_of(f, "S", &[])
 }
 
 /// Why a [`Refusal`] happened, in words.
@@ -153,6 +242,8 @@ pub enum UiCmd {
     Dismiss,
     /// Reload the session's mods (developer mode).
     Reload,
+    /// Put this text on the clipboard.
+    Copy(String),
 }
 
 #[derive(serde::Serialize)]
