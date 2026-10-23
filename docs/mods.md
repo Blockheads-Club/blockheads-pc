@@ -93,3 +93,33 @@ on, `HELLO.runtimes` also lists `jvm`. There is no Settings toggle yet: edit `pr
 
 `cargo test -p bhpc-mods --features jvm` runs a Java client mod through `ClientHost` (needs a JDK and a JRE); CI has a
 job for it.
+
+## Native client mods (milestone M10)
+
+A native mod is an armv7 `client/native/armeabi-v7a/*.so` in a package with `permissions.native` (API and rules:
+mod-sdk `docs/native.md`). The runner loads it into the **guest**: the library is linked like the game's own libraries
+(its imports bind to the host's bionic: libc, libm, liblog), its constructors run, then `bhmod_native_init(api)` runs on
+the thread that starts the session. The `bhmod_api_t` table lives in guest memory and its functions are host thunks
+(`bhpc-run/src/native.rs`). Hooks are installed by name through `bhmod-native`'s engine over a `Host` on guest memory:
+
+- code patches (the 8-byte entry patch, the trampoline) = write the guest page (made writable for the moment, the
+  page protection of the segment is restored), then `Cpu::invalidate` for the JIT;
+- trampolines live in a 64 KiB executable arena in the guest;
+- modules and symbols come from a snapshot of the linker's modules (`Module::dynamic` gives the dynamic section, so
+  imports can be found); Objective-C swizzles call the game's own `class_getInstanceMethod` /
+  `method_setImplementation` in the guest;
+- the mod's handlers are guest code: the game calls them directly, no host code in between.
+
+A mod's library is loaded when its session starts, only if the package's grant (`mods.toml`) includes `native` and
+"never allow native mods" is off (`--mods-block-native`); the grant is made by the launcher's install dialog (both native
+boxes) or the join prompt (index-listed file, danger zone, confirmation). `bhmod_native_shutdown` runs and the hooks are
+undone when the session ends. Libraries stay linked in the guest; the next session calls `init` again on the same image.
+
+Weapon skins are a user of the same engine (`weapons.rs`, the module doc has the details): an inline hook on the
+exported `texCoordsForItemType`, active while a mod declares a weapon cosmetic. Dev aids: `BHPC_DEV_COSMETICS=weapon=<key>`
+with `BHPC_DEV_WEAPON_ITEM=<item type>` (the flint spade is 16), `BHPC_WEAPONS_TRACE=1` (which sprite items the game draws
+from where).
+
+Tests: `tests_native.rs` runs the real fixture libraries (`fixtures/native`, own C, build output committed; rebuild
+with `fixtures/native/build.sh`, NDK needed) on the JIT against a fake game; `scripts/e2e-native.sh` runs the example mod
+of mod-sdk (`scripts/build-native-example.sh`) and the weapon skin on the real game, with a pixel check of the skin.

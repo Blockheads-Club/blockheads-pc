@@ -215,3 +215,13 @@ Umbrella rules: `../AGENTS.md`.
   own `-[BHClient sendChatMessage:sendToClients:]`; the typed path above that is unit-tested.
 - Finding game methods: `BHPC_DEV_OBJC_DUMP=FILE` prints the methods of the named classes; class names come from the
   `OBJC_CLASS_$_*` exports of libApplication.so. `BHPC_MODS_TRACE=1` logs every world event the hooks report.
+
+## Native client mods (mod system M10, `docs/mods.md`)
+- `bhpc-run/src/native.rs` (not play-gated, 100 % covered with the fixtures in `fixtures/native`) is the libbhmod host
+  over the guest; `weapons.rs` (play build) is the weapon-skin hook. The engine is mod-sdk's `bhmod-native`.
+- The game's code pages are patched through `GuestMemory::protect` (read/write/exec for the write, then back) and
+  `Cpu::invalidate`; a thunk replacement answers or `tail_call`s the trampoline (the original runs with the caller's
+  registers and `lr`). A hook replacement that is a host thunk sees the caller in `Cpu::lr()`.
+- Weapon skins hook `texCoordsForItemType` (exported), not a `renderSpriteItem` (there is none: the sprite code is inline
+  in the blockhead drawing function at `libApplication.so + 0xc00780`, 1.7.6). Held items are only drawn while used.
+  e2e: `scripts/e2e-native.sh` (the world is random: the script digs on four sides and checks the skin by pixels).
