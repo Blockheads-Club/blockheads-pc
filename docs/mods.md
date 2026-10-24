@@ -95,7 +95,7 @@ the `PATH` are tried). The runtime is mod-sdk's `bhmod-core` JVM runtime ([`docs
 one JVM per process on the user's JRE, one class loader per mod, `client/mod.jar` with `Bhmod-Main` in its manifest.
 A JVM mod is `native` (unsandboxed): the join prompt shows the red native zone, it is refused with "never allow native
 mods", and a server can only push one that the index lists with the same SHA-256 and the player confirmed. With the JVM
-on, `HELLO.runtimes` also lists `jvm`. There is no Settings toggle yet: edit `prefs.json`.
+on, `HELLO.runtimes` also lists `jvm`. Settings > Mods > "Java and Kotlin mods" has the switch (default off, with a red warning that JVM mods are native and cannot be sandboxed) and an optional Java folder field; both are the prefs above.
 
 `cargo test -p bhpc-mods --features jvm` runs a Java client mod through `ClientHost` (needs a JDK and a JRE); CI has a
 job for it.

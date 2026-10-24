@@ -586,6 +586,10 @@ mod ops_tests {
         for l in ["tr", "ru", "kk"] {
             assert_eq!(save_prefs(&paths, Prefs { language: l.into(), ..Prefs::default() }).unwrap().language, l);
         }
+        // The JVM switch and the Java folder survive a save and a reload, and reach the runner as flags.
+        let jvm = Prefs { mods_jvm: true, mods_java_home: "/opt/jre".into(), ..Prefs::default() };
+        assert_eq!(save_prefs(&paths, jvm.clone()).unwrap(), jvm);
+        assert_eq!(Prefs::load(&paths.prefs()).unwrap(), jvm);
         std::fs::write(paths.prefs(), "language = 1").unwrap();
         assert!(boot(&paths, "/data".into()).is_err());
     }

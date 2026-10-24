@@ -633,6 +633,16 @@ describe('more cases', () => {
     expect(store.prefs.mods_auto_update).toBe(false);
     await fireEvent.click(screen.getByRole('switch', { name: 'Never allow native mods' }));
     await waitFor(() => expect(store.prefs.mods_block_native).toBe(true));
+    // JVM mods: off by default, the Java folder field is locked until the switch is on.
+    const java = screen.getByLabelText('Java folder (optional)') as HTMLInputElement;
+    expect(store.prefs.mods_jvm).toBe(false);
+    expect(java.disabled).toBe(true);
+    expect(screen.getByRole('note')).toHaveTextContent('cannot be sandboxed');
+    await fireEvent.click(screen.getByRole('switch', { name: 'Run Java and Kotlin mods' }));
+    await waitFor(() => expect(store.prefs.mods_jvm).toBe(true));
+    expect(java.disabled).toBe(false);
+    await fireEvent.change(java, { target: { value: ' /opt/jre ' } });
+    await waitFor(() => expect(store.prefs.mods_java_home).toBe('/opt/jre'));
     await fireEvent.click(screen.getByRole('switch', { name: 'Developer mode' }));
     expect(store.prefs.mods_developer).toBe(true);
     await click('Open');

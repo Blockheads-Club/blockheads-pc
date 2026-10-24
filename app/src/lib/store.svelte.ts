@@ -30,6 +30,8 @@ export const DEFAULT_PREFS: Prefs = {
   mods_auto_update: true,
   mods_cache_limit_mb: 1024,
   mods_block_native: false,
+  mods_jvm: false,
+  mods_java_home: '',
   mods_developer: false,
   mods_dev_folders: [],
   mods_dev_watch: true
