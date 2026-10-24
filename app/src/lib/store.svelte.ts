@@ -148,7 +148,7 @@ export class AppStore {
         this.screen = 'home';
         await this.recheckApk();
         void this.refreshDataSize();
-        if (this.prefs.auto_update_check && this.info.updates_enabled) void this.checkUpdate(true);
+        if ((this.prefs.auto_update_check || b.update_requested) && this.info.updates_enabled) void this.checkUpdate(true);
       } else {
         this.draft = clone(b.defaults);
         const [w, h] = recommendedSize(this.display);

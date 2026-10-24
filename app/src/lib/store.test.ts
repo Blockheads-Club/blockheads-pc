@@ -75,6 +75,13 @@ describe('start-up', () => {
     store.stopPolling();
   });
 
+  it('checks for an update the game asked for even when the automatic check is off', async () => {
+    mock.api.boot = vi.fn(async () => makeBoot({ prefs: { ...PREFS, auto_update_check: false }, update_requested: true }));
+    mock.api.appInfo = vi.fn(async () => ({ version: '1', os: 'linux', arch: 'x', config_dir: '/c', updates_enabled: true, native_controls: false }));
+    await store.init();
+    await vi.waitFor(() => expect(store.update.stage).toBe('available'));
+  });
+
   it('applies saved preferences and tolerates a missing display and failing update check', async () => {
     mock.api.boot = vi.fn(async () => makeBoot({ prefs: { ...PREFS, language: 'tr', theme: 'dark' } }));
     mock.api.displayInfo = vi.fn(async () => { throw new Error('no monitor'); });

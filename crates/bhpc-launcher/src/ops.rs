@@ -21,6 +21,9 @@ pub struct Boot {
     /// The preferences were saved before: `false` on the very first start, when the UI picks the language from the
     /// system's.
     pub prefs_saved: bool,
+    /// A join dialog in the game asked to update the launcher after the game ("Update after this game"): the UI
+    /// checks for an update now even when the automatic check is off. The note is consumed.
+    pub update_requested: bool,
 }
 
 /// The launcher's config directory: `BHPC_CONFIG_DIR` when set (tests, portable installs), else the platform's.
@@ -49,8 +52,10 @@ pub fn data_dir_from(
 
 /// Loads everything the UI starts from.
 pub fn boot(paths: &Paths, default_data_dir: PathBuf) -> Result<Boot, LauncherError> {
+    let update_requested = mods_dirs(paths, default_data_dir.clone()).take_update_request();
     Ok(Boot {
         config: LaunchConfig::load(&paths.config())?,
+        update_requested,
         defaults: LaunchConfig::new("", default_data_dir),
         prefs: Prefs::load(&paths.prefs())?,
         prefs_saved: paths.prefs().exists(),
