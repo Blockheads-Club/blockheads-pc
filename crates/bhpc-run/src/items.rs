@@ -48,6 +48,60 @@ fn log(msg: &str) {
     eprintln!("[items] {msg}");
 }
 
+/// `BHPC_DEV_ITEMS=<key>=<count>,...`: items of the `--mods-dev` folders put into the inventory of this client's
+/// blockhead (single-player; the ids come from an in-memory registry), for testing without a server.
+pub fn dev_from_env() -> Vec<(String, u32)> {
+    let Some(v) = std::env::var_os("BHPC_DEV_ITEMS") else { return Vec::new() };
+    v.to_string_lossy()
+        .split(',')
+        .filter_map(|p| {
+            let (k, n) = p.split_once('=').unwrap_or((p, "1"));
+            Some((k.trim().to_string(), n.trim().parse().ok()?))
+        })
+        .collect()
+}
+
+thread_local! {
+    /// Blockheads (by address) that got their dev items.
+    static GIVEN: std::cell::RefCell<std::collections::HashSet<u32>> = std::cell::RefCell::new(Default::default());
+    /// `(item type, count)` of the dev items.
+    static DEV: std::cell::RefCell<Vec<(u16, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Remembers the dev items by id (called when a session's content loads).
+pub fn load_dev(content: &Content, dev: &[(String, u32)]) {
+    let ids = dev
+        .iter()
+        .filter_map(|(k, n)| Some((u16::try_from(content.items().all().find(|i| &i.key == k)?.id).ok()?, *n)))
+        .collect();
+    DEV.with(|d| *d.borrow_mut() = ids);
+    GIVEN.with(|g| g.borrow_mut().clear());
+}
+
+/// The per-frame hook of a blockhead: its first time, a non-net blockhead gets the dev items.
+pub(crate) fn dev_give(o: &Objc, c: &mut Cpu, bh: u32, is_net: bool) {
+    if is_net || DEV.with(|d| d.borrow().is_empty()) || !GIVEN.with(|g| g.borrow_mut().insert(bh)) {
+        return;
+    }
+    let cls = o.class(c, "InventoryItem");
+    for (item_type, count) in DEV.with(|d| d.borrow().clone()) {
+        for _ in 0..count {
+            let alloc = o.send(c, cls, "alloc", &[]);
+            let it = o.send(
+                c,
+                alloc,
+                "initWithType:dataA:dataB:subItems:dynamicObjectSaveDict:",
+                &[u32::from(item_type), 0, 0, 0, 0],
+            );
+            let slot = o.send(c, bh, "addItemToInventory:", &[it]);
+            if slot as i32 == -1 {
+                log(&format!("the inventory refused item {item_type}"));
+            }
+        }
+    }
+    log(&format!("dev items given to {bh:#x}"));
+}
+
 /// The language the player reads (`LC_ALL`, `LC_MESSAGES`, then `LANG`; `en` without any).
 pub fn language() -> String {
     ["LC_ALL", "LC_MESSAGES", "LANG"]

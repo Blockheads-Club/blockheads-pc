@@ -152,7 +152,10 @@ cat > "$run/items.script" << 'EOF'
 +8000 click 370 552
 +1500 click 512 588
 +2500 shot hud
-+40000 shot dropped
++500  click 640 350
++5000 click 400 350
++5000 shot walked
++30000 shot dropped
 +3000 shot dropped2
 +8000 click 40 740
 +1500 shot inventory

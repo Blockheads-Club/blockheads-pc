@@ -145,7 +145,12 @@ pub fn load(dir: &std::path::Path, server_registry: &Wire) {
         if wire.is_empty() && !dev.is_empty() {
             wire = bhmod_content::client::local_registry(&packages);
         }
+        let dev_items = crate::items::dev_from_env();
+        if wire.is_empty() && !dev_items.is_empty() {
+            wire = bhmod_content::client::local_registry(&packages);
+        }
         let problems = s.content.load(&wire, &packages);
+        crate::items::load_dev(&s.content, &dev_items);
         for p in problems {
             log(&p);
         }
@@ -585,6 +590,11 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
     // The per-frame trigger: a blockhead is refreshed the first time it is seen and whenever the cosmetics changed.
     let (oo, ii) = (o, iv);
     hooks.hook(t("-[Blockhead update:accurateDT:isSimulation:]"), None, move |inv| {
+        if on_main() {
+            let bh = inv.receiver();
+            let net = is_net(inv.cpu(), &ii, bh);
+            crate::items::dev_give(&oo, inv.cpu(), bh, net);
+        }
         if !on_main() || !active() {
             return;
         }
