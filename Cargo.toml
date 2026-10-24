@@ -35,13 +35,13 @@ bhpc-jni = { path = "crates/bhpc-jni" }
 bhpc-vfs = { path = "crates/bhpc-vfs" }
 # The shared mod host (Luau + WASM), the 0xBC codec and the package rules, from Blockheads-Club/mod-sdk at a pinned
 # commit (the same crates the Blockheads Server uses).
-bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f67511ec11baa3283303c6c73cd5780c05bf0bfb" }
-bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f67511ec11baa3283303c6c73cd5780c05bf0bfb" }
-bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f67511ec11baa3283303c6c73cd5780c05bf0bfb" }
-bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f67511ec11baa3283303c6c73cd5780c05bf0bfb" }
-bhmod-client = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f67511ec11baa3283303c6c73cd5780c05bf0bfb" }
-bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f67511ec11baa3283303c6c73cd5780c05bf0bfb" }
-bhmod-native = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f67511ec11baa3283303c6c73cd5780c05bf0bfb" }
+bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-client = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-native = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
 
 [profile.release]
 debug = 1
