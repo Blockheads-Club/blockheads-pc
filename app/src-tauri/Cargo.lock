@@ -242,8 +242,8 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bhmod-manifest"
-version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=3651df5#3651df5be5d1885f79bc5d75488c0357e30159f4"
+version = "0.2.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=47ab9140ca051524bcdc9637a8d09191b53a364a#47ab9140ca051524bcdc9637a8d09191b53a364a"
 dependencies = [
  "semver",
  "serde",
@@ -254,11 +254,11 @@ dependencies = [
 
 [[package]]
 name = "bhpc-input"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "bhpc-launcher"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bhmod-manifest",
  "bhpc-input",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-loader"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bhpc-mem",
  "miniz_oxide 0.8.9",
@@ -284,14 +284,14 @@ dependencies = [
 
 [[package]]
 name = "bhpc-mem"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bhpc-vfs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs 6.0.0",
  "getrandom 0.3.4",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "blockheads-pc-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bhpc-input",
  "bhpc-launcher",
