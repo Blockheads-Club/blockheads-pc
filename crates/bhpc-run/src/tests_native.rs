@@ -198,6 +198,18 @@ fn the_runner_hooks_its_own_functions_and_reads_import_targets() {
     assert!(w.n.hook_internal(&mut w.f.cpu, "nothing", thunk).is_err());
     w.n.unhook_internal(&mut w.f.cpu);
     assert_eq!(w.call(BASE + 0x40, 1, 2), 3);
+    // another owner, by address: undone on its own
+    let orig = w.n.hook_internal_at(&mut w.f.cpu, 77, "libfake.so", 0x40, thunk).unwrap();
+    assert_eq!(w.call(BASE + 0x40, 1, 2), 7);
+    assert_eq!(w.call(orig, 1, 2), 3);
+    assert!(w.n.hook_internal_at(&mut w.f.cpu, 77, "libnone.so", 0x40, thunk).is_err());
+    w.n.unhook_internal(&mut w.f.cpu);
+    assert_eq!(w.call(BASE + 0x40, 1, 2), 7, "the runner's other hooks stay");
+    w.n.unhook_owner(&mut w.f.cpu, 77);
+    assert_eq!(w.call(BASE + 0x40, 1, 2), 3);
+    let orig = w.n.hook_internal_as(&mut w.f.cpu, 78, "fn", thunk).unwrap();
+    assert_eq!(w.call(orig, 1, 2), 3);
+    w.n.unhook_owner(&mut w.f.cpu, 78);
     // a module with an import: dynamic section, symbol table, relocation and GOT slot in guest memory
     let mem = w.f.cpu.mem().clone();
     let m = 0x2020_0000;

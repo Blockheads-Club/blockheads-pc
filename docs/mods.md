@@ -127,6 +127,12 @@ game's atlas is bound back right after it, so the dig-target indicator and the H
 with `BHPC_DEV_WEAPON_ITEM=<item type>` (the flint spade is 16), `BHPC_WEAPONS_TRACE=1` (which sprite items the game draws
 from where).
 
+Mod items (content mods with `[content] items`, `items.rs`, see mod-sdk `docs/content.md`) use the same engine with
+owner `u32::MAX - 2`: the twelve compile-unit copies of the game's static `NSStringFromItemType` (offsets in the 1.7.6
+build, prologue checked) answer an `NSString` for a mod item's name, and the exported `itemTypeIsValidFillItem` says yes
+for mod item ids so the inventory accepts them. Installed while a loaded mod declares an item; `scripts/e2e-content.sh`
+runs the real game against the `decor-items` example (screenshots show names and icons).
+
 Tests: `tests_native.rs` runs the real fixture libraries (`fixtures/native`, own C, build output committed; rebuild
 with `fixtures/native/build.sh`, NDK needed) on the JIT against a fake game; `scripts/e2e-native.sh` runs the example mod
 of mod-sdk (`scripts/build-native-example.sh`) and the weapon skin on the real game, with a pixel check of the skin.

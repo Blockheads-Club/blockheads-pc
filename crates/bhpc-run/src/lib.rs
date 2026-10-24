@@ -20,6 +20,8 @@ pub mod mmapio;
 #[cfg(feature = "play")]
 pub mod modevents;
 #[cfg(feature = "play")]
+pub mod items;
+#[cfg(feature = "play")]
 pub mod modglue;
 pub mod music;
 pub mod native;

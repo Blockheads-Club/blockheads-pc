@@ -161,6 +161,7 @@ pub fn load(dir: &std::path::Path, server_registry: &Wire) {
         if s.content.is_active() {
             log(&format!("{} cosmetic(s) loaded", s.content.table().all().count()));
         }
+        crate::items::load(&s.content, &crate::items::language());
     });
 }
 
@@ -177,6 +178,7 @@ pub fn apply(msg: &Cosmetics) {
 /// The session ends: nobody wears anything, blockheads are looked at again next time.
 pub fn clear() {
     crate::weapons::drawing(0);
+    crate::items::clear();
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         s.content.clear();

@@ -258,16 +258,42 @@ impl Natives {
     /// address (a host thunk) and the result is the trampoline that runs the original. Undone by
     /// [`Natives::unhook_internal`].
     pub fn hook_internal(&self, cpu: &mut Cpu, symbol: &str, replacement: u32) -> Result<u32, String> {
+        self.hook_internal_as(cpu, INTERNAL, symbol, replacement)
+    }
+
+    /// Inline-hooks the ARM-mode function `offset` bytes into `module` for the runner itself, as `owner` (an id of
+    /// the runner's own, so that one feature can undo its hooks without touching another's, see
+    /// [`Natives::unhook_owner`]); `replacement` and the result are as in [`Natives::hook_internal`].
+    pub fn hook_internal_at(
+        &self,
+        cpu: &mut Cpu,
+        owner: u32,
+        module: &str,
+        offset: u32,
+        replacement: u32,
+    ) -> Result<u32, String> {
         let mut engine = self.inner.engine.lock().unwrap_or_else(PoisonError::into_inner);
         let mut host = GuestHost { cpu, inner: &self.inner };
-        engine.hook_symbol(&mut host, INTERNAL, None, symbol, replacement).map(|h| h.original).map_err(|e| e.message)
+        engine.hook_address(&mut host, owner, module, offset, replacement).map(|h| h.original).map_err(|e| e.message)
+    }
+
+    /// [`Natives::hook_internal`] as another runner-owned `owner`.
+    pub fn hook_internal_as(&self, cpu: &mut Cpu, owner: u32, symbol: &str, replacement: u32) -> Result<u32, String> {
+        let mut engine = self.inner.engine.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut host = GuestHost { cpu, inner: &self.inner };
+        engine.hook_symbol(&mut host, owner, None, symbol, replacement).map(|h| h.original).map_err(|e| e.message)
+    }
+
+    /// Undoes the hooks the runner-owned `owner` made.
+    pub fn unhook_owner(&self, cpu: &mut Cpu, owner: u32) {
+        let mut engine = self.inner.engine.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut host = GuestHost { cpu, inner: &self.inner };
+        engine.unhook_owner(&mut host, owner);
     }
 
     /// Undoes the hooks of [`Natives::hook_internal`].
-    pub fn unhook_internal(&self, cpu: &mut Cpu) {
-        let mut engine = self.inner.engine.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut host = GuestHost { cpu, inner: &self.inner };
-        engine.unhook_owner(&mut host, INTERNAL);
+pub fn unhook_internal(&self, cpu: &mut Cpu) {
+        self.unhook_owner(cpu, INTERNAL);
     }
 
     /// The address a module's import `symbol` currently resolves to (what the module calls), read from its GOT.
