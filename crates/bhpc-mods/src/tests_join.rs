@@ -556,6 +556,7 @@ fn entry_names() {
         refusal: None,
         have: 0,
         done: true,
+        received: None,
         enabled: true,
     };
     assert_eq!(e.to_download(), 0);
@@ -578,4 +579,123 @@ fn the_join_packet_gets_the_key() {
     assert_eq!(inject_mod_loader(b"\x23<dict></dict>", "ab"), None);
     assert_eq!(inject_mod_loader(b"\x1fbplist00\xff", "ab"), None);
     assert_eq!(inject_mod_loader(b"\x1f<plist/>", "ab"), None);
+}
+
+#[test]
+fn try_again_restarts_the_download_on_the_same_connection() {
+    let d = tempfile::tempdir().unwrap();
+    let big = pkg("big", "1.0.0", "return {}\n", "[permissions]\nchannels = true", 2 * CHUNK_SIZE + 10);
+    let opt = pkg("opt", "1.0.0", "return {}\n", "", 0);
+    let (mut f, t) =
+        at_prompt(d.path(), vec![info("big", &big, false), optional(info("opt", &opt, false))], cfg(d.path()));
+    // Nothing to retry before a failure, and closing a join that did not fail changes nothing.
+    assert!(!f.retryable() && f.retry(t).is_empty() && !f.close());
+    let mut f = {
+        let (mut g, _) =
+            at_prompt(d.path(), vec![info("big", &big, false), optional(info("opt", &opt, false))], cfg(d.path()));
+        g.toggle(1);
+        std::mem::swap(&mut f, &mut g);
+        f
+    };
+    assert!(!f.entries()[1].enabled);
+    f.decide(true, false, t);
+    let big_chunks = chunks(&big);
+    f.packet(&big_chunks[0], t);
+    // The server goes quiet: the download fails and may be retried.
+    let late = t + STALL + Duration::from_secs(1);
+    assert_eq!(f.tick(late), vec![Action::Disconnect]);
+    assert!(f.retryable());
+    assert!(matches!(f.stage(), Stage::Failed(Failure::Stalled(_))));
+    // Try again: HELLO again, then the list; the earlier choice is replayed (no second prompt) and the partial file
+    // resumes after its whole chunks.
+    let a = f.retry(late);
+    assert!(matches!(sent(&a)[0], Message::Hello(_)));
+    assert_eq!(f.stage(), Stage::Downloading);
+    assert!(!f.retryable());
+    assert_eq!(sent(&f.packet(&hello(2, true), late)), vec![Message::ListRequest]);
+    let a = f.packet(&list(vec![info("big", &big, false), optional(info("opt", &opt, false))]), late);
+    assert!(!a.contains(&Action::Prompt));
+    assert!(!f.entries()[1].enabled);
+    assert!(sent(&a).contains(&Message::FileRequest(FileRequest { sha256: sha(&big), offset: CHUNK_SIZE as u64 })));
+    let mut run = false;
+    for c in &big_chunks[1..] {
+        run |= f.packet(c, late).iter().any(|x| matches!(x, Action::Run(m) if m.len() == 1));
+    }
+    assert!(run);
+    assert_eq!(f.stage(), Stage::Joined);
+}
+
+#[test]
+fn try_again_without_a_server_behind_the_connection_fails_again() {
+    let d = tempfile::tempdir().unwrap();
+    let big = pkg("big", "1.0.0", "return {}\n", "", 2 * CHUNK_SIZE);
+    let (mut f, t) = at_prompt(d.path(), vec![info("big", &big, false)], cfg(d.path()));
+    f.decide(true, false, t);
+    let late = t + STALL + Duration::from_secs(1);
+    f.tick(late);
+    f.retry(late);
+    // No SERVER_HELLO: not a vanilla server, the connection is gone; the held 0x1f is not released.
+    assert!(f.tick(late + Duration::from_millis(1499)).is_empty());
+    assert_eq!(f.tick(late + Duration::from_millis(1500)), vec![Action::Disconnect]);
+    assert!(matches!(f.stage(), Stage::Failed(Failure::Stalled(ref id)) if id == "big"));
+    assert_eq!(f.player_info(), PlayerInfo::Send(None));
+    // It can be tried once more; this time the list never comes.
+    let a = f.retry(late);
+    assert!(matches!(sent(&a)[0], Message::Hello(_)));
+    f.packet(&hello(1, true), late);
+    let end = late + Duration::from_secs(11);
+    assert_eq!(f.tick(end), vec![Action::Disconnect]);
+    assert!(matches!(f.stage(), Stage::Failed(Failure::Protocol(_))));
+    assert!(!f.retryable());
+}
+
+#[test]
+fn leaving_the_failure_notice_closes_the_connection_once() {
+    let d = tempfile::tempdir().unwrap();
+    let big = pkg("big", "1.0.0", "return {}\n", "", 2 * CHUNK_SIZE);
+    let (mut f, t) = at_prompt(d.path(), vec![info("big", &big, false)], cfg(d.path()));
+    f.decide(true, false, t);
+    f.tick(t + STALL + Duration::from_secs(1));
+    assert!(f.retryable());
+    assert!(f.close());
+    assert!(!f.retryable() && !f.close());
+    assert!(f.retry(t).is_empty());
+}
+
+#[test]
+fn the_hash_of_a_received_file_is_taken_before_the_check_deletes_it() {
+    let d = tempfile::tempdir().unwrap();
+    let small = pkg("small", "1.0.0", "return {}\n", "", CHUNK_SIZE + 500);
+    let mut wrong = info("small", &small, false);
+    wrong.sha256 = [9; 32];
+    // The first chunk is on disk from an earlier try: the download resumes after it.
+    let blobs = d.path().join("mods-cache/blobs");
+    std::fs::create_dir_all(&blobs).unwrap();
+    std::fs::write(blobs.join(format!("{}.part", hex(&[9; 32]))), &small[..CHUNK_SIZE]).unwrap();
+    let (mut f, t) = at_prompt(d.path(), vec![wrong], cfg(d.path()));
+    f.decide(true, false, t);
+    assert_eq!(f.entries()[0].received, None);
+    // A chunk of a file nobody listed is not recorded.
+    let stray = Message::FileChunk(FileChunk { sha256: [1; 32], offset: 0, total: 3, data: vec![1, 2, 3] }).encode();
+    f.packet(&stray, t);
+    assert_eq!(f.entries()[0].received, None);
+    // The last chunk completes the file, which does not match the listed hash.
+    let last = Message::FileChunk(FileChunk {
+        sha256: [9; 32],
+        offset: CHUNK_SIZE as u64,
+        total: small.len() as u64,
+        data: small[CHUNK_SIZE..].to_vec(),
+    });
+    f.packet(&last.encode(), t);
+    assert_eq!(f.entries()[0].received, Some(hex(&sha(&small))));
+    assert!(matches!(f.stage(), Stage::Failed(Failure::HashMismatch(_))));
+}
+
+#[test]
+fn the_player_count_is_shown_only_when_the_server_gave_one() {
+    let d = tempfile::tempdir().unwrap();
+    let mut f = JoinFlow::new(cfg(d.path()));
+    assert_eq!(f.players(), None);
+    f.set_players(3, 16);
+    assert_eq!(f.players(), Some((3, 16)));
 }

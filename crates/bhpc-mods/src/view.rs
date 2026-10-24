@@ -45,6 +45,8 @@ pub enum FailKind {
         name: String,
         version: String,
         expected: String,
+        /// SHA-256 of the file as it arrived (`None` when it could not be taken).
+        got: Option<String>,
     },
     /// The server needs a newer mod loader (or API) than this one.
     Newer,
@@ -82,6 +84,10 @@ pub struct JoinView {
     pub progress: (u64, u64),
     /// Seconds left of the download at the pace so far.
     pub eta: Option<u64>,
+    /// Players online and capacity, when the server told (shown after the address).
+    pub players: Option<(u32, u32)>,
+    /// "Try again" is possible (a download that stopped or failed its check).
+    pub retry: bool,
 }
 
 impl JoinView {
@@ -133,6 +139,8 @@ impl JoinView {
             required: f.required(),
             progress: f.progress(),
             eta: f.eta_secs(now),
+            players: f.players(),
+            retry: f.retryable(),
         })
     }
 
@@ -146,6 +154,8 @@ impl JoinView {
             required: false,
             progress: (0, 0),
             eta: None,
+            players: None,
+            retry: false,
         }
     }
 
@@ -185,6 +195,7 @@ fn fail_of(f: &Failure, server: &str, entries: &[Entry]) -> Fail {
                     name: named(id),
                     version: e.map(|e| e.info.version.clone()).unwrap_or_default(),
                     expected: e.map(|e| hex(&e.info.sha256)).unwrap_or_default(),
+                    got: e.and_then(|e| e.received.clone()),
                 },
                 text:
                     "It may be broken or changed. We deleted it and didn't run it. Ask the server owner to fix the mod."
@@ -240,6 +251,11 @@ pub enum UiCmd {
     Cancel,
     /// Close a failure or rejection notice.
     Dismiss,
+    /// Start the download again after it stopped ("Try again").
+    Retry,
+    /// "Update after this game" (the server needs a newer mod loader): remember to check for an update when the
+    /// game is closed, and close the notice.
+    UpdateLater,
     /// Reload the session's mods (developer mode).
     Reload,
     /// Put this text on the clipboard.

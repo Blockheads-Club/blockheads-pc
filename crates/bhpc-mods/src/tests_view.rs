@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use bhmod_proto::{Message, ModList, ServerHello};
+use bhmod_proto::{hex, Message, ModList, ServerHello};
 
 use crate::host::{ModStatus, Usage};
 use crate::join::{JoinFlow, Refusal};
@@ -128,8 +128,9 @@ fn failure_notices_and_the_pace() {
     let mut f = accepted(d.path(), vec![wrong], t);
     f.packet(&chunk(&small, [9; 32], 0), t);
     let JoinStage::Failed(fail) = JoinView::of(&f, t).unwrap().stage else { panic!() };
-    assert!(matches!(&fail.kind, FailKind::Check { name, version, expected }
-        if name == "Mod small" && version == "1.0.0" && expected == &"09".repeat(32)));
+    assert!(matches!(&fail.kind, FailKind::Check { name, version, expected, got }
+        if name == "Mod small" && version == "1.0.0" && expected == &"09".repeat(32)
+            && got.as_deref() == Some(hex(&crate::tests_join::sha(&small)).as_str())));
     // A package that needs a newer loader.
     let d = tempfile::tempdir().unwrap();
     let newer = pkg("newer", "1.0.0", "", "loader = \"^9.0\"", 0);

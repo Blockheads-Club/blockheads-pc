@@ -16,15 +16,29 @@ use crate::view::{FailKind, JoinStage, JoinView, UiCmd, View};
 mod join;
 
 static TITLE_FONT: &[u8] = include_bytes!("../fonts/Tiny5-Regular.ttf");
-static BODY_FONT: &[u8] = include_bytes!("../../bhpc-vfs/fonts/LiberationSans-Regular.ttf");
+/// The design's body face (Atkinson Hyperlegible Next, OFL, `third_party/fonts`). It has no Cyrillic and no bold
+/// file here, so Liberation Sans serves as bold and as the fallback for glyphs it lacks.
+static BODY_FONT: &[u8] = include_bytes!("../../../third_party/fonts/AtkinsonHyperlegibleNext-Regular.ttf");
 static BOLD_FONT: &[u8] = include_bytes!("../../bhpc-vfs/fonts/LiberationSans-Bold.ttf");
+static FALLBACK_FONT: &[u8] = include_bytes!("../../bhpc-vfs/fonts/LiberationSans-Regular.ttf");
 
-fn fonts() -> &'static [FontRef<'static>; 3] {
-    static F: OnceLock<[FontRef<'static>; 3]> = OnceLock::new();
+fn fonts() -> &'static [FontRef<'static>; 4] {
+    static F: OnceLock<[FontRef<'static>; 4]> = OnceLock::new();
     F.get_or_init(|| {
         let f = |b: &'static [u8]| FontRef::try_from_slice(b).expect("bundled font parses");
-        [f(TITLE_FONT), f(BODY_FONT), f(BOLD_FONT)]
+        [f(TITLE_FONT), f(BODY_FONT), f(BOLD_FONT), f(FALLBACK_FONT)]
     })
+}
+
+/// The font and glyph for `ch` in `face`: the face's own, else the fallback's.
+fn glyph(face: Face, ch: char) -> (&'static FontRef<'static>, ab_glyph::GlyphId) {
+    let own = &fonts()[face as usize];
+    let id = own.glyph_id(ch);
+    if id.0 == 0 && face == Face::Body {
+        let fb = &fonts()[3];
+        return (fb, fb.glyph_id(ch));
+    }
+    (own, id)
 }
 
 /// Which typeface.
@@ -133,15 +147,17 @@ impl Canvas {
 
     /// Draws `text` with its top-left at `(x, y)`; returns the advance width.
     pub fn text(&mut self, face: Face, size: f32, x: f32, y: f32, rgb: Rgb, text: &str) -> f32 {
-        let font = &fonts()[face as usize];
-        let sf = font.as_scaled(PxScale::from(size));
         let mut pen = x;
-        let base = y + sf.ascent();
-        let mut prev = None;
+        let base = y + fonts()[face as usize].as_scaled(PxScale::from(size)).ascent();
+        let mut prev: Option<(usize, ab_glyph::GlyphId)> = None;
         for ch in text.chars() {
-            let id = font.glyph_id(ch);
-            if let Some(p) = prev {
-                pen += sf.kern(p, id);
+            let (font, id) = glyph(face, ch);
+            let sf = font.as_scaled(PxScale::from(size));
+            let key = font as *const _ as usize;
+            if let Some((pk, p)) = prev {
+                if pk == key {
+                    pen += sf.kern(p, id);
+                }
             }
             let g = id.with_scale_and_position(PxScale::from(size), ab_glyph::point(pen, base));
             if let Some(o) = font.outline_glyph(g) {
@@ -149,7 +165,7 @@ impl Canvas {
                 o.draw(|gx, gy, cov| self.blend(b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32, rgb, cov));
             }
             pen += sf.h_advance(id);
-            prev = Some(id);
+            prev = Some((key, id));
         }
         pen - x
     }
@@ -173,17 +189,19 @@ fn round_cover(r: Rect, rad: i32, x: i32, y: i32) -> f32 {
 
 /// Width of `text` at `size`.
 pub fn measure(face: Face, size: f32, text: &str) -> f32 {
-    let font = &fonts()[face as usize];
-    let sf = font.as_scaled(PxScale::from(size));
     let mut w = 0.0;
-    let mut prev = None;
+    let mut prev: Option<(usize, ab_glyph::GlyphId)> = None;
     for ch in text.chars() {
-        let id = font.glyph_id(ch);
-        if let Some(p) = prev {
-            w += sf.kern(p, id);
+        let (font, id) = glyph(face, ch);
+        let sf = font.as_scaled(PxScale::from(size));
+        let key = font as *const _ as usize;
+        if let Some((pk, p)) = prev {
+            if pk == key {
+                w += sf.kern(p, id);
+            }
         }
         w += sf.h_advance(id);
-        prev = Some(id);
+        prev = Some((key, id));
     }
     w
 }
@@ -227,6 +245,10 @@ pub enum Hit {
     Decline,
     Cancel,
     Dismiss,
+    /// "Try again" after a download stopped.
+    Retry,
+    /// "Update after this game".
+    UpdateLater,
     NativeBox,
     /// The switch of optional mod `0` (index in the prompt's list).
     Toggle(usize),
@@ -309,6 +331,8 @@ impl ModUi {
             Hit::Decline => Some(UiCmd::Decide { accept: false, native_ok: false }),
             Hit::Cancel => Some(UiCmd::Cancel),
             Hit::Dismiss => Some(UiCmd::Dismiss),
+            Hit::Retry => Some(UiCmd::Retry),
+            Hit::UpdateLater => Some(UiCmd::UpdateLater),
             Hit::NativeBox => {
                 self.native_ok = !self.native_ok;
                 None
@@ -337,6 +361,8 @@ impl ModUi {
                     (JoinStage::Prompt, HID_SPACE) => items.get(focus).copied(),
                     (JoinStage::Downloading, HID_ESCAPE) => Some(Hit::Cancel),
                     (JoinStage::Failed(f), HID_Y) if matches!(f.kind, FailKind::Check { .. }) => Some(Hit::Copy),
+                    (JoinStage::Failed(_), HID_ENTER) if join::retry_shown(j) => Some(Hit::Retry),
+                    (JoinStage::Failed(f), HID_ENTER) if f.kind == FailKind::Newer => Some(Hit::UpdateLater),
                     (JoinStage::Failed(_) | JoinStage::Rejected(..), HID_ENTER | HID_ESCAPE) => Some(Hit::Dismiss),
                     _ => None,
                 }
