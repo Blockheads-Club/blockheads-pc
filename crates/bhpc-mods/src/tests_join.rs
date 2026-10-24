@@ -86,7 +86,8 @@ pub(crate) fn optional(mut i: ModInfo) -> ModInfo {
 }
 
 fn hello(count: u64, required: bool) -> Vec<u8> {
-    Message::ServerHello(ServerHello { proto: 1, mods_hash: [7; 32], client_required: required, count }).encode()
+    Message::ServerHello(ServerHello { proto: 1, mods_hash: [7; 32], client_required: required, count, players: None })
+        .encode()
 }
 
 fn list(mods: Vec<ModInfo>) -> Vec<u8> {
@@ -698,4 +699,25 @@ fn the_player_count_is_shown_only_when_the_server_gave_one() {
     assert_eq!(f.players(), None);
     f.set_players(3, 16);
     assert_eq!(f.players(), Some((3, 16)));
+}
+
+#[test]
+fn the_server_hello_player_count_reaches_the_dialog() {
+    let d = tempfile::tempdir().unwrap();
+    let mut f = JoinFlow::new(cfg(d.path()));
+    let t = Instant::now();
+    f.contact(t);
+    let pkt = Message::ServerHello(ServerHello {
+        proto: 1,
+        mods_hash: [7; 32],
+        client_required: true,
+        count: 1,
+        players: Some(bhmod_proto::PlayerCount { online: 2, capacity: 8 }),
+    })
+    .encode();
+    f.packet(&pkt, t);
+    assert_eq!(f.players(), Some((2, 8)));
+    // A count set by hand wins over the server's.
+    f.set_players(5, 6);
+    assert_eq!(f.players(), Some((5, 6)));
 }

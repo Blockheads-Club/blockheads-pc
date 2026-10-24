@@ -15,7 +15,14 @@ fn join_view_follows_the_flow() {
     assert_eq!(JoinView::of(&f, t), None);
     f.contact(t);
     f.packet(
-        &Message::ServerHello(ServerHello { proto: 1, mods_hash: [1; 32], client_required: true, count: 2 }).encode(),
+        &Message::ServerHello(ServerHello {
+            proto: 1,
+            mods_hash: [1; 32],
+            client_required: true,
+            count: 2,
+            players: None,
+        })
+        .encode(),
         t,
     );
     let a = pkg("aa", "1.0.0", "", "", 0);
@@ -59,7 +66,14 @@ fn downloading_and_failed_views() {
     let mut f = JoinFlow::new(cfg(d.path()));
     f.contact(t);
     f.packet(
-        &Message::ServerHello(ServerHello { proto: 1, mods_hash: [1; 32], client_required: false, count: 1 }).encode(),
+        &Message::ServerHello(ServerHello {
+            proto: 1,
+            mods_hash: [1; 32],
+            client_required: false,
+            count: 1,
+            players: None,
+        })
+        .encode(),
         t,
     );
     f.packet(
@@ -82,7 +96,8 @@ fn downloading_and_failed_views() {
 fn accepted(d: &std::path::Path, mods: Vec<bhmod_proto::ModInfo>, t: Instant) -> JoinFlow {
     let mut f = JoinFlow::new(cfg(d));
     f.contact(t);
-    let hello = ServerHello { proto: 1, mods_hash: [1; 32], client_required: true, count: mods.len() as u64 };
+    let hello =
+        ServerHello { proto: 1, mods_hash: [1; 32], client_required: true, count: mods.len() as u64, players: None };
     f.packet(&Message::ServerHello(hello).encode(), t);
     f.packet(&Message::ModList(ModList { mods, channels: vec![], registry: Default::default() }).encode(), t);
     f.decide(true, false, t);
