@@ -185,7 +185,8 @@ pub struct JoinFlow {
     joined: Option<Option<Hash>>,
     reject: Option<RejectText>,
     server_name: String,
-    /// Players online and the server's capacity, when the server says so (0xBC has no such field today).
+    /// Players online and the server's capacity set by hand ([`JoinFlow::set_players`]); the count the server put into
+    /// `SERVER_HELLO` is the fallback.
     players: Option<(u32, u32)>,
     /// What the session needs to start over on the same connection.
     opts: Options,
@@ -246,13 +247,14 @@ impl JoinFlow {
         }
     }
 
-    /// Players online and capacity, when the server told (shown in the address line).
+    /// Players online and capacity, when the server told (shown in the address line): what was set with
+    /// [`JoinFlow::set_players`], else the optional count of the server's `SERVER_HELLO`.
     pub fn players(&self) -> Option<(u32, u32)> {
-        self.players
+        self.players.or_else(|| self.session.players().map(|p| (p.online, p.capacity)))
     }
 
-    /// Records the server's player count. The 0xBC `SERVER_HELLO` carries none, so nothing calls this yet; the dialog
-    /// shows the count as soon as something does.
+    /// Overrides the server's player count (an older server's `SERVER_HELLO` carries none; the dialog shows what is
+    /// set here before the server's own).
     pub fn set_players(&mut self, online: u32, capacity: u32) {
         self.players = Some((online, capacity));
     }

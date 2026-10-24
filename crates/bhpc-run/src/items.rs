@@ -6,9 +6,10 @@
 //! on the game build whose function prologues match:
 //!
 //! - **Names.** The game builds an item's title with `NSStringFromItemType`, a static function the compiler
-//!   duplicated into twelve compile units ([`NAME_FUNCS`], offsets in `libApplication.so` of the 1.7.6 build; the
-//!   plural form calls it for every id above the vanilla ones). Each copy is replaced by a thunk that answers an
-//!   `NSString` for a mod item and runs the original for everything else.
+//!   duplicated into twelve compile units ([`NAME_FUNCS`], offsets in `libApplication.so` of the 1.7.6 build). The
+//!   plural form is a second static function, duplicated into ten units ([`PLURAL_FUNCS`]), that falls through to
+//!   the singular one for every id above the vanilla ones. Each copy of both is replaced by a thunk that answers an
+//!   `NSString` for a mod item (the mod's `plural` name, else its singular) and runs the original for everything else.
 //! - **Icons.** The inventory asks `imageTypeForItemType` (exported) for the atlas cell of an item. For a mod item it
 //!   answers a free cell of the item atlas (`Items.png`, [`bhmod_content::item_cell`]) and the mod's picture is
 //!   copied into that cell of the atlas texture on first use (`glTexSubImage2D`, then the mipmaps again). The atlas
@@ -34,6 +35,12 @@ const NAME_FUNCS: [u32; 12] = [
 ];
 /// The first two instructions of each copy (`sub sp, sp, #24; ldr r1, [pc, #0xffc]`).
 const NAME_PROLOGUE: [u32; 2] = [0xe24d_d018, 0xe59f_1ffc];
+/// The plural twin of `NSStringFromItemType` in the ten compile units that have one (same build).
+const PLURAL_FUNCS: [u32; 10] =
+    [0x4d_de3c, 0x4e_b9a4, 0x5e_267c, 0x6a_2b68, 0x71_bd10, 0x72_a15c, 0x75_81e4, 0xa8_4520, 0xb7_46b0, 0xce_f4b8];
+/// The first four instructions of each plural copy (`push {r11, lr}; mov r11, sp; sub sp, sp, #24; ldr r1, [pc,
+/// #0xfec]`).
+const PLURAL_PROLOGUE: [u32; 4] = [0xe92d_4800, 0xe1a0_b00d, 0xe24d_d018, 0xe59f_1fec];
 const VALID_FILL: &str = "_Z23itemTypeIsValidFillItem8ItemType";
 
 const TEXTURE_2D: u32 = 0xde1;
@@ -60,9 +67,13 @@ static ATLAS_WIDE: AtomicU32 = AtomicU32::new(0);
 static UPLOADED: AtomicU32 = AtomicU32::new(0);
 
 static NAMES: RwLock<Option<HashMap<u16, String>>> = RwLock::new(None);
-/// Retained `NSString`s made for the names (by item type).
+/// The plural names (by item type): the mod's plural, else its singular.
+static PLURALS: RwLock<Option<HashMap<u16, String>>> = RwLock::new(None);
+/// Retained `NSString`s made for the names and for the plural names (by item type).
 static STRINGS: Mutex<Option<HashMap<u16, u32>>> = Mutex::new(None);
+static PLURAL_STRINGS: Mutex<Option<HashMap<u16, u32>>> = Mutex::new(None);
 static ORIGS: [AtomicU32; 12] = [const { AtomicU32::new(0) }; 12];
+static PLURAL_ORIGS: [AtomicU32; 10] = [const { AtomicU32::new(0) }; 10];
 static VALID_ORIG: AtomicU32 = AtomicU32::new(0);
 static OBJC: Mutex<Option<Arc<Objc>>> = Mutex::new(None);
 static THUNKS: OnceLock<Vec<u32>> = OnceLock::new();
@@ -145,6 +156,11 @@ pub fn load(content: &mut Content, lang: &str) {
         .all()
         .filter_map(|i| Some((u16::try_from(i.id).ok()?, content.item_name(i.id, lang)?)))
         .collect();
+    let plurals: HashMap<u16, String> = content
+        .items()
+        .all()
+        .filter_map(|i| Some((u16::try_from(i.id).ok()?, content.item_plural(i.id, lang)?)))
+        .collect();
     if !names.is_empty() {
         log(&format!("{} item(s) loaded", names.len()));
     }
@@ -161,14 +177,18 @@ pub fn load(content: &mut Content, lang: &str) {
     *ICONS.lock().unwrap_or_else(PoisonError::into_inner) = icons;
     UPLOADED.store(0, Ordering::Relaxed);
     *NAMES.write().unwrap_or_else(PoisonError::into_inner) = Some(names);
+    *PLURALS.write().unwrap_or_else(PoisonError::into_inner) = Some(plurals);
     *STRINGS.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    *PLURAL_STRINGS.lock().unwrap_or_else(PoisonError::into_inner) = None;
 }
 
 /// The session ended.
 pub fn clear() {
     ICONS.lock().unwrap_or_else(PoisonError::into_inner).clear();
     *NAMES.write().unwrap_or_else(PoisonError::into_inner) = None;
+    *PLURALS.write().unwrap_or_else(PoisonError::into_inner) = None;
     *STRINGS.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    *PLURAL_STRINGS.lock().unwrap_or_else(PoisonError::into_inner) = None;
 }
 
 /// The game made a texture (`-[CPTexture2D initWithData:...]` is about to run on `obj`): remembers the item atlas.
@@ -187,6 +207,11 @@ fn has_items() -> bool {
 fn name_of(item: u32) -> Option<String> {
     let id = u16::try_from(item).ok()?;
     NAMES.read().unwrap_or_else(PoisonError::into_inner).as_ref()?.get(&id).cloned()
+}
+
+fn plural_of(item: u32) -> Option<String> {
+    let id = u16::try_from(item).ok()?;
+    PLURALS.read().unwrap_or_else(PoisonError::into_inner).as_ref()?.get(&id).cloned()
 }
 
 fn is_mod_item(item: u32) -> bool {
@@ -223,9 +248,16 @@ fn give_up(why: &str) {
 fn install(c: &mut Cpu, o: &Arc<Objc>) {
     let Some(n) = crate::native::get() else { return };
     let Some(base) = n.module_base("libApplication.so") else { return };
+    let words_at = |c: &mut Cpu, f: u32, n: u32| -> Vec<u32> {
+        (0..n).map(|i| c.mem().read_u32(base + f + 4 * i).unwrap_or(0)).collect()
+    };
     for f in NAME_FUNCS {
-        let words: Vec<u32> = (0..2).map(|i| c.mem().read_u32(base + f + 4 * i).unwrap_or(0)).collect();
-        if words != NAME_PROLOGUE {
+        if words_at(c, f, 2) != NAME_PROLOGUE {
+            return give_up("this is not the game build they know");
+        }
+    }
+    for f in PLURAL_FUNCS {
+        if words_at(c, f, 4) != PLURAL_PROLOGUE {
             return give_up("this is not the game build they know");
         }
     }
@@ -237,6 +269,10 @@ fn install(c: &mut Cpu, o: &Arc<Objc>) {
                 c.register_shared_thunk(&format!("bhmod:item_name_{i}"), Arc::new(f)).unwrap_or(0)
             })
             .collect();
+        v.extend((0..PLURAL_FUNCS.len()).map(|i| {
+            let f = move |c: &mut Cpu| item_plural(c, i);
+            c.register_shared_thunk(&format!("bhmod:item_plural_{i}"), Arc::new(f)).unwrap_or(0)
+        }));
         v.push(c.register_shared_thunk("bhmod:item_valid", Arc::new(item_valid)).unwrap_or(0));
         v
     });
@@ -252,7 +288,16 @@ fn install(c: &mut Cpu, o: &Arc<Objc>) {
             }
         }
     }
-    match n.hook_internal_as(c, OWNER, VALID_FILL, thunks[NAME_FUNCS.len()]) {
+    for (i, f) in PLURAL_FUNCS.iter().enumerate() {
+        match n.hook_internal_at(c, OWNER, "libApplication.so", *f, thunks[NAME_FUNCS.len() + i]) {
+            Ok(orig) => PLURAL_ORIGS[i].store(orig, Ordering::Relaxed),
+            Err(e) => {
+                n.unhook_owner(c, OWNER);
+                return give_up(&e);
+            }
+        }
+    }
+    match n.hook_internal_as(c, OWNER, VALID_FILL, thunks[NAME_FUNCS.len() + PLURAL_FUNCS.len()]) {
         Ok(orig) => VALID_ORIG.store(orig, Ordering::Relaxed),
         Err(e) => {
             n.unhook_owner(c, OWNER);
@@ -273,36 +318,49 @@ fn install(c: &mut Cpu, o: &Arc<Objc>) {
         None => log("mod item icons are off: the GL functions were not found"),
     }
     STATE.store(ON, Ordering::Relaxed);
-    log("hooks installed (names, item validity)");
+    log("hooks installed (names, plural names, item validity)");
+}
+
+/// The retained `NSString` for `text`, made once per item type in `cache`; 0 when it could not be made.
+fn name_string(c: &mut Cpu, cache: &Mutex<Option<HashMap<u16, u32>>>, id: u16, text: &str) -> u32 {
+    let known = cache.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|m| m.get(&id).copied());
+    known.unwrap_or_else(|| {
+        let o = OBJC.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let made = o.map_or(0, |o| {
+            let s = o.new_string(c, text);
+            o.send(c, s, "retain", &[])
+        });
+        if made != 0 {
+            cache.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(HashMap::new).insert(id, made);
+        }
+        made
+    })
 }
 
 /// Replacement of `NSStringFromItemType(ItemType) -> NSString *` (copy `i`).
 fn item_name(c: &mut Cpu, i: usize) {
     let item = c.reg(0);
     if let Some(text) = name_of(item) {
-        let id = item as u16;
-        let known = STRINGS.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|m| m.get(&id).copied());
-        let obj = known.unwrap_or_else(|| {
-            let o = OBJC.lock().unwrap_or_else(PoisonError::into_inner).clone();
-            let made = o.map_or(0, |o| {
-                let s = o.new_string(c, &text);
-                o.send(c, s, "retain", &[])
-            });
-            if made != 0 {
-                STRINGS
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .get_or_insert_with(HashMap::new)
-                    .insert(id, made);
-            }
-            made
-        });
+        let obj = name_string(c, &STRINGS, item as u16, &text);
         if obj != 0 {
             c.ret_u32(obj);
             return;
         }
     }
     c.tail_call(ORIGS[i].load(Ordering::Relaxed));
+}
+
+/// Replacement of the plural twin of `NSStringFromItemType` (copy `i`): the mod's plural name for a mod item.
+fn item_plural(c: &mut Cpu, i: usize) {
+    let item = c.reg(0);
+    if let Some(text) = plural_of(item) {
+        let obj = name_string(c, &PLURAL_STRINGS, item as u16, &text);
+        if obj != 0 {
+            c.ret_u32(obj);
+            return;
+        }
+    }
+    c.tail_call(PLURAL_ORIGS[i].load(Ordering::Relaxed));
 }
 
 /// Replacement of `itemTypeIsValidFillItem(ItemType) -> bool`.
