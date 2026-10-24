@@ -692,6 +692,11 @@ fn sync_join(sh: &Shared) {
 }
 
 /// Starts the session's mods at the first update of a world, then fires `tick`.
+/// The world the game updated last (0: none yet).
+pub(crate) fn current_world() -> u32 {
+    MAIN.with(|m| m.borrow().world)
+}
+
 fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, world: u32, c: &mut Cpu) {
     crate::modevents::next_frame();
     MAIN.with(|m| {

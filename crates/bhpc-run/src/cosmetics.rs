@@ -32,7 +32,9 @@ use crate::modglue::Objc;
 use crate::objchook::{ObjcHooks, Target};
 
 /// Guest addresses of the ivar offset variables (`OBJC_IVAR_$_Class.name`) the hooks read and write.
-const IVARS: [(&str, &str); 13] = [
+const IVARS: [(&str, &str); 15] = [
+    ("DynamicObject", "pos"),
+    ("World", "macroTiles"),
     ("Blockhead", "inventoryItems"),
     ("Blockhead", "clientID"),
     ("DynamicObject", "isNet"),
@@ -68,7 +70,7 @@ impl Ivars {
     }
 
     /// The offset of an ivar: `Class.name`, or just `name` for the ones of `Blockhead` and `DynamicObject`.
-    fn offset(&self, c: &mut Cpu, name: &str) -> u32 {
+    pub(crate) fn offset(&self, c: &mut Cpu, name: &str) -> u32 {
         let a = [name.to_string(), format!("Blockhead.{name}"), format!("DynamicObject.{name}")]
             .iter()
             .find_map(|k| self.addr.get(k.as_str()).copied());
@@ -146,7 +148,7 @@ pub fn load(dir: &std::path::Path, server_registry: &Wire) {
             wire = bhmod_content::client::local_registry(&packages);
         }
         let dev_items = crate::items::dev_from_env();
-        if wire.is_empty() && !dev_items.is_empty() {
+        if wire.is_empty() && (!dev_items.is_empty() || crate::blocks::dev_key().is_some()) {
             wire = bhmod_content::client::local_registry(&packages);
         }
         let problems = s.content.load(&wire, &packages);
@@ -168,6 +170,7 @@ pub fn load(dir: &std::path::Path, server_registry: &Wire) {
         }
         crate::items::load(&mut s.content, &crate::items::language());
         crate::blocks::load(&mut s.content);
+        crate::blocks::load_dev(&s.content, crate::blocks::dev_key().as_deref());
     });
 }
 
@@ -626,6 +629,7 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
             let bh = inv.receiver();
             let net = is_net(inv.cpu(), &ii, bh);
             crate::items::dev_give(&oo, inv.cpu(), bh, net);
+            crate::blocks::dev_place(&oo, inv.cpu(), &ii, bh, net);
         }
         if !on_main() || !active() {
             return;
