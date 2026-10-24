@@ -196,7 +196,7 @@ fn is_mod_item(item: u32) -> bool {
 }
 
 /// Installs or removes the hooks as items are loaded (once per frame on the main thread).
-pub fn sync(c: &mut Cpu, o: &Arc<Objc>) {
+pub(crate) fn sync(c: &mut Cpu, o: &Arc<Objc>) {
     match (has_items(), STATE.load(Ordering::Relaxed)) {
         (true, OFF) => install(c, o),
         (false, ON) => remove(c),
