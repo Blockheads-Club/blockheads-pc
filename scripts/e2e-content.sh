@@ -53,7 +53,9 @@ cleanup() {
   [[ "${KEEP:-0}" == 1 ]] || rm -rf "$run"
 }
 trap cleanup EXIT
-port=$((15190 + RANDOM % 60))
+port=${BHPC_E2E_PORT:-$((15190 + RANDOM % 60))}
+# Variant blocks are off in the server by default (ModsConfig.variant_blocks).
+export BLOCKHEADS_MODS_VARIANT_BLOCKS=1
 
 # A server on $port with the mods in $1 (an empty folder: vanilla). Its stdin stays open (EOF stops it).
 start_server() {
@@ -136,7 +138,7 @@ examples="${BHMOD_EXAMPLES:-$PWD/../mod-sdk-wt/items/examples}"
 mkdir -p "$run/mods"
 cp -r "$examples/decor-items" "$run/mods/decor-items"
 
-# Join, accept the mods, enter the world, skip the welcome notice and the tutorial (as e2e-mods.sh), wait for the
+# Join, accept the mods, enter the world, skip the welcome notice, tap the portal (512,400, about 20 s after the join) and WARP IN (512,588): without that no blockhead exists. Then skip the tutorial (as e2e-mods.sh), wait for the
 # items to be dropped (/decor lamp 3, /decor plaque 2 said in the chat), shoot the world, open the inventory.
 cat > "$run/items.script" << 'EOF'
 0     clicktext Allow
@@ -163,13 +165,25 @@ cat > "$run/items.script" << 'EOF'
 EOF
 echo "e2e-content: server with decor-items (port $port)"
 start_server "$run/mods" modded
-say="${SAY:-/decor lamp 3|/decor plaque 2}" game modded "$run/items.script" --join "127.0.0.1:$port"
+say="${SAY:-/decor lamp 3|/decor plaque 2|/warm}" game modded "$run/items.script" --join "127.0.0.1:$port"
 c="$run/modded.err"
 s="$run/modded.log"
 expect "$c" "sending the 0x1f with bhcModLoader" "accepted the mods"
 expect "$c" "[items] 2 item(s) loaded" "the client knows the mod items"
 expect "$c" "[items] hooks installed" "name and validity hooks installed"
 expect "$s" "Player Connected" "the server approved the join"
+# Needs the player's blockhead in the server's world: the script warps one in (portal tap + WARP IN above) and the
+# server finds it by the player's client id. BHPC_E2E_BLOCKHEAD=1 makes these checks hard (the PC client's blockhead
+# creation reaching the server is still being investigated, see notes/resume/m8-content.md).
+if [[ "${BHPC_E2E_BLOCKHEAD:-0}" == 1 ]]; then
+  if grep -q "has no blockhead\|Stand somewhere first" "$s"; then
+    echo "  FAILED: the server has no blockhead for the player (give-item / place-block need one)" >&2
+    fail=1
+  else
+    echo "  ok: give-item and place-block found the player's blockhead"
+  fi
+  expect "$c" "first variant tile" "the variant block was drawn with the mod texture"
+fi
 for shot in prompt inworld hud dropped inventory; do
   [[ -s "$run/shots-modded/$shot.png" ]] && echo "  ok: screenshot $shot" || { echo "  FAILED: no $shot.png" >&2; fail=1; }
 done
