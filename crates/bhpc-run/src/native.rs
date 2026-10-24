@@ -292,7 +292,7 @@ impl Natives {
     }
 
     /// Undoes the hooks of [`Natives::hook_internal`].
-pub fn unhook_internal(&self, cpu: &mut Cpu) {
+    pub fn unhook_internal(&self, cpu: &mut Cpu) {
         self.unhook_owner(cpu, INTERNAL);
     }
 

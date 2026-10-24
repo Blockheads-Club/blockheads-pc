@@ -190,9 +190,9 @@ fn name_of(item: u32) -> Option<String> {
 }
 
 fn is_mod_item(item: u32) -> bool {
-    u16::try_from(item)
-        .ok()
-        .is_some_and(|id| NAMES.read().unwrap_or_else(PoisonError::into_inner).as_ref().is_some_and(|n| n.contains_key(&id)))
+    u16::try_from(item).ok().is_some_and(|id| {
+        NAMES.read().unwrap_or_else(PoisonError::into_inner).as_ref().is_some_and(|n| n.contains_key(&id))
+    })
 }
 
 /// Installs or removes the hooks as items are loaded (once per frame on the main thread).
@@ -289,7 +289,11 @@ fn item_name(c: &mut Cpu, i: usize) {
                 o.send(c, s, "retain", &[])
             });
             if made != 0 {
-                STRINGS.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(HashMap::new).insert(id, made);
+                STRINGS
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get_or_insert_with(HashMap::new)
+                    .insert(id, made);
             }
             made
         });
@@ -347,13 +351,18 @@ fn upload(c: &mut Cpu) {
     let size = wide / bhmod_content::items::ATLAS_COLUMNS;
     let before = {
         let ok = c.call(gl.get_int, &[TEXTURE_BINDING_2D, gl.scratch]).is_ok();
-        if ok { c.mem().read_u32(gl.scratch).unwrap_or(0) } else { 0 }
+        if ok {
+            c.mem().read_u32(gl.scratch).unwrap_or(0)
+        } else {
+            0
+        }
     };
     let _ = c.call(gl.bind, &[TEXTURE_2D, name]);
     let icons = ICONS.lock().unwrap_or_else(PoisonError::into_inner);
     for (cell, hd, sd) in icons.iter() {
         let px = if size == 64 { hd } else { sd };
-        let (x, y) = ((cell % bhmod_content::items::ATLAS_COLUMNS) * size, (cell / bhmod_content::items::ATLAS_COLUMNS) * size);
+        let (x, y) =
+            ((cell % bhmod_content::items::ATLAS_COLUMNS) * size, (cell / bhmod_content::items::ATLAS_COLUMNS) * size);
         if c.mem().write_bytes(gl.scratch, px).is_err() {
             continue;
         }

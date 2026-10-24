@@ -14,13 +14,13 @@ pub mod framestats;
 pub mod gamespeed;
 pub mod gameui;
 pub mod input;
+#[cfg(feature = "play")]
+pub mod items;
 pub mod mainq;
 pub mod mktimer;
 pub mod mmapio;
 #[cfg(feature = "play")]
 pub mod modevents;
-#[cfg(feature = "play")]
-pub mod items;
 #[cfg(feature = "play")]
 pub mod modglue;
 pub mod music;
