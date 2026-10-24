@@ -181,6 +181,7 @@ fn status_line_is_json() {
         state: "running",
         reason: None,
         usage: Usage::default(),
+        timings: crate::tests_ui::timings("echo", &[]),
     };
     let line = status_line(&[(s, "server")]);
     assert!(line.starts_with("@mods [{\"id\":\"echo\""), "{line}");

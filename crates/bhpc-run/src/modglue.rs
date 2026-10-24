@@ -369,6 +369,7 @@ impl ModGlue {
                         UiCmd::Dismiss
                         | UiCmd::UpdateLater
                         | UiCmd::Reload
+                        | UiCmd::ResetTimings
                         | UiCmd::Cancel
                         | UiCmd::Copy(_)
                         | UiCmd::Say(_) => {}
@@ -390,7 +391,11 @@ impl ModGlue {
                 }
                 UiCmd::Dismiss => self.dismiss(c),
                 UiCmd::Retry => log("trying the download again"),
-                UiCmd::Reload => reload(&self.opts, &self.shared, c),
+                UiCmd::Reload => reload(&self.opts, &self.shared),
+                UiCmd::ResetTimings => {
+                    MAIN.with(|m| m.borrow_mut().host.as_mut().map(|h| h.reset_timings(None)));
+                    publish(&self.shared, true);
+                }
                 UiCmd::Cancel => {
                     log("download cancelled by the player");
                     let conn = MAIN.with(|m| {
@@ -720,22 +725,33 @@ fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, world: u32, c: &mut C
     apply_effects(o, c);
 }
 
-fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
-    let (server, conn) = MAIN.with(|m| {
+/// The server this session belongs to and the mods it sent (`None`: single-player).
+fn session_server() -> Option<(String, Vec<Accepted>)> {
+    MAIN.with(|m| {
         let m = m.borrow();
         let joined = m.flow.as_ref().is_some_and(|f| matches!(f.stage(), Stage::Joined | Stage::Vanilla));
         let server = if joined { m.flow.as_ref().map(|f| f.server_name().to_string()) } else { None };
         // Kept for a developer reload of the same session.
         let accepted = m.accepted.clone().unwrap_or_default();
-        (server.map(|s| (s, accepted)), m.conn)
-    });
-    let registry = MAIN.with(|m| m.borrow().flow.as_ref().map(|f| f.registry().clone()).unwrap_or_default());
-    let dirs = ModsDirs::new(&opts.data_dir);
-    let plan = Plan {
+        server.map(|s| (s, accepted))
+    })
+}
+
+/// What goes into the session folder: the player's mods, the developer folders and the mods the server sent.
+fn session_plan(opts: &ModsOptions, dirs: &ModsDirs, server: &Option<(String, Vec<Accepted>)>) -> Plan {
+    Plan {
         own: Some(dirs.mods.clone()),
         dev: opts.dev.clone(),
         server: server.as_ref().map(|(_, a)| a.clone()).unwrap_or_default(),
-    };
+    }
+}
+
+fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
+    let server = session_server();
+    let conn = MAIN.with(|m| m.borrow().conn);
+    let registry = MAIN.with(|m| m.borrow().flow.as_ref().map(|f| f.registry().clone()).unwrap_or_default());
+    let dirs = ModsDirs::new(&opts.data_dir);
+    let plan = session_plan(opts, &dirs, &server);
     let dir = dirs.cache.join("session");
     let (placed, problems) = match session::build(&dir, &plan) {
         Ok(r) => r,
@@ -866,12 +882,36 @@ fn stop_session(sh: &Shared, why: &str, keep_join: bool, c: &mut Cpu) {
     }
 }
 
-/// Developer reload: the session's mods are stopped and loaded again from their folders.
-fn reload(opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
-    let _ = opts;
-    stop_session(sh, "reload", true, c);
-    // The next world update starts it again (with the same server mods).
-    log("reloading mods at the next world update");
+/// Developer reload (F5, the launcher's live reload): the session folder is built again from the same plan and the
+/// host restarts the mods whose package changed, without leaving the world. The other mods keep running with their
+/// state; cosmetics, items and native libraries are those of the session start.
+fn reload(opts: &ModsOptions, sh: &Shared) {
+    if MAIN.with(|m| m.borrow().host.is_none()) {
+        log("no mods run in this game");
+        return;
+    }
+    let dirs = ModsDirs::new(&opts.data_dir);
+    let plan = session_plan(opts, &dirs, &session_server());
+    let placed = match session::build(&dirs.cache.join("session"), &plan) {
+        Ok((placed, problems)) => {
+            problems.iter().for_each(|p| log(p));
+            placed
+        }
+        Err(e) => {
+            log(&format!("cannot prepare the session's mods: {e}"));
+            return;
+        }
+    };
+    let changes = MAIN.with(|m| {
+        let mut m = m.borrow_mut();
+        m.placed = placed;
+        m.host.as_mut().map(|h| h.reload(None)).unwrap_or_default()
+    });
+    if changes.is_empty() {
+        log("reload: no mod changed");
+    }
+    changes.iter().for_each(|l| log(&format!("reload: {l}")));
+    publish(sh, true);
 }
 
 fn log_line(l: &bhpc_mods::host::LogLine) {

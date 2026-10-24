@@ -255,6 +255,10 @@ pub enum Hit {
     /// Copy the details of a failed file check.
     Copy,
     ClosePanel,
+    /// The panel's lower part: the log, or the time accounting.
+    ToggleTimings,
+    /// Clear the time accounting.
+    ResetTimings,
 }
 
 /// Window input the UI may take.
@@ -276,6 +280,8 @@ pub const HID_Y: u32 = 28;
 pub const HID_DOWN: u32 = 81;
 pub const HID_UP: u32 = 82;
 pub const HID_F5: u32 = 62;
+pub const HID_T: u32 = 23;
+pub const HID_R: u32 = 21;
 
 /// Byte sizes for people.
 pub fn size_text(b: u64) -> String {
@@ -286,13 +292,15 @@ pub fn size_text(b: u64) -> String {
     }
 }
 
-/// The last picture: view serial, size, panel open, native box ticked, focused item, pixels.
-type Drawn = (u64, (u32, u32), bool, bool, usize, Arc<Vec<u8>>);
+/// The last picture: view serial, size, (panel open, timings shown), native box ticked, focused item, pixels.
+type Drawn = (u64, (u32, u32), (bool, bool), bool, usize, Arc<Vec<u8>>);
 
 /// The mod UI's own state (what is open, the native confirmation, the clickable areas of the last picture).
 #[derive(Default)]
 pub struct ModUi {
     pub panel: bool,
+    /// The panel shows the time accounting instead of the log.
+    pub timings: bool,
     pub native_ok: bool,
     /// The focused item of the join prompt (see [`join::focusables`]).
     focus: usize,
@@ -346,6 +354,11 @@ impl ModUi {
                 self.panel = false;
                 None
             }
+            Hit::ToggleTimings => {
+                self.timings = !self.timings;
+                None
+            }
+            Hit::ResetTimings => Some(UiCmd::ResetTimings),
         }
     }
 
@@ -390,6 +403,8 @@ impl ModUi {
                 self.panel = false;
                 (true, None)
             }
+            UiInput::Key(HID_T) => (true, self.act(Hit::ToggleTimings, v)),
+            UiInput::Key(HID_R) if self.timings => (true, self.act(Hit::ResetTimings, v)),
             UiInput::Click(x, y) => {
                 let hit = self.hits.iter().find(|(r, _)| r.contains(x, y)).map(|(_, h)| *h);
                 (true, hit.and_then(|h| self.act(h, v)))
@@ -407,7 +422,12 @@ impl ModUi {
             return None;
         }
         if let Some((s, size, p, n, f, px)) = &self.last {
-            if *s == serial && *size == (w, h) && *p == self.panel && *n == self.native_ok && *f == self.focus {
+            if *s == serial
+                && *size == (w, h)
+                && *p == (self.panel, self.timings)
+                && *n == self.native_ok
+                && *f == self.focus
+            {
                 return Some(px.clone());
             }
         }
@@ -421,7 +441,7 @@ impl ModUi {
         }
         toasts(&mut c, u, v);
         let px = Arc::new(c.px);
-        self.last = Some((serial, (w, h), self.panel, self.native_ok, self.focus, px.clone()));
+        self.last = Some((serial, (w, h), (self.panel, self.timings), self.native_ok, self.focus, px.clone()));
         Some(px)
     }
 
@@ -494,43 +514,105 @@ impl ModUi {
             c.text(Face::Body, small, bx as f32, (y + 12 * u) as f32, TEXT3, &usage);
             y += 25 * u;
         }
-        // The log (newest last), in the space left.
+        // The log (newest last) or the time accounting, in the space left.
         let foot = r.y + r.h - 12 * u;
         let lr = Rect { x, y: y + 2 * u, w: iw, h: (foot - y - 4 * u).max(0) };
         if lr.h > 12 * u {
             c.bevel(lr, u, WELL, INK);
             let line_h = 6 * u;
             let fit = ((lr.h - 4 * u) / line_h).max(0) as usize;
-            let start = v.log.len().saturating_sub(fit);
+            let rows: Vec<(Rgb, String)> = if self.timings { timing_rows(v) } else { log_rows(v) };
+            let start = if self.timings { 0 } else { rows.len().saturating_sub(fit) };
             let mut ly = lr.y + 2 * u;
-            for l in &v.log[start..] {
-                let rgb = match l.level {
-                    "error" => 0xFFB4A6,
-                    "warn" => 0xFFDE85,
-                    _ => TEXT2,
-                };
-                let who = l.mod_id.as_deref().map(|m| format!("{m}: ")).unwrap_or_default();
-                let mut text = format!("{who}{}", l.text);
-                while text.chars().count() > 4 && measure(Face::Body, 4.6 * u as f32, &text) > (lr.w - 6 * u) as f32 {
-                    text = text.chars().take(text.chars().count() - 4).collect::<String>() + "…";
-                }
-                c.text(Face::Body, 4.6 * u as f32, (lr.x + 3 * u) as f32, ly as f32, rgb, &text);
+            for (rgb, text) in rows[start..].iter().take(fit) {
+                let text = cut(u, text, lr.w - 6 * u);
+                c.text(Face::Body, 4.6 * u as f32, (lr.x + 3 * u) as f32, ly as f32, *rgb, &text);
                 ly += line_h;
             }
         }
-        c.text(
-            Face::Body,
-            small,
-            x as f32,
-            (foot + 2 * u) as f32,
-            TEXT3,
-            if v.dev {
-                "F9 or Esc closes · F5 reloads folder mods"
-            } else {
-                "F9 or Esc closes · turning mods on or off is in the launcher"
-            },
-        );
+        let hint = match (self.timings, v.dev) {
+            (true, _) => "F9 closes · T shows the log · R resets",
+            (false, true) => "F9 closes · F5 reloads folder mods · T shows times",
+            (false, false) => "F9 closes · T shows times",
+        };
+        c.text(Face::Body, small, x as f32, (foot + 2 * u) as f32, TEXT3, hint);
+        // Clickable twins of the keys, on the right.
+        let mut bx = r.x + r.w - 4 * u;
+        let mut buttons = vec![(if self.timings { "Log" } else { "Times" }, Hit::ToggleTimings)];
+        if self.timings {
+            buttons.push(("Reset", Hit::ResetTimings));
+        }
+        for (label, hit) in buttons {
+            let w = measure(Face::Bold, small, label) as i32 + 6 * u;
+            let b = Rect { x: bx - w, y: foot - u, w, h: 10 * u };
+            c.bevel(b, u, BTN[..3].try_into().expect("3"), INK);
+            c.text(Face::Bold, small, (b.x + 3 * u) as f32, (b.y + 2 * u) as f32, TEXT, label);
+            self.hits.push((b, hit));
+            bx = b.x - 2 * u;
+        }
     }
+}
+
+/// The log lines of the panel, newest last.
+fn log_rows(v: &View) -> Vec<(Rgb, String)> {
+    v.log
+        .iter()
+        .map(|l| {
+            let rgb = match l.level {
+                "error" => 0xFFB4A6,
+                "warn" => 0xFFDE85,
+                _ => TEXT2,
+            };
+            let who = l.mod_id.as_deref().map(|m| format!("{m}: ")).unwrap_or_default();
+            (rgb, format!("{who}{}", l.text))
+        })
+        .collect()
+}
+
+fn ms(d: std::time::Duration) -> String {
+    format!("{:.2}", d.as_secs_f64() * 1000.0)
+}
+
+/// The time accounting of the panel: a line per mod, then a line per handler kind that was called.
+fn timing_rows(v: &View) -> Vec<(Rgb, String)> {
+    let mut rows = Vec::new();
+    for (m, _) in &v.mods {
+        let t = &m.timings;
+        let rgb = if t.strikes_total > 0 { 0xFFDE85 } else { TEXT };
+        rows.push((
+            rgb,
+            format!(
+                "{} · {} calls · {} ms in {} s · {} over budget · strikes {} ({} total)",
+                m.id,
+                t.calls(),
+                ms(t.total()),
+                t.window.as_secs(),
+                t.budget_hits(),
+                t.strikes,
+                t.strikes_total
+            ),
+        ));
+        for k in &t.kinds {
+            let name = k.kind.map_or("", bhmod_core::timings::HandlerKind::name);
+            rows.push((
+                TEXT2,
+                format!("    {name}: {} · avg {} · max {} · total {} ms", k.calls, ms(k.avg()), ms(k.max), ms(k.total)),
+            ));
+        }
+    }
+    if rows.is_empty() {
+        rows.push((TEXT2, "No mods run in this game.".to_string()));
+    }
+    rows
+}
+
+/// `text` cut with an ellipsis to fit `width` pixels.
+fn cut(u: i32, text: &str, width: i32) -> String {
+    let mut text = text.to_string();
+    while text.chars().count() > 4 && measure(Face::Body, 4.6 * u as f32, &text) > width as f32 {
+        text = text.chars().take(text.chars().count() - 4).collect::<String>() + "…";
+    }
+    text
 }
 
 fn toasts(c: &mut Canvas, u: i32, v: &View) {

@@ -1,5 +1,9 @@
 use std::time::Instant;
 
+use std::time::Duration;
+
+use bhmod_core::timings::{HandlerKind, KindStats, ModTimings};
+
 use crate::host::{LogLine, ModStatus, Usage};
 use crate::ui::*;
 use crate::view::{Fail, FailKind, JoinMod, JoinStage, JoinView, UiCmd, View};
@@ -280,8 +284,38 @@ fn a_crowded_prompt_is_cut_to_the_window() {
     dump("prompt-tiny", 320, 200, &px);
 }
 
+/// The time accounting of a mod: the kinds are `(kind, calls, total ms, max ms)`.
+pub(crate) fn timings(id: &str, kinds: &[(HandlerKind, u64, u64, u64)]) -> ModTimings {
+    ModTimings {
+        id: id.into(),
+        state: "enabled".into(),
+        window: Duration::from_secs(60),
+        kinds: kinds
+            .iter()
+            .map(|&(kind, calls, total, max)| KindStats {
+                kind: Some(kind),
+                calls,
+                total: Duration::from_millis(total),
+                max: Duration::from_millis(max),
+                soft_hits: 1,
+                timeouts: 0,
+                errors: 0,
+            })
+            .collect(),
+        strikes: 0,
+        strikes_total: 0,
+    }
+}
+
 fn status(id: &str, state: &'static str) -> ModStatus {
-    ModStatus { id: id.into(), version: "1.0.0".into(), state, reason: None, usage: Usage::default() }
+    ModStatus {
+        id: id.into(),
+        version: "1.0.0".into(),
+        state,
+        reason: None,
+        usage: Usage::default(),
+        timings: timings(id, &[]),
+    }
 }
 
 #[test]
@@ -343,6 +377,45 @@ fn mods_panel_and_toasts() {
     let px = ui.render(&v, 3, 640, 360).unwrap();
     dump("toast-small", 640, 360, &px);
     assert!(!ui.modal(&v));
+}
+
+#[test]
+fn the_panel_shows_the_time_accounting() {
+    use crate::ui::{HID_R, HID_T};
+    let mut ui = ModUi::new();
+    let mut v = View::default();
+    // Without the panel the keys belong to the game.
+    assert_eq!(ui.input(UiInput::Key(HID_T), &v), (false, None));
+    ui.input(UiInput::Key(HID_F9), &v);
+    // R only resets while the times are shown.
+    assert_eq!(ui.input(UiInput::Key(HID_R), &v), (true, None));
+    render(&mut ui, &v, 1, "panel-log-empty");
+    v.mods = vec![(status("echo", "running"), "server"), (status("busy", "running"), "mine")];
+    v.mods[1].0.timings = timings(
+        "busy",
+        &[(HandlerKind::Event, 120, 30, 4), (HandlerKind::Command, 2, 9, 7), (HandlerKind::Task, 40, 2, 1)],
+    );
+    v.mods[1].0.timings.strikes_total = 2;
+    v.mods[1].0.timings.strikes = 1;
+    let log_picture = render(&mut ui, &v, 2, "panel-log");
+    // T (or the button) switches to the times, and back.
+    assert_eq!(ui.input(UiInput::Key(HID_T), &v), (true, None));
+    assert!(ui.timings);
+    let times_picture = render(&mut ui, &v, 2, "panel-times");
+    assert_ne!(log_picture, times_picture);
+    assert!(ui.hits_for_tests().iter().any(|(_, h)| *h == Hit::ResetTimings));
+    assert_eq!(ui.input(UiInput::Key(HID_R), &v), (true, Some(UiCmd::ResetTimings)));
+    assert_eq!(click(&mut ui, &v, Hit::ResetTimings), (true, Some(UiCmd::ResetTimings)));
+    assert_eq!(click(&mut ui, &v, Hit::ToggleTimings), (true, None));
+    assert!(!ui.timings);
+    render(&mut ui, &v, 2, "panel-log-again");
+    assert!(ui.hits_for_tests().iter().all(|(_, h)| *h != Hit::ResetTimings));
+    // The developer's hint, and no mods at all in the time view.
+    v.dev = true;
+    render(&mut ui, &v, 3, "panel-log-dev");
+    ui.input(UiInput::Key(HID_T), &v);
+    v.mods.clear();
+    render(&mut ui, &v, 4, "panel-times-empty");
 }
 
 #[test]

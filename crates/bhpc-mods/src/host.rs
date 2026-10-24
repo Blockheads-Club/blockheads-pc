@@ -13,19 +13,19 @@
 //! client. Not on a client: `player-pre-login` (server only).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use bhmod_core::remote::{RemoteCall, RemoteError, RemoteTarget};
-use bhmod_core::runtime::{CommandId, InstanceLimits, ModFiles, SubscriptionId, TaskId};
 use bhmod_core::storage::FileStorage;
+use bhmod_core::timings::ModTimings;
 use bhmod_core::types::{
-    ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandOutcome, CommandSender, Event, LogLevel, ObjectKind,
-    Outcome, Pos, Role, SavePhase, Side,
+    ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandSender, Event, LogLevel, ObjectKind, Pos, Role,
+    SavePhase, Side,
 };
-use bhmod_core::{CallError, GameBridge, HostApi, HostOptions, Instance, ModHost, ModState, Runtime};
+use bhmod_core::{GameBridge, HostOptions, ModHost, ModState, ReloadOutcome, Runtime};
 use bhmod_proto::{ServiceCall, ServiceFailure, ServiceResult};
 
 /// Longest kept log.
@@ -66,112 +66,25 @@ fn level_name(l: LogLevel) -> &'static str {
     }
 }
 
-/// Time used by one mod.
+/// Time used by one mod, summed up from the host's time accounting ([`bhmod_core::timings`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Usage {
-    /// Over the last whole second.
+    /// Mod time per second, averaged over the accounting window (60 s).
     pub ms_last_second: f64,
-    /// Longest single call.
+    /// Longest single call in the window.
     pub peak_ms: f64,
-    /// Calls so far.
+    /// Calls in the window.
     pub calls: u64,
-    window: Duration,
-    window_start: Option<Instant>,
 }
 
-#[derive(Default)]
-pub(crate) struct Timing {
-    by_mod: RefCell<BTreeMap<String, Usage>>,
-}
-
-impl Timing {
-    fn add(&self, id: &str, start: Instant, took: Duration) {
-        let mut all = self.by_mod.borrow_mut();
-        let u = all.entry(id.to_string()).or_default();
-        let ws = *u.window_start.get_or_insert(start);
-        if start >= ws + Duration::from_secs(1) {
-            u.ms_last_second = u.window.as_secs_f64() * 1000.0;
-            u.window = Duration::ZERO;
-            u.window_start = Some(start);
+impl Usage {
+    fn of(t: &ModTimings) -> Usage {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        Usage {
+            ms_last_second: ms(t.total()) / t.window.as_secs_f64().max(1.0),
+            peak_ms: ms(t.kinds.iter().map(|k| k.max).max().unwrap_or_default()),
+            calls: t.calls(),
         }
-        u.window += took;
-        u.calls += 1;
-        u.peak_ms = u.peak_ms.max(took.as_secs_f64() * 1000.0);
-    }
-}
-
-/// A runtime whose instances report their time to [`Timing`].
-pub(crate) struct Timed {
-    inner: Box<dyn Runtime>,
-    timing: Rc<Timing>,
-}
-
-impl Runtime for Timed {
-    fn kind(&self) -> bhmod_manifest::manifest::Runtime {
-        self.inner.kind()
-    }
-
-    fn instantiate(&self, mod_id: &str, files: &ModFiles, limits: InstanceLimits) -> Result<Box<dyn Instance>, String> {
-        let inner = self.inner.instantiate(mod_id, files, limits)?;
-        Ok(Box::new(TimedInstance { id: mod_id.to_string(), inner, timing: self.timing.clone() }))
-    }
-}
-
-struct TimedInstance {
-    id: String,
-    inner: Box<dyn Instance>,
-    timing: Rc<Timing>,
-}
-
-impl TimedInstance {
-    fn timed<R>(&mut self, f: impl FnOnce(&mut dyn Instance) -> R) -> R {
-        let start = Instant::now();
-        let r = f(self.inner.as_mut());
-        self.timing.add(&self.id, start, start.elapsed());
-        r
-    }
-}
-
-impl Instance for TimedInstance {
-    fn on_enable(&mut self, host: &mut dyn HostApi) -> Result<(), CallError> {
-        self.timed(|i| i.on_enable(host))
-    }
-    fn on_disable(&mut self, host: &mut dyn HostApi) -> Result<(), CallError> {
-        self.timed(|i| i.on_disable(host))
-    }
-    fn handle_event(&mut self, host: &mut dyn HostApi, sub: SubscriptionId, ev: &Event) -> Result<Outcome, CallError> {
-        self.timed(|i| i.handle_event(host, sub, ev))
-    }
-    fn run_command(
-        &mut self,
-        host: &mut dyn HostApi,
-        id: CommandId,
-        sender: &CommandSender,
-        label: &str,
-        args: &[String],
-    ) -> Result<CommandOutcome, CallError> {
-        self.timed(|i| i.run_command(host, id, sender, label, args))
-    }
-    fn run_task(&mut self, host: &mut dyn HostApi, id: TaskId) -> Result<(), CallError> {
-        self.timed(|i| i.run_task(host, id))
-    }
-    fn call_service(
-        &mut self,
-        host: &mut dyn HostApi,
-        name: &str,
-        method: &str,
-        args: &[u8],
-    ) -> Result<Vec<u8>, CallError> {
-        self.timed(|i| i.call_service(host, name, method, args))
-    }
-    fn on_channel_message(
-        &mut self,
-        host: &mut dyn HostApi,
-        channel: bhmod_core::channels::ChannelId,
-        source: &ChannelSource,
-        data: &[u8],
-    ) -> Result<(), CallError> {
-        self.timed(|i| i.on_channel_message(host, channel, source, data))
     }
 }
 
@@ -282,6 +195,8 @@ pub struct ModStatus {
     pub state: &'static str,
     pub reason: Option<String>,
     pub usage: Usage,
+    /// Calls, times, budget hits and strikes per handler kind over the window.
+    pub timings: ModTimings,
 }
 
 /// Where a session runs.
@@ -344,14 +259,12 @@ fn add_jvm(_: &mut Vec<Box<dyn Runtime>>, _: Option<&Path>, _: &Path) -> String 
 pub struct ClientHost {
     host: ModHost,
     bridge: Rc<Bridge>,
-    timing: Rc<Timing>,
     last_tick: Option<Instant>,
 }
 
 impl ClientHost {
     /// Loads the session folder (nothing runs before [`ClientHost::enable`]).
     pub fn load(setup: HostSetup<'_>) -> ClientHost {
-        let timing = Rc::new(Timing::default());
         let bridge = Rc::new(Bridge {
             started: Instant::now(),
             local: RefCell::new(setup.local_player),
@@ -364,14 +277,10 @@ impl ClientHost {
             fresh: RefCell::new(Vec::new()),
         });
         let mut opts = HostOptions::new(setup.mods_dir, Side::Client);
-        opts.runtimes = setup
-            .runtimes
-            .into_iter()
-            .map(|inner| Box::new(Timed { inner, timing: timing.clone() }) as Box<dyn Runtime>)
-            .collect();
+        opts.runtimes = setup.runtimes;
         opts.storage = Box::new(FileStorage::new(setup.storage_dir));
         let host = ModHost::load(opts, bridge.clone());
-        ClientHost { host, bridge, timing, last_tick: None }
+        ClientHost { host, bridge, last_tick: None }
     }
 
     /// No mod loaded.
@@ -597,9 +506,24 @@ impl ClientHost {
         self.bridge.log.borrow().iter().cloned().collect()
     }
 
+    /// Hot reload (developer mode, F5): the mods whose package in the session folder changed, or just `only`, are
+    /// stopped and started again without leaving the world. Nothing else is touched: storage stays, the other mods
+    /// keep running. See [`bhmod_core::ModHost::reload`].
+    ///
+    /// Returns what happened, one line per mod that changed (nothing when no package changed).
+    pub fn reload(&mut self, only: Option<&str>) -> Vec<String> {
+        let results = self.host.reload(only);
+        results.iter().filter(|r| r.outcome != ReloadOutcome::Unchanged).map(ToString::to_string).collect()
+    }
+
+    /// Clears the time accounting (all mods, or `only`); false when `only` names no mod.
+    pub fn reset_timings(&mut self, only: Option<&str>) -> bool {
+        self.host.reset_timings(only)
+    }
+
     /// Every loaded mod.
     pub fn status(&self) -> Vec<ModStatus> {
-        let timing = self.timing.by_mod.borrow();
+        let mut timings = self.host.timings(None);
         self.host
             .mods()
             .into_iter()
@@ -610,8 +534,9 @@ impl ClientHost {
                     ModState::Disabled(r) if r.contains("faults within") => ("budget", Some(r)),
                     ModState::Disabled(r) => ("failed", Some(r)),
                 };
-                let usage = timing.get(&m.id).cloned().unwrap_or_default();
-                ModStatus { id: m.id, version: m.version, state, reason, usage }
+                let at = timings.iter().position(|t| t.id == m.id).expect("the host times every loaded mod");
+                let timings = timings.swap_remove(at);
+                ModStatus { id: m.id, version: m.version, state, reason, usage: Usage::of(&timings), timings }
             })
             .collect()
     }
@@ -629,20 +554,4 @@ impl Bridge {
     pub(crate) fn players_for_tests(&self) -> std::cell::RefMut<'_, Vec<String>> {
         self.players.borrow_mut()
     }
-}
-
-#[cfg(test)]
-pub(crate) fn timed_for_tests(inner: Box<dyn Runtime>) -> (Timed, Rc<Timing>) {
-    let timing = Rc::new(Timing::default());
-    (Timed { inner, timing: timing.clone() }, timing)
-}
-
-#[cfg(test)]
-pub(crate) fn usage_for_tests(t: &Timing, id: &str) -> Usage {
-    t.by_mod.borrow()[id].clone()
-}
-
-#[cfg(test)]
-pub(crate) fn add_for_tests(t: &Timing, id: &str, start: Instant, took: Duration) {
-    t.add(id, start, took)
 }

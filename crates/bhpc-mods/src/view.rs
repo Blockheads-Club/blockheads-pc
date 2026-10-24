@@ -256,8 +256,10 @@ pub enum UiCmd {
     /// "Update after this game" (the server needs a newer mod loader): remember to check for an update when the
     /// game is closed, and close the notice.
     UpdateLater,
-    /// Reload the session's mods (developer mode).
+    /// Reload the session's mods that changed on disk, without leaving the world (developer mode).
     Reload,
+    /// Clear the time accounting of the Mods panel.
+    ResetTimings,
     /// Put this text on the clipboard.
     Copy(String),
     /// Say this line in the game's chat as if it had been typed (tests, developer tools).

@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use bhmod_core::runtime::{InstanceLimits, ModFiles};
-use bhmod_core::types::{ApiError, ChannelSource, ChannelTarget, CommandSender, Event, EventKind, Outcome, Priority};
-use bhmod_core::{CallError, GameBridge, HostApi, Instance, Runtime};
+use bhmod_core::types::{ApiError, ChannelTarget};
+use bhmod_core::GameBridge;
 
 use crate::host::*;
 use crate::join::Accepted;
@@ -325,162 +324,47 @@ fn session_folder_merges_server_dev_and_own_mods() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The timing wrapper forwards every guest call.
-
-struct FakeRt;
-struct FakeInst;
-
-impl Runtime for FakeRt {
-    fn kind(&self) -> bhmod_manifest::manifest::Runtime {
-        bhmod_manifest::manifest::Runtime::Wasm
-    }
-    fn instantiate(&self, id: &str, _f: &ModFiles, _l: InstanceLimits) -> Result<Box<dyn Instance>, String> {
-        if id == "nope" {
-            return Err("no".into());
-        }
-        Ok(Box::new(FakeInst))
-    }
-}
-
-impl Instance for FakeInst {
-    fn on_enable(&mut self, _h: &mut dyn HostApi) -> Result<(), CallError> {
-        Ok(())
-    }
-    fn on_disable(&mut self, _h: &mut dyn HostApi) -> Result<(), CallError> {
-        Ok(())
-    }
-    fn handle_event(&mut self, _h: &mut dyn HostApi, _s: u32, _e: &Event) -> Result<Outcome, CallError> {
-        Ok(Outcome::default())
-    }
-    fn run_command(
-        &mut self,
-        _h: &mut dyn HostApi,
-        _id: u32,
-        _s: &CommandSender,
-        _l: &str,
-        _a: &[String],
-    ) -> Result<bhmod_core::types::CommandOutcome, CallError> {
-        Err(CallError::Failed("x".into()))
-    }
-    fn run_task(&mut self, _h: &mut dyn HostApi, _id: u64) -> Result<(), CallError> {
-        Ok(())
-    }
-    fn call_service(&mut self, _h: &mut dyn HostApi, _n: &str, _m: &str, a: &[u8]) -> Result<Vec<u8>, CallError> {
-        Ok(a.to_vec())
-    }
-}
-
-struct NoHost;
-
-#[allow(unused_variables)]
-impl HostApi for NoHost {
-    fn deadline(&self) -> Instant {
-        Instant::now()
-    }
-    fn api_version(&self) -> String {
-        unimplemented!()
-    }
-    fn mod_id(&self) -> String {
-        unimplemented!()
-    }
-    fn mod_version(&self) -> String {
-        unimplemented!()
-    }
-    fn current_side(&self) -> bhmod_core::types::Side {
-        unimplemented!()
-    }
-    fn host_name(&self) -> String {
-        unimplemented!()
-    }
-    fn log(&mut self, level: bhmod_core::types::LogLevel, message: &str) {}
-    fn player_alias(&mut self, id: &str) -> Result<String, ApiError> {
-        unimplemented!()
-    }
-    fn player_is_online(&mut self, id: &str) -> bool {
-        unimplemented!()
-    }
-    fn player_role(&mut self, id: &str) -> Result<bhmod_core::types::Role, ApiError> {
-        unimplemented!()
-    }
-    fn player_send_chat(&mut self, id: &str, text: &str) -> Result<(), ApiError> {
-        unimplemented!()
-    }
-    fn player_kick(&mut self, id: &str, reason: &str) -> Result<(), ApiError> {
-        unimplemented!()
-    }
-    fn players_get(&mut self, id: &str) -> Option<String> {
-        unimplemented!()
-    }
-    fn players_find_by_alias(&mut self, alias: &str) -> Option<String> {
-        unimplemented!()
-    }
-    fn players_online(&mut self) -> Vec<String> {
-        unimplemented!()
-    }
-    fn players_broadcast(&mut self, text: &str) -> Result<(), ApiError> {
-        unimplemented!()
-    }
-    fn subscribe(&mut self, kind: EventKind, priority: Priority, ignore_cancelled: bool) -> Result<u32, ApiError> {
-        unimplemented!()
-    }
-    fn unsubscribe(&mut self, sub: u32) -> bool {
-        unimplemented!()
-    }
-    fn register_command(&mut self, spec: bhmod_core::types::CommandSpec) -> Result<u32, ApiError> {
-        unimplemented!()
-    }
-    fn unregister_command(&mut self, id: u32) -> bool {
-        unimplemented!()
-    }
-    fn run_later(&mut self, delay: u32) -> Result<u64, ApiError> {
-        unimplemented!()
-    }
-    fn run_every(&mut self, delay: u32, period: u32) -> Result<u64, ApiError> {
-        unimplemented!()
-    }
-    fn run_next_poll(&mut self) -> Result<u64, ApiError> {
-        unimplemented!()
-    }
-    fn cancel_task(&mut self, id: u64) -> bool {
-        unimplemented!()
-    }
-    fn storage_get(&mut self, key: &str) -> Option<Vec<u8>> {
-        unimplemented!()
-    }
-    fn storage_set(&mut self, key: &str, value: &[u8]) -> Result<(), ApiError> {
-        unimplemented!()
-    }
-    fn storage_delete(&mut self, key: &str) -> bool {
-        unimplemented!()
-    }
-    fn storage_keys(&mut self, prefix: &str) -> Vec<String> {
-        unimplemented!()
-    }
-}
+// Hot reload and the time accounting.
 
 #[test]
-fn timed_wrapper_forwards_and_counts() {
-    let (rt, timing) = timed_for_tests(Box::new(FakeRt));
-    assert_eq!(rt.kind(), bhmod_manifest::manifest::Runtime::Wasm);
-    let files = ModFiles::default();
-    let lim = InstanceLimits { memory_bytes: 1 };
-    assert!(rt.instantiate("nope", &files, lim).is_err());
-    let mut i = rt.instantiate("m", &files, lim).unwrap();
-    let h = &mut NoHost;
-    h.log(bhmod_core::types::LogLevel::Info, "x");
-    i.on_enable(h).unwrap();
-    i.handle_event(h, 1, &Event::Tick { tick: 1, dt: 0.0 }).unwrap();
-    assert!(i.run_command(h, 1, &CommandSender::Console, "x", &[]).is_err());
-    i.run_task(h, 1).unwrap();
-    assert_eq!(i.call_service(h, "s", "m", b"ab").unwrap(), b"ab");
-    i.on_channel_message(h, 1, &ChannelSource::Server, b"").unwrap();
-    i.on_disable(h).unwrap();
-    // Seven calls; a call in a new second moves the window.
-    let u = usage_for_tests(&timing, "m");
-    assert_eq!(u.calls, 7);
-    add_for_tests(&timing, "m", Instant::now() + Duration::from_secs(2), Duration::from_millis(3));
-    let u = usage_for_tests(&timing, "m");
-    assert!(u.ms_last_second < 3.0 && u.peak_ms >= 3.0);
+fn hot_reload_restarts_only_what_changed_and_timings_reset() {
+    let d = tempfile::tempdir().unwrap();
+    let plan = server_plan(d.path());
+    let (mut h, _, _) = setup(d.path(), true, plan.clone());
+    h.enable("World", "w1");
+    assert!(h.typed("/hello"));
+    let st = h.status();
+    let t = &st[0].timings;
+    assert_eq!(t.id, "echo");
+    assert!(t.calls() >= 2, "on-enable and the command: {t:?}");
+    assert_eq!(st[0].usage.calls, t.calls());
+    assert!(st[0].usage.peak_ms >= 0.0 && st[0].usage.ms_last_second >= 0.0);
+    // Nothing changed on disk: nothing happens.
+    build(&d.path().join("session"), &plan).unwrap();
+    assert!(h.reload(None).is_empty());
+    // A newer package: the session folder is built again, the mod restarts, the player stays in the world.
+    let newer = pkg(
+        "echo",
+        "1.1.0",
+        &MAIN.replace("\"hi \"", "\"yo \""),
+        "[permissions]\nchannels = true\nplayers = [\"chat\"]",
+        0,
+    );
+    std::fs::write(&plan.server[0].path, newer).unwrap();
+    build(&d.path().join("session"), &plan).unwrap();
+    h.take_new_logs();
+    let r = h.reload(None);
+    assert_eq!(r, ["echo: reloaded (1.0.0 -> 1.1.0)"]);
+    assert!(h.take_new_logs().iter().any(|l| l.text == "enabled"));
+    assert!(h.typed("/hello"));
+    assert!(h.take_effects().contains(&Effect::Chat("yo 0 0".into())));
+    assert_eq!(h.status()[0].version, "1.1.0");
+    // The accounting restarted with the mod, and can be cleared.
+    assert!(h.reset_timings(Some("echo")));
+    assert_eq!(h.status()[0].timings.calls(), 0);
+    assert!(!h.reset_timings(Some("ghost")));
+    assert!(h.reset_timings(None));
+    h.stop();
 }
 
 #[test]
