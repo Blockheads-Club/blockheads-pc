@@ -122,7 +122,8 @@ boxes) or the join prompt (index-listed file, danger zone, confirmation). `bhmod
 undone when the session ends. Libraries stay linked in the guest; the next session calls `init` again on the same image.
 
 Weapon skins are a user of the same engine (`weapons.rs`, the module doc has the details): an inline hook on the
-exported `texCoordsForItemType`, active while a mod declares a weapon cosmetic. Dev aids: `BHPC_DEV_COSMETICS=weapon=<key>`
+exported `texCoordsForItemType`, active while a mod declares a weapon cosmetic. The swap is scoped to the held item's draw (the
+game's atlas is bound back right after it, so the dig-target indicator and the HUD show the normal icons). Dev aids: `BHPC_DEV_COSMETICS=weapon=<key>`
 with `BHPC_DEV_WEAPON_ITEM=<item type>` (the flint spade is 16), `BHPC_WEAPONS_TRACE=1` (which sprite items the game draws
 from where).
 

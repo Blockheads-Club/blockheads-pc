@@ -2,7 +2,7 @@ schema = 1
 id = "arms"
 version = "1.0.0"
 name = { en = "Arms" }
-description = { en = "A weapon skin: a checker picture on the held item (weapon cosmetics, native hooks)" }
+description = { en = "Weapon skins: a golden spade and a flame pickaxe on the held item (weapon cosmetics, native hooks; the pictures are the weapon-skins example of mod-sdk)" }
 authors = ["Blockheads Club"]
 license = "MIT"
 api = "^0.3"
@@ -15,4 +15,7 @@ runtime = "lua"
 path = "client/main.luau"
 
 [content]
-cosmetics = [{ key = "arms:blade", slot = "weapon", texture = "assets/blade.png", base = "iron-sword" }]
+cosmetics = [
+  { key = "arms:golden-spade", slot = "weapon", texture = "assets/golden-spade.png", base = "iron-sword" },
+  { key = "arms:flame-pickaxe", slot = "weapon", texture = "assets/flame-pickaxe.png", base = "gold-pickaxe" },
+]

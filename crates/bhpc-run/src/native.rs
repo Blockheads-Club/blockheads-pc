@@ -279,6 +279,11 @@ impl Natives {
         host.read(slot, 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
+    /// `len` bytes of guest memory that stay valid (never freed), for out-parameters of calls into the game.
+    pub fn scratch(&self, cpu: &mut Cpu, len: usize) -> Result<u32, String> {
+        GuestHost { cpu, inner: &self.inner }.alloc_exec(len)
+    }
+
     /// The base address of a module in the snapshot.
     pub fn module_base(&self, module: &str) -> Option<u32> {
         let snap = self.inner.snap.read().unwrap_or_else(PoisonError::into_inner);

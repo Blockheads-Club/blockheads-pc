@@ -20,7 +20,8 @@ for c in "$HOME/.local/share/blockheads-pc/game/TheBlockheads.apk" "$HOME/Downlo
 done
 pkg="${BHPC_NATIVE_MOD:-../mod-sdk/target/native-examples/native-hello-0.1.0.bhmod}"
 bin="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/release/bhpc-run"
-if [[ -z "$apk" || ! -f "$apk" || ! -f "$pkg" || ! -x "$bin" ]]; then
+only="${BHPC_E2E_ONLY:-}" # "weapon": only the weapon skin run (no native-hello package needed)
+if [[ -z "$apk" || ! -f "$apk" || ( "$only" != weapon && ! -f "$pkg" ) || ! -x "$bin" ]]; then
   echo "e2e-native: SKIPPED (needs the game APK, a release build with --features play and the native-hello package)"
   exit 0
 fi
@@ -74,6 +75,7 @@ reject() { # reject FILE PATTERN WHAT
   if grep -qF -- "$2" "$1"; then echo "  FAILED: $3 (\"$2\" in $(basename "$1"))" >&2; fail=1; else echo "  ok: $3"; fi
 }
 
+if [[ "$only" != weapon ]]; then
 echo "e2e-native: native mod on"
 game on
 c="$run/on.err"
@@ -94,12 +96,13 @@ c="$run/blocked.err"
 reject "$c" "native code of native-hello loaded" "nothing is loaded"
 reject "$c" "hello from native code" "the library did not run"
 [[ -s "$run/shots-blocked/inworld.png" ]] && echo "  ok: screenshot inworld" || { echo "  FAILED: no inworld.png" >&2; fail=1; }
-# Weapon skins: the arms fixture (a weapon cosmetic with a magenta/yellow picture) is worn by every blockhead (dev
+fi
+# Weapon skins: the arms fixture (weapon cosmetics: a golden spade and a flame pickaxe, original pixel art) is worn by every blockhead (dev
 # aid) on the flint spade (item 16, the dev aid's item). The game draws the held tool while the blockhead digs: the
 # inline hook on texCoordsForItemType binds the mod's texture for it. Digging: select the second tool, tap the
 # blocks beside the blockhead (the world is random: any of the four taps may reach a block), shoot the swings.
 echo "e2e-native: weapon skins"
-cat > "$run/weapon.script" << 'EOF'
+cat > "$run/weapon.script" << EOF
 0     clicktext Allow
 +0    clicktext OK
 +5000 click 512 400
@@ -107,7 +110,7 @@ cat > "$run/weapon.script" << 'EOF'
 +5000 click 370 552
 +1500 click 512 588
 +4000 click 985 187
-+1500 click 590 395
+${WALK:-}+1500 click 590 395
 +500  shot swing1
 +500  shot swing2
 +500  shot swing3
@@ -128,25 +131,31 @@ EOF
 rm -rf "$run/data"
 mkdir -p "$run/shots-weapon" "$run/data"
 env -u WAYLAND_DISPLAY -u DISPLAY HOME="$run/home" SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11 GDK_BACKEND=x11 \
-  BHPC_DEV_COSMETICS=weapon=arms:blade BHPC_DEV_WEAPON_ITEM=16 \
+  BHPC_DEV_COSMETICS=weapon=${WEAPON_KEY:-arms:golden-spade} BHPC_DEV_WEAPON_ITEM=16 \
   timeout --kill-after=10 "$((limit + 20))" dbus-run-session --config-file="$run/bus.conf" -- \
   xvfb-run -a -s "-screen 0 1280x800x24" "$bin" --apk "$apk" --data-dir "$run/data" --script "$run/weapon.script" \
   --shot-dir "$run/shots-weapon" --seconds "$limit" --mods-dev "$PWD/fixtures/mods/arms" \
   > "$run/weapon.out" 2> "$run/weapon.err" || true
 c="$run/weapon.err"
-expect "$c" "1 cosmetic(s) loaded" "the weapon cosmetic is loaded"
+expect "$c" "2 cosmetic(s) loaded" "the weapon cosmetic is loaded"
 expect "$c" "[weapons] hook installed on texCoordsForItemType" "inline hook on the game's own function"
+# The art's key colour (golden spade blade, flame pickaxe head) must show on the held tool (the world area of the
+# 1024x768 shots, without the HUD) in some swing shot. The share is in millionths of the area.
+case "${WEAPON_KEY:-arms:golden-spade}" in
+  arms:flame-pickaxe) art='#ff8c18' ;;
+  *) art='#ffc828' ;;
+esac
 if command -v magick > /dev/null; then
   best=0
   for f in "$run"/shots-weapon/swing*.png; do
-    m=$(magick "$f" -fuzz 8% -fill black +opaque '#ff00ff' -channel R -separate -format '%[fx:mean*10000]' info: 2> /dev/null || echo 0)
+    m=$(magick "$f" -crop 840x700+90+60 +repage -fuzz 6% -fill black +opaque "$art" -channel R -separate -format '%[fx:mean*1000000]' info: 2> /dev/null || echo 0)
     m=${m%.*}
     ((m > best)) && best=$m
   done
-  if ((best > 20)); then
-    echo "  ok: the mod's picture is drawn on the held tool (magenta share $best / 10000)"
+  if ((best > 30)); then
+    echo "  ok: the mod's picture is drawn on the held tool (key colour $art share $best / 1000000, none-skin shots stay below 4)"
   else
-    echo "  FAILED: no magenta (the skin) on the held tool (share $best / 10000)" >&2
+    echo "  FAILED: no key colour $art (the skin) on the held tool (share $best / 1000000, none-skin shots stay below 4)" >&2
     fail=1
   fi
 else

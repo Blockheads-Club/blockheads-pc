@@ -13,6 +13,12 @@
 //!    (through the game's own `glBindTexture`) and answers with the mod texture's rectangle. Everywhere else the
 //!    call goes straight on to the original (`tail_call` to the trampoline).
 //!
+//! 3. the swap is scoped to the held item's draw: the mod texture stays bound after the quad, and the game draws
+//!    other sprites (the dig-target indicator, the HUD icons) through the same `texCoordsForItemType` without
+//!    binding the atlas again, so the first call that is not a skinned held item (and the end of the frame) binds the
+//!    atlas back that was bound before the swap, and a call from outside the blockhead drawing function ends the
+//!    blockhead's window.
+//!
 //! The hook is only installed while a loaded mod declares a weapon cosmetic, and only on the game build whose
 //! function prologue matches [`PROLOGUE`] (the address range is specific to it).
 //!
@@ -51,6 +57,18 @@ pub fn drawing(bh: u32) {
     CURRENT.with(|c| c.set(bh));
 }
 
+/// The hook is installed (blockhead draws then run inside a window, see [`leave`]).
+pub fn active() -> bool {
+    STATE.load(Ordering::Relaxed) == ON
+}
+
+/// A blockhead draw entry point returned: the window of its held item is over.
+pub fn leave(c: &mut Cpu) {
+    restore_atlas(c);
+    drawing(0);
+    KIND.with(|k| k.set(""));
+}
+
 /// A draw entry point ran (`BHPC_WEAPONS_TRACE=1` logs the first calls of each).
 pub fn entered(which: &'static str, bh: u32) {
     drawing(bh);
@@ -63,9 +81,37 @@ pub fn entered(which: &'static str, bh: u32) {
     }
 }
 
+/// `GL_TEXTURE_BINDING_2D`.
+const TEXTURE_BINDING_2D: u32 = 0x8069;
+
+thread_local! {
+    /// The atlas was replaced by a mod texture and not bound back yet.
+    static SWAPPED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The blockhead whose held item a `texCoordsForItemType` call may skin: only calls from inside the blockhead
+/// drawing function (`in_draw`) belong to a blockhead. Any other call (UI, target indicator) ends the window.
+fn window(in_draw: bool) -> Option<u32> {
+    if in_draw && current() != 0 {
+        Some(current())
+    } else {
+        drawing(0);
+        None
+    }
+}
+
+/// Whether the atlas must be bound back before the call goes on: it is swapped and this call is not skinned.
+fn needs_restore(swapped: bool, skinned: bool) -> bool {
+    swapped && !skinned
+}
+
 static ORIG: AtomicU32 = AtomicU32::new(0);
 static BIND: AtomicU32 = AtomicU32::new(0);
 static BASE: AtomicU32 = AtomicU32::new(0);
+static GET_INT: AtomicU32 = AtomicU32::new(0);
+static SCRATCH: AtomicU32 = AtomicU32::new(0);
+/// The texture that was bound before the mod's texture replaced it.
+static ATLAS: AtomicU32 = AtomicU32::new(0);
 static THUNK: OnceLock<u32> = OnceLock::new();
 static STATE: AtomicU32 = AtomicU32::new(OFF);
 const OFF: u32 = 0;
@@ -84,12 +130,29 @@ fn dev_item() -> Option<u16> {
 
 /// Installs or removes the hook as mods declare weapon cosmetics (once per frame on the main thread).
 pub fn sync(c: &mut Cpu) {
+    restore_atlas(c);
     let want = cosmetics::has_weapons();
     match (want, STATE.load(Ordering::Relaxed)) {
         (true, OFF) => install(c),
         (false, ON) => remove(c),
         _ => {}
     }
+}
+
+/// Binds the game's own texture back if a mod texture is bound.
+fn restore_atlas(c: &mut Cpu) {
+    if SWAPPED.with(|s| s.replace(false)) {
+        let _ = c.call(BIND.load(Ordering::Relaxed), &[TEXTURE_2D, ATLAS.load(Ordering::Relaxed)]);
+    }
+}
+
+/// The texture bound now (`glGetIntegerv(GL_TEXTURE_BINDING_2D)` through the game's import).
+fn bound_texture(c: &mut Cpu) -> u32 {
+    let (f, at) = (GET_INT.load(Ordering::Relaxed), SCRATCH.load(Ordering::Relaxed));
+    if f == 0 || at == 0 || c.call(f, &[TEXTURE_BINDING_2D, at]).is_err() {
+        return 0;
+    }
+    c.mem().read_u32(at).unwrap_or(0)
 }
 
 /// Takes the hook out (the session ends).
@@ -117,6 +180,19 @@ fn install(c: &mut Cpu) {
         STATE.store(GAVE_UP, Ordering::Relaxed);
         return;
     };
+    // Needed to bind the atlas back after a skinned item.
+    let Some(get_int) = n.import_target(c, "libApplication.so", "__wrap_glGetIntegerv") else {
+        log("weapon skins are off: glGetIntegerv is not imported");
+        STATE.store(GAVE_UP, Ordering::Relaxed);
+        return;
+    };
+    let Ok(scratch) = n.scratch(c, 16) else {
+        log("weapon skins are off: no guest memory");
+        STATE.store(GAVE_UP, Ordering::Relaxed);
+        return;
+    };
+    GET_INT.store(get_int, Ordering::Relaxed);
+    SCRATCH.store(scratch, Ordering::Relaxed);
     let thunk = match THUNK.get() {
         Some(t) => *t,
         None => {
@@ -152,15 +228,61 @@ fn tex_coords(c: &mut Cpu) {
             log(&format!("sprite item {} in {} of {:#x} (lr {:#x})", now.0, now.1, now.2, lr.wrapping_sub(base)));
         }
     }
-    if in_draw && current() != 0 {
-        if let Some((name, uv)) = cosmetics::weapon_skin(c, current(), item as u16, dev_item()) {
-            for (i, f) in uv.iter().enumerate() {
-                let _ = c.mem().write_u32(sret + 4 * i as u32, f.to_bits());
-            }
-            let _ = c.call(BIND.load(Ordering::Relaxed), &[TEXTURE_2D, name]);
-            c.ret_u32(sret);
-            return;
+    if in_draw && item == 16 && std::env::var_os("BHPC_WEAPONS_TRACE").is_some() {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 300 {
+            log(&format!(
+                "call item {item} lr {:#x} kind {} bh {:#x}",
+                lr.wrapping_sub(base),
+                KIND.with(Cell::get),
+                current()
+            ));
         }
     }
+    let skin = window(in_draw).and_then(|bh| cosmetics::weapon_skin(c, bh, item as u16, dev_item()));
+    if needs_restore(SWAPPED.with(Cell::get), skin.is_some()) {
+        restore_atlas(c);
+    }
+    if let Some((name, uv)) = skin {
+        for (i, f) in uv.iter().enumerate() {
+            let _ = c.mem().write_u32(sret + 4 * i as u32, f.to_bits());
+        }
+        if !SWAPPED.with(Cell::get) {
+            ATLAS.store(bound_texture(c), Ordering::Relaxed);
+        }
+        let _ = c.call(BIND.load(Ordering::Relaxed), &[TEXTURE_2D, name]);
+        SWAPPED.with(|s| s.set(true));
+        c.ret_u32(sret);
+        return;
+    }
     c.tail_call(ORIG.load(Ordering::Relaxed));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_is_the_blockhead_drawing_function_only() {
+        drawing(0x1000);
+        assert_eq!(window(true), Some(0x1000));
+        // A call from the UI (the dig-target indicator) is not a blockhead's: no skin, and the window is closed.
+        assert_eq!(window(false), None);
+        assert_eq!(current(), 0);
+        // Even a call from inside the function has no blockhead after that.
+        assert_eq!(window(true), None);
+        drawing(0x2000);
+        assert_eq!(window(true), Some(0x2000));
+        drawing(0);
+    }
+
+    #[test]
+    fn atlas_is_bound_back_for_the_first_call_that_is_not_skinned() {
+        assert!(!needs_restore(false, false));
+        assert!(!needs_restore(false, true));
+        // The held item of the next blockhead keeps the mod texture bound.
+        assert!(!needs_restore(true, true));
+        // The target indicator's call: the atlas comes back before its quad.
+        assert!(needs_restore(true, false));
+    }
 }

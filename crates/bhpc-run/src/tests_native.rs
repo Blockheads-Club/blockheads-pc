@@ -224,4 +224,9 @@ fn the_runner_hooks_its_own_functions_and_reads_import_targets() {
     assert_eq!(w.n.import_target(&mut w.f.cpu, "libnope.so", "glBindTexture"), None);
     assert_eq!(w.n.module_base("libgot.so"), Some(m));
     assert_eq!(w.n.module_base("libnope.so"), None);
+    // Scratch memory for out-parameters: writable guest memory, a different block every time.
+    let (a, b) = (w.n.scratch(&mut w.f.cpu, 16).unwrap(), w.n.scratch(&mut w.f.cpu, 16).unwrap());
+    assert_eq!(b, a + 16);
+    w.f.cpu.mem().write_u32(a, 7).unwrap();
+    assert_eq!(w.f.cpu.mem().read_u32(a).unwrap(), 7);
 }

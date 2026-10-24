@@ -473,6 +473,16 @@ pub fn weapon_skin(c: &mut Cpu, bh: u32, item: u16, dev_item: Option<u16>) -> Op
     (name != 0).then_some((name, uv))
 }
 
+/// While weapon skins are installed the held item and portrait drawing calls runs inside its window: the original runs here and the
+/// window is closed after it (the atlas bound back, no current blockhead), so nothing drawn afterwards (the dig-target
+/// indicator, the HUD) is skinned. Without weapon skins the hook stays a plain before hook.
+fn weapon_window(inv: &mut crate::objchook::Invocation<'_>) {
+    if crate::weapons::active() {
+        let _ = inv.call_original();
+        crate::weapons::leave(inv.cpu());
+    }
+}
+
 /// Registers the hooks.
 pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
     let t = |s: &str| Target::parse(s).expect("valid target");
@@ -497,6 +507,8 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
         Some(draw),
         move |inv| {
             if on_main() {
+                // The body: a plain before hook (a nested original drops the body of the blockhead on screen; the
+                // body never draws a sprite item, and the next call from outside ends the window).
                 crate::weapons::entered("draw", inv.receiver());
             }
         },
@@ -510,6 +522,7 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
         hooks.hook(t(target), Some(other_draw(target)), move |inv| {
             if on_main() {
                 crate::weapons::entered(if target.contains("Button") { "button" } else { "ghost" }, inv.receiver());
+                weapon_window(inv);
             }
         });
     }
