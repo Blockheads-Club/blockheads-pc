@@ -295,7 +295,7 @@ fn install(c: &mut Cpu, o: &Arc<Objc>) {
             return give_up(&e);
         }
     }
-    let gl = Gl::new(c, &n);
+    let gl = Gl::new(c, n);
     match gl {
         Some(gl) => *GL.lock().unwrap_or_else(PoisonError::into_inner) = Some(gl),
         None => log("mod item icons are off: the GL functions were not found"),

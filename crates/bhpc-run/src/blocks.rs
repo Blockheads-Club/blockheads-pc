@@ -153,7 +153,7 @@ fn install(c: &mut Cpu, o: &Arc<Objc>) {
         return give_up("this is not the game build they know");
     }
     *OBJC.lock().unwrap_or_else(PoisonError::into_inner) = Some(o.clone());
-    let Some(gl) = crate::items::Gl::new(c, &n) else { return give_up("the GL functions were not found") };
+    let Some(gl) = crate::items::Gl::new(c, n) else { return give_up("the GL functions were not found") };
     *GL.lock().unwrap_or_else(PoisonError::into_inner) = Some(gl);
     let thunk = *THUNK.get_or_init(|| c.register_shared_thunk("bhmod:tile_faces", Arc::new(tile_faces)).unwrap_or(0));
     if thunk == 0 {
