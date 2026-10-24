@@ -115,7 +115,14 @@ jobs:
         run: |
           updater=false
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && updater=true
-          bun run tauri build --target ${{ matrix.target }} --config "{\"bundle\":{\"createUpdaterArtifacts\":$updater}}"
+          # hdiutil on the GitHub macOS runners sometimes fails to create the .dmg ("Resource busy"); retry on macOS.
+          tries=1
+          [ "$RUNNER_OS" = macOS ] && tries=3
+          for i in $(seq "$tries"); do
+            bun run tauri build --target ${{ matrix.target }} --config "{\"bundle\":{\"createUpdaterArtifacts\":$updater}}" && break
+            [ "$i" = "$tries" ] && exit 1
+            echo "::warning::bundle attempt $i failed, retrying"; sleep 15
+          done
 
       - name: Sidecar inside, no game files
         shell: bash
