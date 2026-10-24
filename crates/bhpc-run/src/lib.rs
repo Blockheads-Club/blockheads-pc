@@ -4,6 +4,8 @@ pub mod apkrun;
 pub mod aspect;
 pub mod bench;
 #[cfg(feature = "play")]
+pub mod blocks;
+#[cfg(feature = "play")]
 pub mod cosmetics;
 pub mod desktop;
 pub mod dl;

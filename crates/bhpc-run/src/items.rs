@@ -49,12 +49,48 @@ const RGBA: u32 = 0x1908;
 const UNSIGNED_BYTE: u32 = 0x1401;
 
 /// What the icon upload needs: the game's GL functions, scratch memory and the pictures.
-struct Gl {
+pub(crate) struct Gl {
     bind: u32,
     mipmap: u32,
     get_int: u32,
     sub_image: u32,
     scratch: u32,
+}
+
+impl Gl {
+    /// The game's GL functions through its own imports (`None` when one is missing).
+    pub(crate) fn new(c: &mut Cpu, n: &crate::native::Natives) -> Option<Gl> {
+        Some(Gl {
+            bind: n.import_target(c, "libApplication.so", "__wrap_glBindTexture")?,
+            mipmap: n.import_target(c, "libApplication.so", "__wrap_glGenerateMipmap")?,
+            get_int: n.import_target(c, "libApplication.so", "__wrap_glGetIntegerv")?,
+            sub_image: c.thunk_addr("glTexSubImage2D")?,
+            scratch: n.scratch(c, 64 * 64 * 4 + 16).ok()?,
+        })
+    }
+
+    /// Copies `cells` (`(cell, 64 px picture, 16 px picture)`) into the atlas texture `name` that is `wide` pixels
+    /// wide (32 cells per row), rebuilds its mipmaps and binds the texture that was bound before.
+    pub(crate) fn blit(&self, c: &mut Cpu, name: u32, wide: u32, cells: &[(u32, Vec<u8>, Vec<u8>)]) {
+        let columns = bhmod_content::items::ATLAS_COLUMNS;
+        let size = wide / columns;
+        let before = if c.call(self.get_int, &[TEXTURE_BINDING_2D, self.scratch]).is_ok() {
+            c.mem().read_u32(self.scratch).unwrap_or(0)
+        } else {
+            0
+        };
+        let _ = c.call(self.bind, &[TEXTURE_2D, name]);
+        for (cell, hd, sd) in cells {
+            let px = if size == 64 { hd } else { sd };
+            let (x, y) = ((cell % columns) * size, (cell / columns) * size);
+            if c.mem().write_bytes(self.scratch, px).is_err() {
+                continue;
+            }
+            let _ = c.call(self.sub_image, &[TEXTURE_2D, 0, x, y, size, size, RGBA, UNSIGNED_BYTE, self.scratch]);
+        }
+        let _ = c.call(self.mipmap, &[TEXTURE_2D]);
+        let _ = c.call(self.bind, &[TEXTURE_2D, before]);
+    }
 }
 
 /// The pictures of the mod items' icons: `(cell, premultiplied RGBA at 64 px, at 16 px)` (HD and SD atlas cells).
@@ -304,15 +340,7 @@ fn install(c: &mut Cpu, o: &Arc<Objc>) {
             return give_up(&e);
         }
     }
-    let gl = (|| {
-        Some(Gl {
-            bind: n.import_target(c, "libApplication.so", "__wrap_glBindTexture")?,
-            mipmap: n.import_target(c, "libApplication.so", "__wrap_glGenerateMipmap")?,
-            get_int: n.import_target(c, "libApplication.so", "__wrap_glGetIntegerv")?,
-            sub_image: c.thunk_addr("glTexSubImage2D")?,
-            scratch: n.scratch(c, 64 * 64 * 4 + 16).ok()?,
-        })
-    })();
+    let gl = Gl::new(c, n);
     match gl {
         Some(gl) => *GL.lock().unwrap_or_else(PoisonError::into_inner) = Some(gl),
         None => log("mod item icons are off: the GL functions were not found"),
@@ -406,28 +434,8 @@ fn upload(c: &mut Cpu) {
         return UPLOADED.store(2, Ordering::Relaxed);
     }
     let name = o.send(c, obj, "name", &[]);
-    let size = wide / bhmod_content::items::ATLAS_COLUMNS;
-    let before = {
-        let ok = c.call(gl.get_int, &[TEXTURE_BINDING_2D, gl.scratch]).is_ok();
-        if ok {
-            c.mem().read_u32(gl.scratch).unwrap_or(0)
-        } else {
-            0
-        }
-    };
-    let _ = c.call(gl.bind, &[TEXTURE_2D, name]);
     let icons = ICONS.lock().unwrap_or_else(PoisonError::into_inner);
-    for (cell, hd, sd) in icons.iter() {
-        let px = if size == 64 { hd } else { sd };
-        let (x, y) =
-            ((cell % bhmod_content::items::ATLAS_COLUMNS) * size, (cell / bhmod_content::items::ATLAS_COLUMNS) * size);
-        if c.mem().write_bytes(gl.scratch, px).is_err() {
-            continue;
-        }
-        let _ = c.call(gl.sub_image, &[TEXTURE_2D, 0, x, y, size, size, RGBA, UNSIGNED_BYTE, gl.scratch]);
-    }
-    let _ = c.call(gl.mipmap, &[TEXTURE_2D]);
-    let _ = c.call(gl.bind, &[TEXTURE_2D, before]);
+    gl.blit(c, name, wide, &icons);
     log(&format!("{} icon(s) copied into the item atlas {name} ({wide} px wide)", icons.len()));
     UPLOADED.store(1, Ordering::Relaxed);
 }

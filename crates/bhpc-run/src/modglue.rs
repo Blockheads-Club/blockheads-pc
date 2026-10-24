@@ -353,6 +353,7 @@ impl ModGlue {
             }
             crate::weapons::sync(c);
             crate::items::sync(c, &self.objc);
+            crate::blocks::sync(c, &self.objc);
         }
         let cmds = self.shared.take();
         let actions = MAIN.with(|m| {
@@ -696,6 +697,11 @@ fn sync_join(sh: &Shared) {
 }
 
 /// Starts the session's mods at the first update of a world, then fires `tick`.
+/// The world the game updated last (0: none yet).
+pub(crate) fn current_world() -> u32 {
+    MAIN.with(|m| m.borrow().world)
+}
+
 fn world_update(o: &Objc, opts: &ModsOptions, sh: &Shared, world: u32, c: &mut Cpu) {
     crate::modevents::next_frame();
     MAIN.with(|m| {
@@ -855,6 +861,7 @@ fn stop_session(sh: &Shared, why: &str, keep_join: bool, c: &mut Cpu) {
     crate::cosmetics::clear();
     crate::weapons::remove(c);
     crate::items::remove(c);
+    crate::blocks::remove(c);
     stop_natives(c);
     let stopped = MAIN.with(|m| {
         let mut m = m.borrow_mut();
