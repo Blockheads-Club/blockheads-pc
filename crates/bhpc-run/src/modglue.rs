@@ -353,6 +353,7 @@ impl ModGlue {
             }
             crate::weapons::sync(c);
             crate::items::sync(c, &self.objc);
+            crate::blocks::sync(c, &self.objc);
         }
         let cmds = self.shared.take();
         let actions = MAIN.with(|m| {
@@ -839,6 +840,7 @@ fn stop_session(sh: &Shared, why: &str, keep_join: bool, c: &mut Cpu) {
     crate::cosmetics::clear();
     crate::weapons::remove(c);
     crate::items::remove(c);
+    crate::blocks::remove(c);
     stop_natives(c);
     let stopped = MAIN.with(|m| {
         let mut m = m.borrow_mut();

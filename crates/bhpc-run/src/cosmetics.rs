@@ -167,6 +167,7 @@ pub fn load(dir: &std::path::Path, server_registry: &Wire) {
             log(&format!("{} cosmetic(s) loaded", s.content.table().all().count()));
         }
         crate::items::load(&mut s.content, &crate::items::language());
+        crate::blocks::load(&mut s.content);
     });
 }
 
@@ -184,6 +185,7 @@ pub fn apply(msg: &Cosmetics) {
 pub fn clear() {
     crate::weapons::drawing(0);
     crate::items::clear();
+    crate::blocks::clear();
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         s.content.clear();
@@ -556,6 +558,12 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
                     }
                 }
             }
+            crate::blocks::observe_texture(
+                inv.receiver(),
+                inv.arg(2).map_or(0, |v| v.word()),
+                inv.arg(3).map_or(0, |v| v.word()),
+                inv.arg(5).map_or(0, |v| v.word()),
+            );
             crate::items::observe_texture(
                 inv.receiver(),
                 inv.arg(2).map_or(0, |v| v.word()),
