@@ -572,6 +572,16 @@ mod ops_tests {
         let b = boot(&paths, "/data".into()).unwrap();
         assert_eq!((b.config, b.defaults.data_dir, b.prefs), (None, PathBuf::from("/data"), Prefs::default()));
         assert!(!b.prefs_saved);
+        // "Update after this game": the note is read once.
+        assert!(!b.update_requested);
+        let tmp_dirs = crate::mods::ModsDirs::new(&t.path().join("d"));
+        assert!(!tmp_dirs.take_update_request());
+        tmp_dirs.request_update("needs 1.4").unwrap();
+        assert_eq!(std::fs::read_to_string(tmp_dirs.update_marker()).unwrap(), "needs 1.4");
+        assert!(tmp_dirs.take_update_request() && !tmp_dirs.take_update_request());
+        let file = t.path().join("plain-file");
+        std::fs::write(&file, "x").unwrap();
+        assert!(crate::mods::ModsDirs::new(&file).request_update("x").is_err());
         let mut bad = c.clone();
         bad.window = WindowOptions { width: 1, ..WindowOptions::default() };
         assert!(matches!(save_config(&paths, bad), Err(LauncherError::Window(_))));
@@ -586,6 +596,10 @@ mod ops_tests {
         for l in ["tr", "ru", "kk"] {
             assert_eq!(save_prefs(&paths, Prefs { language: l.into(), ..Prefs::default() }).unwrap().language, l);
         }
+        // The JVM switch and the Java folder survive a save and a reload, and reach the runner as flags.
+        let jvm = Prefs { mods_jvm: true, mods_java_home: "/opt/jre".into(), ..Prefs::default() };
+        assert_eq!(save_prefs(&paths, jvm.clone()).unwrap(), jvm);
+        assert_eq!(Prefs::load(&paths.prefs()).unwrap(), jvm);
         std::fs::write(paths.prefs(), "language = 1").unwrap();
         assert!(boot(&paths, "/data".into()).is_err());
     }

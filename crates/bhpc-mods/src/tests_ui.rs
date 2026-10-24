@@ -32,6 +32,8 @@ fn prompt(mods: Vec<JoinMod>) -> View {
             required: true,
             progress: (0, 778_240),
             eta: None,
+            players: None,
+            retry: false,
         }),
         ..View::default()
     }
@@ -201,7 +203,12 @@ fn downloading_failed_and_rejected() {
     j.progress = (0, 0);
     j.eta = None;
     render(&mut ui, &v, 9, "downloading-empty");
-    let check = FailKind::Check { name: "Coin Bank".into(), version: "1.2.0".into(), expected: "77ae".repeat(16) };
+    let check = FailKind::Check {
+        name: "Coin Bank".into(),
+        version: "1.2.0".into(),
+        expected: "77ae".repeat(16),
+        got: Some("c013".repeat(16)),
+    };
     let fail = |kind, text: &str| JoinStage::Failed(Fail { kind, text: text.into() });
     for (i, (stage, name)) in [
         (fail(check, "It may be broken."), "check-failed"),
@@ -225,8 +232,15 @@ fn downloading_failed_and_rejected() {
         let v = View { join: Some(JoinView { stage, ..v.join.clone().unwrap() }), ..View::default() };
         render(&mut ui, &v, 20 + i as u64, name);
         assert_eq!(ui.input(UiInput::Key(HID_ESCAPE), &v), (true, Some(UiCmd::Dismiss)));
-        assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v), (true, Some(UiCmd::Dismiss)));
+        // The newer-loader notice's main button is "Update after this game".
+        let newer = name == "needs-newer";
+        let enter = if newer { UiCmd::UpdateLater } else { UiCmd::Dismiss };
+        assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v), (true, Some(enter)));
         assert_eq!(click(&mut ui, &v, Hit::Dismiss), (true, Some(UiCmd::Dismiss)));
+        assert_eq!(ui.hits_for_tests().iter().any(|(_, h)| *h == Hit::UpdateLater), newer);
+        if newer {
+            assert_eq!(click(&mut ui, &v, Hit::UpdateLater), (true, Some(UiCmd::UpdateLater)));
+        }
         assert_eq!(ui.input(UiInput::Key(HID_SPACE), &v), (true, None));
         // "Copy details" only exists for a failed file check.
         let key = ui.input(UiInput::Key(HID_Y), &v);
@@ -235,10 +249,11 @@ fn downloading_failed_and_rejected() {
         if copy {
             let (_, Some(UiCmd::Copy(text))) = click(&mut ui, &v, Hit::Copy) else { panic!() };
             assert!(text.contains("expected sha256 77ae77ae") && text.contains("Coin Bank 1.2.0"), "{text}");
+            assert!(text.contains("got sha256 c013c013"), "{text}");
         }
     }
     // A short hash is shown whole, and a stale Copy hit on another view does nothing.
-    let short = FailKind::Check { name: "A".into(), version: "1".into(), expected: "ab".into() };
+    let short = FailKind::Check { name: "A".into(), version: "1".into(), expected: "ab".into(), got: None };
     let v = View { join: Some(JoinView { stage: fail(short, "x"), ..v.join.clone().unwrap() }), ..View::default() };
     render(&mut ui, &v, 40, "check-failed-short");
     let r = ui.hits_for_tests().into_iter().find(|(_, h)| *h == Hit::Copy).unwrap().0;
@@ -342,4 +357,50 @@ fn text_helpers() {
     let mut c = Canvas::new(4, 4);
     c.fill(-2, -2, 10, 10, 0xffffff, 0.0);
     assert!(c.px.iter().all(|b| *b == 0));
+}
+
+#[test]
+fn try_again_and_the_player_count() {
+    let mut ui = ModUi::new();
+    let base = prompt(vec![jm("Coin Bank", true, &["channels"])]);
+    let down = JoinStage::Failed(Fail {
+        kind: FailKind::Download { name: "Coin Bank".into(), percent: 40 },
+        text: "The connection was lost.".into(),
+    });
+    let with = |stage: JoinStage, retry: bool, players: Option<(u32, u32)>| View {
+        join: Some(JoinView { stage, retry, players, ..base.join.clone().unwrap() }),
+        ..View::default()
+    };
+    // A download that stopped, on a flow that can start again: Enter is "Try again", Esc leaves.
+    let v = with(down.clone(), true, Some((3, 16)));
+    let shown = render(&mut ui, &v, 1, "download-failed-retry");
+    assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v), (true, Some(UiCmd::Retry)));
+    assert_eq!(ui.input(UiInput::Key(HID_ESCAPE), &v), (true, Some(UiCmd::Dismiss)));
+    assert_eq!(click(&mut ui, &v, Hit::Retry), (true, Some(UiCmd::Retry)));
+    assert_eq!(click(&mut ui, &v, Hit::Dismiss), (true, Some(UiCmd::Dismiss)));
+    // Without the retry path (or for another failure) there is no such button.
+    let v2 = with(down, false, Some((3, 16)));
+    render(&mut ui, &v2, 4, "download-failed");
+    assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v2), (true, Some(UiCmd::Dismiss)));
+    assert!(!ui.hits_for_tests().iter().any(|(_, h)| *h == Hit::Retry));
+    let other = JoinStage::Failed(Fail { kind: FailKind::Other, text: "x".into() });
+    let v3 = with(other, true, None);
+    assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v3), (true, Some(UiCmd::Dismiss)));
+    // The count appears in the address line only when there is one.
+    let no_count = render(&mut ui, &with(JoinStage::Prompt, false, None), 2, "prompt-no-count");
+    let count = render(&mut ui, &with(JoinStage::Prompt, false, Some((3, 16))), 3, "prompt-count");
+    assert_ne!(no_count, count);
+    assert_ne!(shown, count);
+}
+
+#[test]
+fn body_text_falls_back_to_liberation_for_glyphs_atkinson_lacks() {
+    let latin = measure(Face::Body, 20.0, "Mod");
+    let cyr = measure(Face::Body, 20.0, "Мод");
+    assert!(latin > 0.0 && cyr > 0.0);
+    // Mixed text measures and draws (the kerning pair across two fonts is skipped).
+    let mut c = Canvas::new(200, 40);
+    let w = c.text(Face::Body, 20.0, 2.0, 2.0, 0xFFFFFF, "aМ a");
+    assert!(w > 0.0 && c.px.iter().any(|b| *b != 0));
+    assert_eq!(w, measure(Face::Body, 20.0, "aМ a"));
 }

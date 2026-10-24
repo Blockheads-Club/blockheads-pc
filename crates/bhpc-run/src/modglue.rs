@@ -364,7 +364,14 @@ impl ModGlue {
                     match cmd {
                         UiCmd::Decide { accept, native_ok } => out.extend(f.decide(*accept, *native_ok, now)),
                         UiCmd::Toggle(i) => f.toggle(*i),
-                        UiCmd::Dismiss | UiCmd::Reload | UiCmd::Cancel | UiCmd::Copy(_) | UiCmd::Say(_) => {}
+                        // The download starts again on the same connection (resumes the partial files).
+                        UiCmd::Retry => out.extend(f.retry(now)),
+                        UiCmd::Dismiss
+                        | UiCmd::UpdateLater
+                        | UiCmd::Reload
+                        | UiCmd::Cancel
+                        | UiCmd::Copy(_)
+                        | UiCmd::Say(_) => {}
                     }
                 }
             }
@@ -372,11 +379,17 @@ impl ModGlue {
         });
         for cmd in &cmds {
             match cmd {
-                UiCmd::Dismiss => {
-                    let mut v = self.shared.view.lock().unwrap_or_else(PoisonError::into_inner);
-                    v.join = None;
-                    self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                UiCmd::UpdateLater => {
+                    // The game cannot update the launcher: leave a note, the launcher checks for an update when it
+                    // starts again (see `ModsDirs::request_update`).
+                    match ModsDirs::new(&self.opts.data_dir).request_update("the server needs a newer mod loader") {
+                        Ok(()) => log("the launcher will offer an update after the game"),
+                        Err(e) => log(&format!("could not leave the update note: {e}")),
+                    }
+                    self.dismiss(c);
                 }
+                UiCmd::Dismiss => self.dismiss(c),
+                UiCmd::Retry => log("trying the download again"),
                 UiCmd::Reload => reload(&self.opts, &self.shared, c),
                 UiCmd::Cancel => {
                     log("download cancelled by the player");
@@ -415,6 +428,21 @@ impl ModGlue {
         apply_effects(&self.objc, c);
         self.join_from_menu(c);
         publish(&self.shared, false);
+    }
+
+    /// The player left a failure or rejection notice: a failed join that kept its connection for "Try again" now
+    /// lets go of it.
+    fn dismiss(&self, c: &mut Cpu) {
+        let (kept, conn) = MAIN.with(|m| {
+            let mut m = m.borrow_mut();
+            (m.flow.as_mut().is_some_and(JoinFlow::close), m.conn)
+        });
+        if let (true, Some(conn)) = (kept, conn) {
+            log("leaving the server");
+            self.objc.send(c, conn.matcher, "disconnect", &[]);
+        }
+        self.shared.view.lock().unwrap_or_else(PoisonError::into_inner).join = None;
+        self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// `--join HOST:PORT`: once the main menu renders, ask it to join (as a join link would).
@@ -596,6 +624,11 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
                 }
             }
             Action::Disconnect => {
+                // A stopped download keeps the connection for "Try again"; leaving the notice closes it.
+                if MAIN.with(|m| m.borrow().flow.as_ref().is_some_and(JoinFlow::retryable)) {
+                    log("the download stopped: waiting for the player (try again or leave)");
+                    continue;
+                }
                 log("leaving the server");
                 if let Some(conn) = conn {
                     o.send(c, conn.matcher, "disconnect", &[]);

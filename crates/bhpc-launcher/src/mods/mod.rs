@@ -104,6 +104,20 @@ impl ModsDirs {
     pub fn blobs(&self) -> PathBuf {
         self.cache.join("blobs")
     }
+    /// The note the game leaves when the player chose "Update after this game" (see [`ModsDirs::request_update`]).
+    pub fn update_marker(&self) -> PathBuf {
+        self.cache.join("update-after-game")
+    }
+    /// The in-game join dialog asked for a launcher update once the game is closed: leaves a note for the next launcher
+    /// start. `reason` (the server's text) is kept in the note for the player's logs.
+    pub fn request_update(&self, reason: &str) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.cache)?;
+        std::fs::write(self.update_marker(), reason)
+    }
+    /// True once when the note exists (it is removed, so the update check runs once per request).
+    pub fn take_update_request(&self) -> bool {
+        std::fs::remove_file(self.update_marker()).is_ok()
+    }
     pub(crate) fn servers(&self) -> PathBuf {
         self.cache.join("servers")
     }

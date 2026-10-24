@@ -2,8 +2,8 @@
 //! game with the server's tile, a status tag, the title and address, the mod rows (sides, permissions, size, the
 //! switch of an optional mod), the danger zone for native code, the download bar and the failure notices, and
 //! footer buttons with their keys. Sizes are the design's pixels at 1280x720 times the window's scale `s`.
-//! Fonts are the bundled Liberation Sans (the design's Bricolage Grotesque and Atkinson Hyperlegible are not
-//! bundled).
+//! Fonts: Atkinson Hyperlegible Next for body text (the design's), Liberation Sans Bold for bold text (no bold
+//! Atkinson file is bundled) and the design's Bricolage Grotesque is not bundled.
 
 use super::*;
 use crate::view::Fail;
@@ -70,11 +70,17 @@ fn zone(j: &JoinView) -> bool {
     j.mods.iter().any(|m| m.native && m.enabled)
 }
 
+/// "Try again" is offered: the flow can start the download again and the failure is a stopped download.
+pub(super) fn retry_shown(j: &JoinView) -> bool {
+    j.retry && matches!(&j.stage, JoinStage::Failed(Fail { kind: FailKind::Download { .. }, .. }))
+}
+
 /// The text "Copy details" puts on the clipboard.
 pub(super) fn details(f: &Fail) -> String {
     match &f.kind {
-        FailKind::Check { name, version, expected } => {
-            format!("{name} {version} does not match its checksum\nexpected sha256 {expected}\n{}", f.text)
+        FailKind::Check { name, version, expected, got } => {
+            let got = got.as_ref().map(|g| format!("got sha256 {g}\n")).unwrap_or_default();
+            format!("{name} {version} does not match its checksum\nexpected sha256 {expected}\n{got}{}", f.text)
         }
         FailKind::Download { name, percent } => format!("{name} stopped at {percent} %\n{}", f.text),
         _ => f.text.clone(),
@@ -266,7 +272,11 @@ impl ModUi {
         }
         c.text(Face::Bold, px.f(26.0), tx as f32, ty as f32, O_TEXT, &title);
         let addr = if j.address.is_empty() { &j.server } else { &j.address };
-        c.text(Face::Body, px.f(13.5), tx as f32, (ty + px.p(32.0)) as f32, O_TEXT2, addr);
+        let line = match j.players {
+            Some((online, cap)) => format!("{addr} · {online} of {cap} online"),
+            None => addr.to_string(),
+        };
+        c.text(Face::Body, px.f(13.5), tx as f32, (ty + px.p(32.0)) as f32, O_TEXT2, &line);
     }
 
     /// Draws (or, on a scratch canvas, measures) the body from `area.y`; returns its height. Rows that would pass
@@ -403,10 +413,11 @@ impl ModUi {
                     Self::callout(c, px, area, y, Some(&format!("{name} stopped at {percent} %")), Some(&f.text), None);
                 self.rows(c, px, area, y + gap, j, limit)
             }
-            FailKind::Check { name, version, expected } => {
+            FailKind::Check { name, version, expected, got } => {
                 let head = format!("{name} {version} doesn't match its checksum");
                 let y = Self::callout(c, px, area, y, Some(&head), Some(&f.text), None);
-                let code = Rect { x: area.x, y: y + gap, w: area.w, h: px.p(48.0) };
+                let code_h = if got.is_some() { px.p(70.0) } else { px.p(48.0) };
+                let code = Rect { x: area.x, y: y + gap, w: area.w, h: code_h };
                 c.rrect(code, px.p(10.0), 0x0E0B09, 1.0);
                 c.rring(code, px.p(10.0), px.p(1.0).max(1), LINE, 1.0);
                 let line = format!("expected sha256 {}", short_hash(expected));
@@ -418,6 +429,17 @@ impl ModUi {
                     O_TEXT2,
                     &line,
                 );
+                if let Some(g) = got {
+                    let line = format!("got sha256 {}", short_hash(g));
+                    c.text(
+                        Face::Body,
+                        px.f(13.5),
+                        (code.x + px.p(14.0)) as f32,
+                        (code.y + px.p(35.0)) as f32,
+                        O_TEXT2,
+                        &line,
+                    );
+                }
                 self.rows(c, px, area, code.y + code.h + gap, j, limit)
             }
             FailKind::Newer => {
@@ -427,7 +449,7 @@ impl ModUi {
                     px,
                     area,
                     y + gap,
-                    "Update Blockheads PC from the launcher. Your worlds and mods are kept.",
+                    "Choose Update after this game: the launcher offers the update once the game is closed. Your worlds and mods are kept.",
                     14.0,
                     O_TEXT2,
                 )
@@ -738,19 +760,32 @@ impl ModUi {
                 self.button(c, px, (right, y), "Cancel", "Esc", None, true, true, Hit::Cancel);
             }
             JoinStage::Failed(f) => {
-                let x = self.button(
-                    c,
-                    px,
-                    (right, y),
-                    "Back to server list",
-                    "Enter",
-                    Some(SUN_BTN),
-                    true,
-                    false,
-                    Hit::Dismiss,
-                );
-                if matches!(f.kind, FailKind::Check { .. }) {
-                    self.button(c, px, (x - gap, y), "Copy details", "Y", None, true, false, Hit::Copy);
+                // Download stopped: Try again; newer loader: Update after this game (both beside a plain Back).
+                let main = if retry_shown(j) {
+                    Some(("Try again", Hit::Retry))
+                } else if f.kind == FailKind::Newer {
+                    Some(("Update after this game", Hit::UpdateLater))
+                } else {
+                    None
+                };
+                if let Some((label, hit)) = main {
+                    let x = self.button(c, px, (right, y), label, "Enter", Some(SUN_BTN), true, false, hit);
+                    self.button(c, px, (x - gap, y), "Back to server list", "Esc", None, true, false, Hit::Dismiss);
+                } else {
+                    let x = self.button(
+                        c,
+                        px,
+                        (right, y),
+                        "Back to server list",
+                        "Enter",
+                        Some(SUN_BTN),
+                        true,
+                        false,
+                        Hit::Dismiss,
+                    );
+                    if matches!(f.kind, FailKind::Check { .. }) {
+                        self.button(c, px, (x - gap, y), "Copy details", "Y", None, true, false, Hit::Copy);
+                    }
                 }
             }
             JoinStage::Rejected(..) => {

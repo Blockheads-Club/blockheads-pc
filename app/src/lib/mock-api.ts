@@ -28,6 +28,8 @@ export const PREFS: Prefs = {
   mods_auto_update: true,
   mods_cache_limit_mb: 1024,
   mods_block_native: false,
+  mods_jvm: false,
+  mods_java_home: '',
   mods_developer: false,
   mods_dev_folders: [],
   mods_dev_watch: true
@@ -42,7 +44,7 @@ export function makeReport(over: Partial<ApkReport> = {}): ApkReport {
 }
 
 export function makeBoot(over: Partial<BootState> = {}): BootState {
-  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, prefs_saved: true, ...over };
+  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, prefs_saved: true, update_requested: false, ...over };
 }
 
 /** A fake of everything `$lib/api` exports. */

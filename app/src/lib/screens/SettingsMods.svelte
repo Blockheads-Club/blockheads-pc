@@ -61,6 +61,17 @@
   </Row>
 </SettingsGroup>
 
+<SettingsGroup title={t('mods.set.jvm')}>
+  <Row id="set-mods-jvm" first title={t('mods.set.jvmOn')} hint={t('mods.set.jvmOnHint')}>
+    <Toggle label={t('mods.set.jvmOn')} hideLabel checked={store.prefs.mods_jvm} onchange={(v) => store.patchPrefs({ mods_jvm: v })} />
+    <p class="warn" role="note">{t('mods.set.jvmWarn')}</p>
+  </Row>
+  <Row id="set-mods-java" title={t('mods.set.javaHome')} hint={t('mods.set.javaHomeHint')}>
+    <input class="input mono" type="text" aria-label={t('mods.set.javaHome')} placeholder={t('mods.set.javaHomePh')} disabled={!store.prefs.mods_jvm}
+      value={store.prefs.mods_java_home} onchange={(e) => store.patchPrefs({ mods_java_home: e.currentTarget.value.trim() })} />
+  </Row>
+</SettingsGroup>
+
 <SettingsGroup title={t('mods.set.developer')}>
   <Row id="set-mods-dev" first title={t('mods.set.devMode')} hint={t('mods.set.devModeHint')}>
     <Toggle label={t('mods.set.devMode')} hideLabel checked={store.prefs.mods_developer} onchange={(v) => store.patchPrefs({ mods_developer: v })} />
@@ -69,3 +80,9 @@
     <Button size="sm" icon="folder" disabled={!dir} onclick={() => api.openPath(dir)}>{t('mods.set.open')}</Button>
   </Row>
 </SettingsGroup>
+
+<style>
+  .warn { color: var(--bad); font-weight: 700; font-size: 13.5px; max-width: 340px; }
+  .input { min-height: 40px; padding: 0 12px; border: 2px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: 14px var(--f-body); width: 260px; max-width: 100%; }
+  .input:disabled { opacity: 0.5; }
+</style>

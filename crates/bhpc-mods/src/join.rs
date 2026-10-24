@@ -19,7 +19,7 @@ use bhmod_client::cache::sha256;
 use bhmod_client::session::{self, Failure, Offer, Options, Output};
 use bhmod_client::{Caps, PackageCache, Session};
 use bhmod_manifest::manifest::Runtime;
-use bhmod_proto::{hex, Hash, ModInfo, RejectText, PROTO};
+use bhmod_proto::{hex, Hash, Message, ModInfo, RejectText, PROTO};
 use bhpc_launcher::mods::cache;
 use bhpc_launcher::mods::index::IndexFile;
 use bhpc_launcher::mods::install::Candidate;
@@ -73,6 +73,9 @@ pub struct Entry {
     pub have: u64,
     /// Downloaded and checked.
     pub done: bool,
+    /// SHA-256 (hex) of the file as it arrived, taken from the bytes before the session checked them. `None` while
+    /// nothing complete arrived (cached mods, a download that stopped).
+    pub received: Option<String>,
     /// The player takes this mod. Always true for required mods; an optional mod can be switched off, and one with
     /// a [`Refusal`] cannot be switched on.
     pub enabled: bool,
@@ -182,6 +185,19 @@ pub struct JoinFlow {
     joined: Option<Option<Hash>>,
     reject: Option<RejectText>,
     server_name: String,
+    /// Players online and the server's capacity, when the server says so (0xBC has no such field today).
+    players: Option<(u32, u32)>,
+    /// What the session needs to start over on the same connection.
+    opts: Options,
+    caps: Caps,
+    /// The player's choice, kept for "Try again": the optional mods taken and the native confirmation.
+    choice: Option<(Vec<String>, bool)>,
+    /// A retry is under way: the choice is replayed once the server's list arrives again.
+    resume: bool,
+    /// The retry found no server behind the connection.
+    lost: bool,
+    /// The player left the failure notice: the connection is closed.
+    closed: bool,
     /// When the download began and what was there then (for the time left).
     started: Option<(Instant, u64)>,
 }
@@ -206,7 +222,7 @@ impl JoinFlow {
                 })
                 .collect(),
         };
-        let session = Session::new(opts, PackageCache::new(cfg.dirs.blobs()), caps);
+        let session = Session::new(opts.clone(), PackageCache::new(cfg.dirs.blobs()), caps.clone());
         let server_name = cfg.address.clone();
         JoinFlow {
             cfg,
@@ -219,8 +235,58 @@ impl JoinFlow {
             joined: None,
             reject: None,
             server_name,
+            players: None,
+            opts,
+            caps,
+            choice: None,
+            resume: false,
+            lost: false,
+            closed: false,
             started: None,
         }
+    }
+
+    /// Players online and capacity, when the server told (shown in the address line).
+    pub fn players(&self) -> Option<(u32, u32)> {
+        self.players
+    }
+
+    /// Records the server's player count. The 0xBC `SERVER_HELLO` carries none, so nothing calls this yet; the dialog
+    /// shows the count as soon as something does.
+    pub fn set_players(&mut self, online: u32, capacity: u32) {
+        self.players = Some((online, capacity));
+    }
+
+    /// The failure may be retried on the same connection: a download that stopped or failed its check.
+    pub fn retryable(&self) -> bool {
+        !self.closed
+            && matches!(
+                self.stage(),
+                Stage::Failed(Failure::Stalled(_) | Failure::Download { .. } | Failure::HashMismatch(_))
+            )
+    }
+
+    /// The failure notice was left: no retry any more, the caller disconnects. True if the connection was still open.
+    pub fn close(&mut self) -> bool {
+        let was = self.retryable();
+        self.closed = true;
+        was
+    }
+
+    /// Starts the download again on the same connection ("Try again"): a fresh session says `HELLO` again (the
+    /// server answers it until the join is approved), and when its list arrives the player's earlier choice is
+    /// applied, so partial files resume. Does nothing unless [`JoinFlow::retryable`].
+    pub fn retry(&mut self, now: Instant) -> Vec<Action> {
+        if !self.retryable() {
+            return Vec::new();
+        }
+        let ms = self.ms(now);
+        self.session = Session::new(self.opts.clone(), PackageCache::new(self.cfg.dirs.blobs()), self.caps.clone());
+        self.failure = None;
+        self.resume = true;
+        self.lost = false;
+        let out = self.session.contact(ms);
+        self.handle(out)
     }
 
     /// The content id map of the server's `MOD_LIST` (empty before it or without content).
@@ -229,6 +295,12 @@ impl JoinFlow {
     }
 
     pub fn stage(&self) -> Stage {
+        if self.lost {
+            return Stage::Failed(self.failure.clone().unwrap_or(Failure::Stalled(String::new())));
+        }
+        if self.resume {
+            return Stage::Downloading;
+        }
         match self.session.state_name() {
             "idle" => Stage::Idle,
             "await-hello" => Stage::Hello,
@@ -346,14 +418,39 @@ impl JoinFlow {
     pub fn tick(&mut self, now: Instant) -> Vec<Action> {
         let ms = self.ms(now);
         let out = self.session.tick(ms);
+        if self.resume && self.session.state_name() == "vanilla" {
+            // Nobody answered the second `HELLO`: the connection is gone. The held 0x1f must not go out as vanilla.
+            self.resume = false;
+            self.lost = true;
+            let id = self.entries.iter().find(|e| !e.done && e.enabled).map(|e| e.info.id.clone()).unwrap_or_default();
+            self.failure = Some(Failure::Stalled(id));
+            return vec![Action::Disconnect];
+        }
         self.handle(out)
     }
 
     /// A 0xBC packet from the server. Malformed packets are dropped.
     pub fn packet(&mut self, bytes: &[u8], now: Instant) -> Vec<Action> {
         let ms = self.ms(now);
+        self.note_received(bytes);
         let out = self.session.receive(bytes, ms);
         self.handle(out)
+    }
+
+    /// Hashes a file as it arrives: when `bytes` is the last chunk of a listed file, the session is about to check
+    /// it and (on a mismatch) delete it, so the hash of what was received is taken here from the part file plus
+    /// the chunk.
+    fn note_received(&mut self, bytes: &[u8]) {
+        let Ok(Message::FileChunk(c)) = Message::decode(bytes) else { return };
+        if c.offset + c.data.len() as u64 != c.total {
+            return;
+        }
+        let Some(e) = self.entries.iter_mut().find(|e| e.info.sha256 == c.sha256) else { return };
+        let part = self.cfg.dirs.blobs().join(format!("{}.part", hex(&c.sha256)));
+        let mut all = std::fs::read(part).unwrap_or_default();
+        all.truncate(c.offset as usize);
+        all.extend_from_slice(&c.data);
+        e.received = Some(hex(&sha256(&all)));
     }
 
     /// The player's answer to the prompt. `native_confirmed`: the red native warning was confirmed.
@@ -365,6 +462,9 @@ impl JoinFlow {
         let go = accept && self.acceptable() && (native_confirmed || !self.has_native());
         let optional: Vec<String> =
             self.entries.iter().filter(|e| e.enabled && !e.required()).map(|e| e.info.id.clone()).collect();
+        if go {
+            self.choice = Some((optional.clone(), native_confirmed));
+        }
         let out = self.session.decide_subset(go, &optional, ms);
         self.started = Some((now, self.progress().0));
         self.handle(out)
@@ -378,6 +478,16 @@ impl JoinFlow {
                 Output::Prompt { required, mods, .. } => {
                     self.required = required;
                     self.entries = mods.iter().filter(|o| o.client).map(|o| self.entry(o)).collect();
+                    if self.resume {
+                        // "Try again": the player already chose; apply it and go on without asking again.
+                        self.resume = false;
+                        let (optional, native) = self.choice.clone().unwrap_or_default();
+                        for e in self.entries.iter_mut().filter(|e| !e.required()) {
+                            e.enabled = e.refusal.is_none() && optional.contains(&e.info.id);
+                        }
+                        actions.extend(self.decide(true, native, Instant::now()));
+                        continue;
+                    }
                     actions.push(Action::Prompt);
                 }
                 Output::Progress { id, done, .. } => {
@@ -400,6 +510,7 @@ impl JoinFlow {
                     actions.push(Action::Release(j.map(|h| hex(&h))));
                 }
                 Output::Failed(f) => {
+                    self.resume = false;
                     self.failure = Some(f);
                     actions.push(Action::Disconnect);
                 }
@@ -429,6 +540,7 @@ impl JoinFlow {
         };
         Entry {
             have: if o.cached { info.size } else { 0 },
+            received: None,
             done: o.cached,
             cached: o.cached,
             listed,

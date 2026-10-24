@@ -64,6 +64,10 @@ export interface Prefs {
   /** 500, 1024, 2048 or 0 (no limit). */
   mods_cache_limit_mb: number;
   mods_block_native: boolean;
+  /** Run Java and Kotlin client mods (native, unsandboxed code). Off by default. */
+  mods_jvm: boolean;
+  /** The Java to use for JVM mods; empty searches JAVA_HOME and the PATH. */
+  mods_java_home: string;
   mods_developer: boolean;
   mods_dev_folders: string[];
   mods_dev_watch: boolean;
@@ -98,6 +102,8 @@ export interface BootState {
   prefs: Prefs;
   /** `false` on the very first start (no preferences file yet): the language follows the system's. */
   prefs_saved: boolean;
+  /** The game's join dialog asked for an update after the game: check now, whatever the automatic check says. */
+  update_requested: boolean;
 }
 
 /** How a started game runs: inside the launcher window, or in a window of its own. */
