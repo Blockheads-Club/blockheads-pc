@@ -9,6 +9,10 @@
 //!   duplicated into twelve compile units ([`NAME_FUNCS`], offsets in `libApplication.so` of the 1.7.6 build; the
 //!   plural form calls it for every id above the vanilla ones). Each copy is replaced by a thunk that answers an
 //!   `NSString` for a mod item and runs the original for everything else.
+//! - **Icons.** The inventory asks `imageTypeForItemType` (exported) for the atlas cell of an item. For a mod item it
+//!   answers a free cell of the item atlas (`Items.png`, [`bhmod_content::item_cell`]) and the mod's picture is
+//!   copied into that cell of the atlas texture on first use (`glTexSubImage2D`, then the mipmaps again). The atlas
+//!   is the `CPTexture2D` the game made with a 2:1 size and mipmaps, noticed when it is created.
 //! - **Validity.** `itemTypeIsValidFillItem` (exported) is false for every id above the vanilla ones, so the game
 //!   would refuse the item in an inventory; the replacement says yes for the mod's item ids.
 
@@ -31,6 +35,29 @@ const NAME_FUNCS: [u32; 12] = [
 /// The first two instructions of each copy (`sub sp, sp, #24; ldr r1, [pc, #0xffc]`).
 const NAME_PROLOGUE: [u32; 2] = [0xe24d_d018, 0xe59f_1ffc];
 const VALID_FILL: &str = "_Z23itemTypeIsValidFillItem8ItemType";
+
+const TEXTURE_2D: u32 = 0xde1;
+const TEXTURE_BINDING_2D: u32 = 0x8069;
+const RGBA: u32 = 0x1908;
+const UNSIGNED_BYTE: u32 = 0x1401;
+
+/// What the icon upload needs: the game's GL functions, scratch memory and the pictures.
+struct Gl {
+    bind: u32,
+    mipmap: u32,
+    get_int: u32,
+    sub_image: u32,
+    scratch: u32,
+}
+
+/// The pictures of the mod items' icons: `(cell, premultiplied RGBA at 64 px, at 16 px)` (HD and SD atlas cells).
+type Icons = Vec<(u32, Vec<u8>, Vec<u8>)>;
+static ICONS: Mutex<Icons> = Mutex::new(Vec::new());
+static GL: Mutex<Option<Gl>> = Mutex::new(None);
+/// The `CPTexture2D` of the item atlas (0: not seen) and its size, and whether the pictures are in it.
+static ATLAS: AtomicU32 = AtomicU32::new(0);
+static ATLAS_WIDE: AtomicU32 = AtomicU32::new(0);
+static UPLOADED: AtomicU32 = AtomicU32::new(0);
 
 static NAMES: RwLock<Option<HashMap<u16, String>>> = RwLock::new(None);
 /// Retained `NSString`s made for the names (by item type).
@@ -112,7 +139,7 @@ pub fn language() -> String {
 }
 
 /// A session loaded `content`: remembers the names of its items (empty: no hooks next frame).
-pub fn load(content: &Content, lang: &str) {
+pub fn load(content: &mut Content, lang: &str) {
     let names: HashMap<u16, String> = content
         .items()
         .all()
@@ -121,14 +148,36 @@ pub fn load(content: &Content, lang: &str) {
     if !names.is_empty() {
         log(&format!("{} item(s) loaded", names.len()));
     }
+    let ids: Vec<u64> = content.items().all().map(|i| i.id).collect();
+    let mut icons = Vec::new();
+    for id in ids {
+        let Some(cell) = bhmod_content::item_cell(id) else { continue };
+        match (content.item_cell_pixels(id, 64), content.item_cell_pixels(id, 16)) {
+            (Ok(Some(hd)), Ok(Some(sd))) => icons.push((cell, hd, sd)),
+            (Err(why), _) | (_, Err(why)) => log(&format!("icon of item {id}: {why}")),
+            _ => {}
+        }
+    }
+    *ICONS.lock().unwrap_or_else(PoisonError::into_inner) = icons;
+    UPLOADED.store(0, Ordering::Relaxed);
     *NAMES.write().unwrap_or_else(PoisonError::into_inner) = Some(names);
     *STRINGS.lock().unwrap_or_else(PoisonError::into_inner) = None;
 }
 
 /// The session ended.
 pub fn clear() {
+    ICONS.lock().unwrap_or_else(PoisonError::into_inner).clear();
     *NAMES.write().unwrap_or_else(PoisonError::into_inner) = None;
     *STRINGS.lock().unwrap_or_else(PoisonError::into_inner) = None;
+}
+
+/// The game made a texture (`-[CPTexture2D initWithData:...]` is about to run on `obj`): remembers the item atlas.
+pub fn observe_texture(obj: u32, wide: u32, high: u32, mipmap: u32) {
+    if mipmap == 1 && wide == 2 * high && (wide == 2048 || wide == 512) {
+        ATLAS.store(obj, Ordering::Relaxed);
+        ATLAS_WIDE.store(wide, Ordering::Relaxed);
+        UPLOADED.store(0, Ordering::Relaxed);
+    }
 }
 
 fn has_items() -> bool {
@@ -210,6 +259,19 @@ fn install(c: &mut Cpu, o: &Arc<Objc>) {
             return give_up(&e);
         }
     }
+    let gl = (|| {
+        Some(Gl {
+            bind: n.import_target(c, "libApplication.so", "__wrap_glBindTexture")?,
+            mipmap: n.import_target(c, "libApplication.so", "__wrap_glGenerateMipmap")?,
+            get_int: n.import_target(c, "libApplication.so", "__wrap_glGetIntegerv")?,
+            sub_image: c.thunk_addr("glTexSubImage2D")?,
+            scratch: n.scratch(c, 64 * 64 * 4 + 16).ok()?,
+        })
+    })();
+    match gl {
+        Some(gl) => *GL.lock().unwrap_or_else(PoisonError::into_inner) = Some(gl),
+        None => log("mod item icons are off: the GL functions were not found"),
+    }
     STATE.store(ON, Ordering::Relaxed);
     log("hooks installed (names, item validity)");
 }
@@ -246,4 +308,59 @@ fn item_valid(c: &mut Cpu) {
     } else {
         c.tail_call(VALID_ORIG.load(Ordering::Relaxed));
     }
+}
+
+/// The atlas rectangle `[u, v, width, height]` (origin top-left) of a mod item's icon, `None` for any other item.
+/// The picture is copied into the atlas the first time this is asked.
+pub fn icon_uv(c: &mut Cpu, item: u32) -> Option<[f32; 4]> {
+    if !is_mod_item(item) {
+        return None;
+    }
+    let cell = bhmod_content::item_cell(u64::from(item))?;
+    if UPLOADED.load(Ordering::Relaxed) == 0 {
+        upload(c);
+    }
+    if UPLOADED.load(Ordering::Relaxed) != 1 {
+        return None;
+    }
+    let cols = bhmod_content::items::ATLAS_COLUMNS as f32;
+    let rows = cols / 2.0;
+    Some([(cell % 32) as f32 / cols, (cell / 32) as f32 / rows, 1.0 / cols, 1.0 / rows])
+}
+
+/// True while a loaded mod declares an item (the sprite hook of the weapon skins serves the icons too).
+pub fn has_icons() -> bool {
+    has_items()
+}
+
+/// Copies the icons into the item atlas texture and rebuilds its mipmaps. Sets [`UPLOADED`] to 1, or to 2 when it
+/// cannot be done (no atlas seen, no GL); a new atlas or new content resets it to 0.
+fn upload(c: &mut Cpu) {
+    let (obj, wide) = (ATLAS.load(Ordering::Relaxed), ATLAS_WIDE.load(Ordering::Relaxed));
+    let o = OBJC.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let gl = GL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (Some(o), Some(gl)) = (o, gl.as_ref()) else { return UPLOADED.store(2, Ordering::Relaxed) };
+    if obj == 0 {
+        return UPLOADED.store(2, Ordering::Relaxed);
+    }
+    let name = o.send(c, obj, "name", &[]);
+    let size = wide / bhmod_content::items::ATLAS_COLUMNS;
+    let before = {
+        let ok = c.call(gl.get_int, &[TEXTURE_BINDING_2D, gl.scratch]).is_ok();
+        if ok { c.mem().read_u32(gl.scratch).unwrap_or(0) } else { 0 }
+    };
+    let _ = c.call(gl.bind, &[TEXTURE_2D, name]);
+    let icons = ICONS.lock().unwrap_or_else(PoisonError::into_inner);
+    for (cell, hd, sd) in icons.iter() {
+        let px = if size == 64 { hd } else { sd };
+        let (x, y) = ((cell % bhmod_content::items::ATLAS_COLUMNS) * size, (cell / bhmod_content::items::ATLAS_COLUMNS) * size);
+        if c.mem().write_bytes(gl.scratch, px).is_err() {
+            continue;
+        }
+        let _ = c.call(gl.sub_image, &[TEXTURE_2D, 0, x, y, size, size, RGBA, UNSIGNED_BYTE, gl.scratch]);
+    }
+    let _ = c.call(gl.mipmap, &[TEXTURE_2D]);
+    let _ = c.call(gl.bind, &[TEXTURE_2D, before]);
+    log(&format!("{} icon(s) copied into the item atlas {name} ({wide} px wide)", icons.len()));
+    UPLOADED.store(1, Ordering::Relaxed);
 }

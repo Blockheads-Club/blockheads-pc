@@ -131,7 +131,7 @@ fn dev_item() -> Option<u16> {
 /// Installs or removes the hook as mods declare weapon cosmetics (once per frame on the main thread).
 pub fn sync(c: &mut Cpu) {
     restore_atlas(c);
-    let want = cosmetics::has_weapons();
+    let want = cosmetics::has_weapons() || crate::items::has_icons();
     match (want, STATE.load(Ordering::Relaxed)) {
         (true, OFF) => install(c),
         (false, ON) => remove(c),
@@ -238,6 +238,13 @@ fn tex_coords(c: &mut Cpu) {
                 current()
             ));
         }
+    }
+    if let Some(uv) = crate::items::icon_uv(c, item) {
+        for (i, f) in uv.iter().enumerate() {
+            let _ = c.mem().write_u32(sret + 4 * i as u32, f.to_bits());
+        }
+        c.ret_u32(sret);
+        return;
     }
     let skin = window(in_draw).and_then(|bh| cosmetics::weapon_skin(c, bh, item as u16, dev_item()));
     if needs_restore(SWAPPED.with(Cell::get), skin.is_some()) {

@@ -166,7 +166,7 @@ pub fn load(dir: &std::path::Path, server_registry: &Wire) {
         if s.content.is_active() {
             log(&format!("{} cosmetic(s) loaded", s.content.table().all().count()));
         }
-        crate::items::load(&s.content, &crate::items::language());
+        crate::items::load(&mut s.content, &crate::items::language());
     });
 }
 
@@ -538,6 +538,30 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
         t("-[CPTexture2D initWithData:pixelFormat:pixelsWide:pixelsHigh:contentSize:mipmap:]"),
         None,
         move |inv| {
+            if let Some(dir) = std::env::var_os("BHPC_DUMP_TEXTURES") {
+                // Dev aid: the pixels the game hands to CPTexture2D (big ones), as raw RGBA next to a name that says
+                // the size and the mipmap flag.
+                let (p, w, h, m) = (
+                    inv.arg(0).map_or(0, |v| v.word()),
+                    inv.arg(2).map_or(0, |v| v.word()),
+                    inv.arg(3).map_or(0, |v| v.word()),
+                    inv.arg(5).map_or(0, |v| v.word()),
+                );
+                if w >= 256 && h >= 256 && w * h * 4 <= 64 << 20 {
+                    if let Ok(px) = inv.cpu().mem().read_bytes(p, w * h * 4) {
+                        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let f = std::path::Path::new(&dir).join(format!("tex{n:03}_{w}x{h}_m{m}.rgba"));
+                        let _ = std::fs::write(f, px);
+                    }
+                }
+            }
+            crate::items::observe_texture(
+                inv.receiver(),
+                inv.arg(2).map_or(0, |v| v.word()),
+                inv.arg(3).map_or(0, |v| v.word()),
+                inv.arg(5).map_or(0, |v| v.word()),
+            );
             let on = std::env::var_os("BHPC_COSMETICS_TRACE").is_some_and(|v| v == "2");
             if !on {
                 return;
