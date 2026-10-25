@@ -148,6 +148,24 @@ impl Landscape {
 
 /// Space between the desktop chat's parts.
 const CHAT_PAD: f32 = 4.0;
+/// Height of the desktop chat's input line (the game's is two lines tall).
+const CHAT_INPUT_H: f32 = 44.0;
+/// Size of the sender's picture in a desktop chat row, and the height of the date line above the message.
+const CHAT_AVATAR: f32 = 36.0;
+const CHAT_DATE_H: f32 = 16.0;
+/// Narrowest SEND button (the game's can be too narrow for its caption).
+const CHAT_SEND_MIN_W: f32 = 76.0;
+/// The desktop chat's text is set smaller than the phone's.
+pub(crate) const CHAT_TEXT_SCALE: f32 = 0.8;
+
+/// The shown chat panel's header buttons: CLOSE (left-most), the right-most one (SEND while composing, NEW in the
+/// list), whether it is composing, and its input line.
+pub(crate) struct ChatButtons {
+    close: Obj,
+    right: Obj,
+    composing: bool,
+    text: Option<Obj>,
+}
 
 /// The parts of the game's chat panel (a view with a text view and a scroll view among its children) the desktop
 /// layout places, and the size of the box it draws (its background picture, else the panel).
@@ -169,7 +187,9 @@ fn size_of(f: &[f32; 4]) -> (f32, f32) {
 
 fn chat_panel<'a>(views: &'a HashMap<Obj, View>, panel: &View) -> Option<ChatPanel<'a>> {
     let kids = || panel.children.iter().filter_map(|c| views.get(c));
-    let text = kids().find(|v| v.kind == "TextView");
+    // The input line: the game sometimes keeps an empty, flat one besides it.
+    let tall = |v: &&View| v.frame[3] - v.frame[1];
+    let text = kids().filter(|v| v.kind == "TextView").max_by(|a, b| tall(a).total_cmp(&tall(b)));
     let scroll = kids().find(|v| v.kind == "ScrollView")?;
     let at_corner = |v: &&View| v.frame[0] == 0.0 && v.frame[1] == 0.0;
     let bg = kids().filter(at_corner).find(|v| v.kind == "ImageView");
@@ -192,6 +212,37 @@ fn chat_panel<'a>(views: &'a HashMap<Obj, View>, panel: &View) -> Option<ChatPan
     Some(ChatPanel { size, header, text, scroll, send, composing })
 }
 
+impl ChatPanel<'_> {
+    /// Height of the input line.
+    fn input_h(&self) -> f32 {
+        self.text.map_or(0.0, |t| (t.frame[3] - t.frame[1]).min(CHAT_INPUT_H))
+    }
+
+    /// Size of SEND (wide enough for its caption, as tall as fits the input line).
+    fn send_size(&self, b: &View) -> (f32, f32) {
+        let (cw, ch) = size_of(&b.frame);
+        (cw.max(CHAT_SEND_MIN_W), ch.min(self.input_h() - 2.0 * CHAT_PAD))
+    }
+}
+
+/// `parent` is the content of a message row of a chat panel's list (sender picture, message, date).
+fn chat_row_content(views: &HashMap<Obj, View>, parent: &View) -> bool {
+    let up = |v: &View| v.parent.and_then(|p| views.get(&p));
+    let Some(scroll) = up(parent).and_then(up).filter(|s| s.kind == "ScrollView") else { return false };
+    up(scroll).and_then(|p| chat_panel(views, p)).is_some_and(|c| std::ptr::eq(c.scroll, scroll))
+}
+
+/// How much smaller the desktop chat sets the text of `child` of `parent` (its messages and input line): 1 elsewhere.
+pub(crate) fn text_scale(views: &HashMap<Obj, View>, parent: &View, child: &View) -> f32 {
+    let input = || chat_panel(views, parent).is_some_and(|c| c.text.is_some_and(|t| std::ptr::eq(t, child)));
+    let text = matches!(child.kind.as_str(), "TextView" | "Label");
+    if text && (input() || chat_row_content(views, parent)) {
+        CHAT_TEXT_SCALE
+    } else {
+        1.0
+    }
+}
+
 /// Where the desktop chat puts `child` of `parent` (`left, top, right, bottom` in the parent's content), when it is
 /// a part of the game's chat panel. The game draws the panel as on a phone: header (CLOSE, CHAT, SEND), the input
 /// line under it, then the messages with the newest at the top. On the desktop the header spans the box, the
@@ -202,8 +253,8 @@ fn chat_frame(views: &HashMap<Obj, View>, parent: &View, child: &View) -> Option
     if let Some(c) = chat_panel(views, parent) {
         let (w, h) = c.size;
         // Without the input line the messages reach the bottom.
-        let row = c.text.filter(|_| c.composing).map_or(0.0, |t| t.frame[3] - t.frame[1]);
-        let send_w = c.send.map_or(0.0, |b| b.frame[2] - b.frame[0] + CHAT_PAD);
+        let row = if c.composing { c.input_h() } else { 0.0 };
+        let send_w = c.send.map_or(0.0, |b| c.send_size(b).0 + CHAT_PAD);
         let head = c.header.map(|v| v.frame[3]).or(c.text.map(|t| t.frame[1])).unwrap_or(0.0);
         if c.header.is_some_and(|v| std::ptr::eq(v, child)) {
             return Some([0.0, 0.0, w, head]);
@@ -215,7 +266,8 @@ fn chat_frame(views: &HashMap<Obj, View>, parent: &View, child: &View) -> Option
         if c.text.is_some_and(|t| child.frame[1] >= t.frame[1] && child.frame[1] < t.frame[3]) {
             // The text starts a little in from the box's edge.
             let left = if child.kind == "TextView" { CHAT_PAD } else { 0.0 };
-            return Some([left, h - row, w - send_w - CHAT_PAD, h]);
+            // It reaches up to the list: the panel's picture under the gap shows the phone's layout.
+            return Some([left, h - row - CHAT_PAD, w - send_w - CHAT_PAD, h]);
         }
         return None;
     }
@@ -224,22 +276,51 @@ fn chat_frame(views: &HashMap<Obj, View>, parent: &View, child: &View) -> Option
         grand().and_then(|g| chat_panel(views, g)).filter(|c| c.header.is_some_and(|v| std::ptr::eq(v, parent)))
     {
         let (w, h) = c.size;
-        let (cw, ch) = size_of(&child.frame);
-        if c.send.is_some_and(|b| std::ptr::eq(b, child)) {
+        let ch = child.frame[3] - child.frame[1];
+        if let Some(b) = c.send.filter(|b| std::ptr::eq(*b, child)) {
             // SEND is only taken while the input line is shown.
-            let row = c.text.map_or(0.0, |t| t.frame[3] - t.frame[1]);
-            let top = h - row + (row - ch) / 2.0 - parent.frame[1];
-            return Some([w - CHAT_PAD - cw, top, w - CHAT_PAD, top + ch]);
+            let row = c.input_h();
+            let (bw, bh) = c.send_size(b);
+            let top = h - row + (row - bh) / 2.0 - parent.frame[1];
+            return Some([w - CHAT_PAD - bw, top, w - CHAT_PAD, top + bh]);
         }
         if child.kind == "Label" || (child.kind == "View" && ch <= 4.0) {
             return Some([0.0, child.frame[1], w, child.frame[3]]);
         }
         return None;
     }
+    // SEND's caption fills the (resized) button, centred.
+    if let Some(c) = grand()
+        .and_then(|h| h.parent.and_then(|p| views.get(&p)))
+        .and_then(|p| chat_panel(views, p))
+        .filter(|c| c.send.is_some_and(|b| std::ptr::eq(b, parent)))
+    {
+        let (bw, bh) = c.send_size(parent);
+        return (child.kind == "Label").then_some([0.0, 0.0, bw, bh]);
+    }
+    // A message row's parts: the sender's picture at the left, the date small at the top right, the message under it.
+    if chat_row_content(views, parent) {
+        let (w, h) = size_of(&parent.frame);
+        let left = 2.0 * CHAT_PAD + CHAT_AVATAR;
+        return match child.kind.as_str() {
+            "ImageView" => Some([CHAT_PAD, CHAT_PAD, CHAT_PAD + CHAT_AVATAR, CHAT_PAD + CHAT_AVATAR]),
+            "Label" => Some([left, 2.0, w - CHAT_PAD, 2.0 + CHAT_DATE_H]),
+            "TextView" => Some([left, CHAT_DATE_H, w - CHAT_PAD, h - 2.0]),
+            _ => None,
+        };
+    }
     // A message row: mirrored in the shown part of the list, so the newest is at the bottom.
     let panel = grand().and_then(|g| chat_panel(views, g)).filter(|c| std::ptr::eq(c.scroll, parent))?;
     let list = chat_frame(views, grand()?, panel.scroll).unwrap_or(parent.frame);
     let (top, ch) = (child.frame[1] - parent.bounds[1], child.frame[3] - child.frame[1]);
+    // A row the game left under a later one (same place, as tall or taller) stays hidden, as it is on the phone.
+    let later = parent.children.iter().skip_while(|c| views.get(c).is_none_or(|v| !std::ptr::eq(v, child))).skip(1);
+    let covered = later.filter_map(|c| views.get(c)).any(|v| {
+        !v.hidden && v.frame[1] == child.frame[1] && v.frame[3] >= child.frame[3] && v.frame[0] <= child.frame[0]
+    });
+    if covered {
+        return Some([child.frame[0], -ch, child.frame[2], 0.0]);
+    }
     let mirrored = (list[3] - list[1]) - top - ch + parent.bounds[1];
     Some([child.frame[0], mirrored, child.frame[2], mirrored + ch])
 }
@@ -522,7 +603,11 @@ impl Vm {
                 let (kind, handle) = self.st().ui.views.get(&v).map(|i| (i.kind.clone(), i.handle)).unwrap_or_default();
                 if kind == "Button" {
                     let ev = if inside { TOUCH_UPINSIDE } else { TOUCH_UPOUTSIDE };
+                    let before = self.chat_buttons();
                     self.call_method(cpu, v, "event", "(II)V", &[Value::Int(handle), Value::Int(ev)])?;
+                    if inside {
+                        self.after_chat_press(cpu, v, before)?;
+                    }
                 } else if inside {
                     self.set_text_focus(Some(v));
                 }
@@ -557,6 +642,11 @@ impl Vm {
     /// The CLOSE button of the shown chat panel (the left-most button of its header) and whether the panel is
     /// composing a message: then CLOSE first goes back to the list, and a second press closes the panel.
     pub fn chat_close_button(&self) -> Option<(Obj, bool)> {
+        self.chat_buttons().map(|b| (b.close, b.composing))
+    }
+
+    /// The shown chat panel's header buttons and input line.
+    pub(crate) fn chat_buttons(&self) -> Option<ChatButtons> {
         let st = self.st();
         let views = &st.ui.views;
         let land = self.landscape();
@@ -564,10 +654,50 @@ impl Vm {
             let panel = chat_panel(views, v)?;
             let header = panel.header?;
             Self::abs_origin(views, *o, land).filter(|(_, shown)| *shown)?;
-            let buttons =
-                header.children.iter().filter_map(|b| views.get(b).filter(|v| v.kind == "Button").map(|v| (*b, v)));
-            buttons.min_by(|a, b| a.1.frame[0].total_cmp(&b.1.frame[0])).map(|(b, _)| (b, panel.composing))
+            let shown: Vec<(Obj, &View)> = header
+                .children
+                .iter()
+                .filter_map(|b| views.get(b).filter(|v| v.kind == "Button" && !v.hidden).map(|v| (*b, v)))
+                .collect();
+            let x = |a: &&(Obj, &View), b: &&(Obj, &View)| a.1.frame[0].total_cmp(&b.1.frame[0]);
+            let (close, right) = (shown.iter().min_by(x)?.0, shown.iter().max_by(x)?.0);
+            let text = v
+                .children
+                .iter()
+                .copied()
+                .find(|c| panel.text.is_some_and(|t| views.get(c).is_some_and(|i| std::ptr::eq(i, t))));
+            Some(ChatButtons { close, right, composing: panel.composing, text })
         })
+    }
+
+    /// Press a chat button as the player does: the desktop chat then stays open for the next message after a send
+    /// (the game goes back to the list: NEW is pressed and the input line takes the keyboard), and CLOSE closes the
+    /// whole chat (the game first goes back to the list: CLOSE is pressed again). Any other button: a plain press.
+    pub fn press_chat_button(&self, cpu: &mut bhpc_cpu::Cpu, button: Obj) -> Result<(), Throw> {
+        let before = self.chat_buttons();
+        self.press_button(cpu, button)?;
+        self.after_chat_press(cpu, button, before)
+    }
+
+    /// The desktop chat's follow-up to a press of `button` while it was composing (see [`Vm::press_chat_button`]).
+    pub(crate) fn after_chat_press(
+        &self,
+        cpu: &mut bhpc_cpu::Cpu,
+        button: Obj,
+        before: Option<ChatButtons>,
+    ) -> Result<(), Throw> {
+        let Some(b) = before.filter(|b| b.composing) else { return Ok(()) };
+        let Some(now) = self.chat_buttons().filter(|n| !n.composing) else { return Ok(()) };
+        if button == b.close {
+            return self.press_button(cpu, now.close);
+        }
+        if button == b.right {
+            self.press_button(cpu, now.right)?;
+            if let Some(t) = self.chat_buttons().and_then(|n| n.text) {
+                self.set_text_focus(Some(t));
+            }
+        }
+        Ok(())
     }
 
     /// Tap a button as the view system does for a touch inside it: `TouchDown`, then `TouchUpInside`.

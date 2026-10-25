@@ -246,7 +246,7 @@ impl Vm {
                 space,
                 land: self.landscape(),
             };
-            pl.walk(w, root.frame, (root.frame[0] + ox, root.frame[1] + oy), screen, 1.0, 0);
+            pl.walk(w, root.frame, (root.frame[0] + ox, root.frame[1] + oy), screen, 1.0, 1.0, 0);
         }
         out
     }
@@ -273,8 +273,9 @@ impl Planner<'_> {
         Some(Arc::new(Bmp { w, h, px }))
     }
 
-    /// Draw `v`, placed at `frame` (its size) with its corner at `origin`, and its subviews.
-    fn walk(&mut self, v: Obj, frame: [f32; 4], origin: (f32, f32), clip: Rect, alpha: f32, depth: usize) {
+    /// Draw `v`, placed at `frame` (its size) with its corner at `origin`, and its subviews (`scale`: of its text).
+    #[allow(clippy::too_many_arguments)]
+    fn walk(&mut self, v: Obj, frame: [f32; 4], origin: (f32, f32), clip: Rect, alpha: f32, scale: f32, depth: usize) {
         let views: &HashMap<Obj, View> = &self.st.ui.views;
         let Some(info) = views.get(&v) else { return };
         if info.hidden || info.alpha <= 0.01 || depth > MAX_DEPTH {
@@ -286,18 +287,20 @@ impl Planner<'_> {
         let clip = if info.clips && !window { intersect(clip, rect) } else { clip };
         if !window {
             let focused = self.st.text_focus == Some(v);
-            self.draw_view(info, rect, clip, alpha, focused);
+            self.draw_view(info, rect, clip, alpha, focused, scale);
         }
         for c in &info.children {
             let Some(ci) = views.get(c) else { continue };
             let f = crate::ui::placed(self.land, views, info, ci);
             let co = (origin.0 + f[0] - info.bounds[0], origin.1 + f[1] - info.bounds[1]);
-            self.walk(*c, f, co, clip, alpha, depth + 1);
+            let s = crate::ui::text_scale(views, info, ci);
+            self.walk(*c, f, co, clip, alpha, s, depth + 1);
         }
     }
 
     /// `focused`: the view has the keyboard (a text field or view then shows a caret after its text).
-    fn draw_view(&mut self, info: &View, rect: Rect, clip: Rect, alpha: f32, focused: bool) {
+    /// `scale`: of the text's size (the desktop chat sets its text smaller).
+    fn draw_view(&mut self, info: &View, rect: Rect, clip: Rect, alpha: f32, focused: bool, scale: f32) {
         if let Some(argb) = info.bg.filter(|c| c >> 24 != 0) {
             // A scrim that covers the whole portrait space covers the whole window (the space is smaller than it).
             let s = self.space;
@@ -333,7 +336,10 @@ impl Planner<'_> {
             // A text view (`UITextView`: the chat's messages and input line) wraps all its text; the line count the
             // game sets on it is for labels.
             let lines = if info.kind == "TextView" { 0 } else { info.style.lines };
-            let style = TextStyle { font: None, lines, ..info.style.clone() };
+            let (size, min_size) = (info.style.size * scale, info.style.min_size * scale);
+            // The desktop chat's text (scaled) has no shadow: the game's is far off its text there (a ghost above it).
+            let shadow_color = if scale == 1.0 { info.style.shadow_color } else { 0 };
+            let style = TextStyle { font: None, lines, size, min_size, shadow_color, ..info.style.clone() };
             self.out.push(Item::Text { rect, clip, alpha, text, font, style });
         }
     }

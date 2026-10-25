@@ -279,7 +279,7 @@ fn deliver_text_view(vm: &Vm, cpu: &mut Cpu, ev: &GuestEvent, field: Obj) -> (bo
             call(vm, cpu, "textDidChange", "(ILjava/lang/String;)V", &[handle, text]);
             // The return key sends (a chat message): the field's panel has the button for it.
             if let Some(b) = vm.return_button(field) {
-                if let Err(e) = vm.press_button(cpu, b) {
+                if let Err(e) = vm.press_chat_button(cpu, b) {
                     errors.push(format!("return button: {e:?}"));
                 }
             }

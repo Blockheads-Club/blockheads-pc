@@ -462,9 +462,69 @@ fn the_chat_reads_like_a_desktop_chat() {
     assert_eq!(at(&e, close), [5.0, 5.0, 40.0, 20.0], "CLOSE stays");
     assert_eq!(at(&e, bg), [0.0, 0.0, 200.0, 280.0], "the box itself stays");
     assert_eq!(at(&e, scroll), [4.0, 34.0, 192.0, 202.0], "the messages follow the header");
-    assert_eq!(at(&e, field_bg), [0.0, 240.0, 152.0, 40.0], "the input line at the bottom");
-    assert_eq!(at(&e, text), [4.0, 240.0, 148.0, 40.0]);
-    assert_eq!(at(&e, send), [156.0, 250.0, 40.0, 20.0], "SEND next to it");
+    assert_eq!(at(&e, field_bg), [0.0, 236.0, 116.0, 44.0], "the input line at the bottom, up to the list");
+    assert_eq!(at(&e, text), [4.0, 236.0, 112.0, 44.0]);
+    assert_eq!(at(&e, send), [120.0, 250.0, 76.0, 20.0], "SEND next to it, wide enough for its caption");
+    // SEND's caption fills it; anything else in it stays.
+    let caption = view(&mut e, "Label", 30, Some((2.0, 3.0, 30.0, 15.0)));
+    let badge = view(&mut e, "ImageView", 31, Some((1.0, 1.0, 5.0, 5.0)));
+    add(&mut e, send, caption);
+    add(&mut e, send, badge);
+    let r = e.vm.view_rect(send).unwrap().0;
+    let rel = |e: &Env, v: Obj| {
+        let c = e.vm.view_rect(v).unwrap().0;
+        [c[0] - r[0], c[1] - r[1], c[2], c[3]]
+    };
+    assert_eq!((rel(&e, caption), rel(&e, badge)), ([0.0, 0.0, 76.0, 20.0], [1.0, 1.0, 4.0, 4.0]));
+    // A message row: the picture at the left, the date small at the top right, the message under it.
+    let content = view(&mut e, "View", 32, Some((0.0, 0.0, 120.0, 40.0)));
+    let avatar = view(&mut e, "ImageView", 33, Some((0.0, 0.0, 30.0, 30.0)));
+    let date = view(&mut e, "Label", 34, Some((40.0, -10.0, 120.0, 20.0)));
+    let message = view(&mut e, "TextView", 35, Some((40.0, -2.0, 120.0, 45.0)));
+    let other = view(&mut e, "View", 36, Some((1.0, 2.0, 3.0, 4.0)));
+    add(&mut e, newest, content);
+    for c in [avatar, date, message, other] {
+        add(&mut e, content, c);
+    }
+    let r = e.vm.view_rect(content).unwrap().0;
+    let inrow = |e: &Env, v: Obj| {
+        let c = e.vm.view_rect(v).unwrap().0;
+        [c[0] - r[0], c[1] - r[1], c[2], c[3]]
+    };
+    assert_eq!(inrow(&e, avatar), [4.0, 4.0, 36.0, 36.0]);
+    assert_eq!(inrow(&e, date), [44.0, 2.0, 72.0, 16.0]);
+    assert_eq!(inrow(&e, message), [44.0, 16.0, 72.0, 22.0]);
+    assert_eq!(inrow(&e, other), [1.0, 2.0, 2.0, 2.0], "anything else stays");
+    // Its text and the input line's are set smaller; the header's is not.
+    let scale = |e: &Env, parent: Obj, child: Obj| {
+        let st = e.vm.st();
+        let v = &st.ui.views;
+        crate::ui::text_scale(v, &v[&parent], &v[&child])
+    };
+    let small = crate::ui::CHAT_TEXT_SCALE;
+    assert_eq!(
+        [scale(&e, content, message), scale(&e, content, date), scale(&e, panel, text), scale(&e, header, title)],
+        [small, small, small, 1.0]
+    );
+    assert_eq!((scale(&e, content, avatar), scale(&e, panel, field_bg)), (1.0, 1.0));
+    // A row the game left under a later one is not shown (it is covered on the phone too).
+    let stale = view(&mut e, "View", 37, Some((0.0, 40.0, 120.0, 70.0)));
+    add(&mut e, scroll, stale);
+    {
+        // Under the later rows: first among the list's children.
+        let mut st = e.vm.st();
+        let kids = &mut st.ui.views.get_mut(&scroll).unwrap().children;
+        kids.retain(|c| *c != stale);
+        kids.insert(0, stale);
+    }
+    let sr = e.vm.view_rect(scroll).unwrap().0;
+    assert!(e.vm.view_rect(stale).unwrap().0[1] < sr[1], "moved above the shown part");
+    e.vm.ui_detach(stale);
+    // An empty, flat text view next to the input line does not count as it.
+    let flat = view(&mut e, "TextView", 38, Some((0.0, 0.0, 10.0, 0.0)));
+    add(&mut e, panel, flat);
+    assert_eq!(at(&e, text), [4.0, 236.0, 112.0, 44.0]);
+    e.vm.ui_detach(flat);
     let s = at(&e, scroll)[1];
     assert_eq!((at(&e, newest)[1] - s, at(&e, older)[1] - s), (162.0, 122.0), "the newest message at the bottom");
     // touches find SEND where it is drawn; Return and the pause menu find the buttons
@@ -472,6 +532,35 @@ fn the_chat_reads_like_a_desktop_chat() {
     assert_eq!(e.vm.hit_test(r[0] + 5.0, r[1] + 5.0).map(|h| h.view), Some(send));
     assert_eq!(e.vm.return_button(text), Some(send));
     assert_eq!(e.vm.chat_close_button(), Some((close, true)));
+    // A player's press: a send that leaves the panel composing needs nothing more.
+    let ret = e.code(&[0xE12F_FF1E]);
+    let control = e.vm.class_named("com/apportable/ui/Control").unwrap();
+    e.vm.register_native(control, "event", "(II)V", ret);
+    let vm = e.vm.clone();
+    vm.press_chat_button(&mut e.cpu, send).unwrap();
+    assert_eq!(event_calls(&e), 2);
+    // A send that took the game back to the list: the right-most button (NEW) is pressed, the input line focused.
+    let before = vm.chat_buttons();
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(1)]).unwrap();
+    vm.after_chat_press(&mut e.cpu, send, before).unwrap();
+    assert_eq!((event_calls(&e), e.vm.text_focus()), (4, Some(text)));
+    // CLOSE that took it back to the list: CLOSE again, the chat closes.
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(0)]).unwrap();
+    let before = vm.chat_buttons();
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(1)]).unwrap();
+    vm.after_chat_press(&mut e.cpu, close, before).unwrap();
+    assert_eq!(event_calls(&e), 6);
+    // Nothing more for another button, from the list, or when the panel still composes.
+    let before = vm.chat_buttons();
+    vm.after_chat_press(&mut e.cpu, close, before).unwrap();
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(0)]).unwrap();
+    let before = vm.chat_buttons();
+    vm.after_chat_press(&mut e.cpu, title, vm.chat_buttons()).unwrap();
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(1)]).unwrap();
+    vm.after_chat_press(&mut e.cpu, title, before).unwrap();
+    vm.after_chat_press(&mut e.cpu, close, None).unwrap();
+    assert_eq!(event_calls(&e), 6);
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(0)]).unwrap();
     // scrolled by 20: the shown part moves
     let b = rect(&mut e, 0.0, 20.0, 120.0, 220.0);
     e.call(scroll, "setBounds", "(Landroid/graphics/RectF;)V", &[b]).unwrap();
