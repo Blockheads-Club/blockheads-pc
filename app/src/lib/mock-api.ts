@@ -59,7 +59,6 @@ export function makeApi(over: Record<string, unknown> = {}) {
     onSplashState: vi.fn(async () => () => {}),
     onSplashRetry: vi.fn(async () => () => {}),
     onQuitRequested: vi.fn(async () => () => {}),
-    onGamePage: vi.fn(async () => () => {}),
     trayLabels: vi.fn(async () => {}),
     boot: vi.fn(async () => makeBoot()),
     saveConfig: vi.fn(async (c: LaunchConfig) => c),

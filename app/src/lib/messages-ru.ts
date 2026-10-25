@@ -420,8 +420,6 @@ export const ru: Record<BaseKey, string> = {
   'close.title': 'Остановить игру и выйти из Blockheads PC?',
   'close.body': 'Несохранённый прогресс в игре может пропасть. Если можете, сначала сохранитесь через меню игры.',
   'close.keep': 'Продолжить игру',
-  'page.title': 'Страница игры',
-  'page.back': 'Вернуться в игру',
   'close.stop': 'Остановить и выйти',
   'tray.show': 'Показать Blockheads PC',
   'tray.quit': 'Выйти',

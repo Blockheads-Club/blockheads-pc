@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mods-dev-fingerprint"
+description = "Enables the mods_dev_fingerprint command without any pre-configured scope."
+commands.allow = ["mods_dev_fingerprint"]
+
+[[permission]]
+identifier = "deny-mods-dev-fingerprint"
+description = "Denies the mods_dev_fingerprint command without any pre-configured scope."
+commands.deny = ["mods_dev_fingerprint"]

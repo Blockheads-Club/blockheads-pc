@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mods-install"
+description = "Enables the mods_install command without any pre-configured scope."
+commands.allow = ["mods_install"]
+
+[[permission]]
+identifier = "deny-mods-install"
+description = "Denies the mods_install command without any pre-configured scope."
+commands.deny = ["mods_install"]

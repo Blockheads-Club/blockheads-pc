@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-prefs"
+description = "Enables the save_prefs command without any pre-configured scope."
+commands.allow = ["save_prefs"]
+
+[[permission]]
+identifier = "deny-save-prefs"
+description = "Denies the save_prefs command without any pre-configured scope."
+commands.deny = ["save_prefs"]

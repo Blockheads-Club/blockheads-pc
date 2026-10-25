@@ -421,8 +421,6 @@ export const kk: Record<BaseKey, string> = {
   'close.title': 'Ойынды тоқтатып, Blockheads PC-ден шығу керек пе?',
   'close.body': 'Ойында сақталмаған прогресс жоғалуы мүмкін. Мүмкін болса, алдымен ойын мәзірінен сақтаңыз.',
   'close.keep': 'Ойнауды жалғастыру',
-  'page.title': 'Ойын беті',
-  'page.back': 'Ойынға оралу',
   'close.stop': 'Тоқтатып, шығу',
   'tray.show': 'Blockheads PC-ні көрсету',
   'tray.quit': 'Шығу',

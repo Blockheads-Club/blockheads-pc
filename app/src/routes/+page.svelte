@@ -5,7 +5,6 @@
   import { i18n, t } from '$lib/i18n.svelte';
   import TitleBar from '$lib/layout/TitleBar.svelte';
   import CloseDialog from '$lib/screens/CloseDialog.svelte';
-  import PageDialog from '$lib/screens/PageDialog.svelte';
   import Home from '$lib/screens/Home.svelte';
   import ImportDialog from '$lib/screens/ImportDialog.svelte';
   import JoinDialog from '$lib/screens/JoinDialog.svelte';
@@ -110,13 +109,10 @@
     const unwatch = watchViewport();
     let off: (() => void) | undefined;
     void api.onQuitRequested(() => store.requestQuit()).then((u) => (off = u)).catch(() => {});
-    let offPage: (() => void) | undefined;
-    void api.onGamePage((html) => store.showPage(html)).then((u) => (offPage = u)).catch(() => {});
     void store.init();
     return () => {
       unwatch();
       off?.();
-      offPage?.();
       offResize?.();
       offRetry?.();
       store.stopPolling();
@@ -190,7 +186,6 @@
 {#if store.dialog === 'logs'}<LogsDialog />{/if}
 {#if store.dialog === 'import'}<ImportDialog />{/if}
 {#if store.dialog === 'close'}<CloseDialog />{/if}
-{#if store.dialog === 'page'}<PageDialog />{/if}
 <Toasts />
 </div>
 

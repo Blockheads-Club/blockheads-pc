@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-embed-fullscreen"
+description = "Enables the embed_fullscreen command without any pre-configured scope."
+commands.allow = ["embed_fullscreen"]
+
+[[permission]]
+identifier = "deny-embed-fullscreen"
+description = "Denies the embed_fullscreen command without any pre-configured scope."
+commands.deny = ["embed_fullscreen"]

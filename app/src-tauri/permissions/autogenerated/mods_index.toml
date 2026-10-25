@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mods-index"
+description = "Enables the mods_index command without any pre-configured scope."
+commands.allow = ["mods_index"]
+
+[[permission]]
+identifier = "deny-mods-index"
+description = "Denies the mods_index command without any pre-configured scope."
+commands.deny = ["mods_index"]

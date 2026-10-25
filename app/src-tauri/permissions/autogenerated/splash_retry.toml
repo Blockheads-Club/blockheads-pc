@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-splash-retry"
+description = "Enables the splash_retry command without any pre-configured scope."
+commands.allow = ["splash_retry"]
+
+[[permission]]
+identifier = "deny-splash-retry"
+description = "Denies the splash_retry command without any pre-configured scope."
+commands.deny = ["splash_retry"]

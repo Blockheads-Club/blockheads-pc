@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-splash-get"
+description = "Enables the splash_get command without any pre-configured scope."
+commands.allow = ["splash_get"]
+
+[[permission]]
+identifier = "deny-splash-get"
+description = "Denies the splash_get command without any pre-configured scope."
+commands.deny = ["splash_get"]

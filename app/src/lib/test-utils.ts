@@ -21,7 +21,6 @@ export function resetStore(overrides: Partial<Record<keyof AppStore, unknown>> =
     step: 1,
     section: 'game',
     dialog: null,
-    page: '',
     draft: null,
     legalOk: false,
     apk: { path: '/data/game/TheBlockheads.apk', size_bytes: 64_300_000, status: 'supported', version: '1.7.6', problem: null, detail: '' },

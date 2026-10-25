@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-use-apk"
+description = "Enables the use_apk command without any pre-configured scope."
+commands.allow = ["use_apk"]
+
+[[permission]]
+identifier = "deny-use-apk"
+description = "Denies the use_apk command without any pre-configured scope."
+commands.deny = ["use_apk"]

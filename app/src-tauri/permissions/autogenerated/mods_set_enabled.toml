@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mods-set-enabled"
+description = "Enables the mods_set_enabled command without any pre-configured scope."
+commands.allow = ["mods_set_enabled"]
+
+[[permission]]
+identifier = "deny-mods-set-enabled"
+description = "Denies the mods_set_enabled command without any pre-configured scope."
+commands.deny = ["mods_set_enabled"]

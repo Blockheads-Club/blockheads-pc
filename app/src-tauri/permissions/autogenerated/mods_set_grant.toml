@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mods-set-grant"
+description = "Enables the mods_set_grant command without any pre-configured scope."
+commands.allow = ["mods_set_grant"]
+
+[[permission]]
+identifier = "deny-mods-set-grant"
+description = "Denies the mods_set_grant command without any pre-configured scope."
+commands.deny = ["mods_set_grant"]

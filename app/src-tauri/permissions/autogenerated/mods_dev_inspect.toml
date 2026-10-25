@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mods-dev-inspect"
+description = "Enables the mods_dev_inspect command without any pre-configured scope."
+commands.allow = ["mods_dev_inspect"]
+
+[[permission]]
+identifier = "deny-mods-dev-inspect"
+description = "Denies the mods_dev_inspect command without any pre-configured scope."
+commands.deny = ["mods_dev_inspect"]

@@ -5,6 +5,7 @@ mod embed;
 #[cfg(target_os = "linux")]
 mod embed_gl;
 mod mods;
+mod page;
 mod tray;
 mod updater;
 
@@ -471,6 +472,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(App::default())
+        .manage(page::Page::default())
+        .register_uri_scheme_protocol(page::SCHEME, page::serve)
         .manage(mods::Pending::default())
         .setup(|app| {
             // The main window is created hidden (tauri.conf.json) and runs the boot work; `main_ready` shows it
@@ -482,11 +485,16 @@ pub fn run() {
             app.state::<App>().session().set_copy_handler(move |t| {
                 let _ = h.run_on_main_thread(move || embed::copy_text(&t));
             });
-            // Pages the in-window game shows (the server's welcome message, help) arrive as `@page` lines; the main
-            // window shows them in place of the game, as the phone's web view does.
+            // Pages the in-window game shows (the server's welcome message, help) arrive as `@page` lines; they open
+            // in a sandboxed window of their own, as the phone shows them in its web view.
             let h = app.handle().clone();
             app.state::<App>().session().set_page_handler(move |html| {
-                let _ = h.emit_to("main", "game-page", html);
+                let a = h.clone();
+                let _ = h.run_on_main_thread(move || {
+                    if let Err(e) = page::show(&a, html) {
+                        eprintln!("page window failed: {e}");
+                    }
+                });
             });
             if let Err(e) = open_splash(app) {
                 eprintln!("splash window failed: {e}");
@@ -575,6 +583,27 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// `build.rs` lists every command (they go through the access control list): none may be missing.
+    #[test]
+    fn every_command_is_in_the_access_control_list() {
+        let lib = include_str!("lib.rs");
+        let start = lib.find("generate_handler![").unwrap() + "generate_handler![".len();
+        let end = start + lib[start..].find(']').unwrap();
+        let handler: Vec<&str> = lib[start..end]
+            .split(',')
+            .map(|c| c.trim().rsplit("::").next().unwrap())
+            .filter(|c| !c.is_empty())
+            .collect();
+        let build = include_str!("../build.rs");
+        let listed: Vec<&str> = build.split('"').skip(1).step_by(2).filter(|c| !c.contains(' ')).collect();
+        assert_eq!(handler, listed);
+        let set = include_str!("../permissions/app-commands.toml");
+        for c in &handler {
+            assert!(set.contains(&format!("\"allow-{}\"", c.replace('_', "-"))), "{c}");
+        }
+    }
 
     #[test]
     fn the_splash_time_counts_from_the_first_draw() {
@@ -587,7 +616,6 @@ mod tests {
         splash_shown(&started, &shown);
         assert_eq!(*started.lock().unwrap(), first, "later calls keep the first draw");
     }
-    use super::*;
 
     #[test]
     fn splash_hold_parses_milliseconds() {

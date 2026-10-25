@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-game-stop"
+description = "Enables the game_stop command without any pre-configured scope."
+commands.allow = ["game_stop"]
+
+[[permission]]
+identifier = "deny-game-stop"
+description = "Denies the game_stop command without any pre-configured scope."
+commands.deny = ["game_stop"]

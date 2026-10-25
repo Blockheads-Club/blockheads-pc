@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-data-size"
+description = "Enables the data_size command without any pre-configured scope."
+commands.allow = ["data_size"]
+
+[[permission]]
+identifier = "deny-data-size"
+description = "Denies the data_size command without any pre-configured scope."
+commands.deny = ["data_size"]

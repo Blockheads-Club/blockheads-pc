@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-game-start"
+description = "Enables the game_start command without any pre-configured scope."
+commands.allow = ["game_start"]
+
+[[permission]]
+identifier = "deny-game-start"
+description = "Denies the game_start command without any pre-configured scope."
+commands.deny = ["game_start"]
