@@ -1,6 +1,8 @@
 //! Links, mail, sharing, the clipboard, saved pictures and the help page (`jlib/desktop.rs`).
 
-use crate::jlib::desktop::{desktop_url, html_to_text, mailto, pct, relative_refs, COPIED, HOST_PACKAGE};
+use crate::jlib::desktop::{
+    desktop_url, html_to_text, mailto, page_text, pct, relative_refs, COPIED, HOST_PACKAGE, IN_GAME_PAGE_CHARS,
+};
 use crate::tests::Env;
 use crate::*;
 use std::sync::{Arc, Mutex};
@@ -10,6 +12,7 @@ use std::sync::{Arc, Mutex};
 struct Rec {
     log: Mutex<Vec<String>>,
     clip: Mutex<Option<String>>,
+    pages: std::sync::atomic::AtomicBool,
 }
 
 impl Rec {
@@ -27,6 +30,9 @@ impl SystemHooks for Rec {
         let names: Vec<&str> = files.iter().map(|f| f.0.as_str()).collect();
         self.log.lock().unwrap().push(format!("html {} {names:?}", html.len()));
         true
+    }
+    fn shows_pages(&self) -> bool {
+        self.pages.load(std::sync::atomic::Ordering::SeqCst)
     }
     fn set_clipboard(&self, text: &str) {
         self.log.lock().unwrap().push(format!("copy {text}"));
@@ -482,7 +488,6 @@ fn pictures_and_pages() {
             "picture /sdcard/Pictures/The Blockheads/1.png".to_string(),
             "picture /sdcard/DCIM/2.png".into(),
             format!("html {} [\"style.css\", \"bg.jpg\", \"144Icon.png\"]", html.len()),
-            "html 14 []".into(),
         ]
     );
     assert!(e.log_text().contains("shown read-only"));
@@ -493,6 +498,7 @@ fn default_hooks_do_nothing() {
     let s = NoSystem;
     assert!(!s.open_url("http://x"));
     assert!(!s.show_html("", &[]));
+    assert!(!s.shows_pages());
     s.set_clipboard("x");
     assert_eq!(s.clipboard(), None);
     s.notify("x");
@@ -504,4 +510,43 @@ fn handle_uri_calls_the_native() {
     let (mut e, _) = env();
     let vm = e.vm.clone();
     vm.handle_uri(&mut e.cpu, "http://theblockheads.net/join.php?ip=1.2.3.4").unwrap();
+}
+
+#[test]
+fn page_text_keeps_the_readable_part() {
+    let html = "<html><head><title>TEST</title><style>p{}</style></head><body><h1>WELCOME TO TEST!</h1>\
+                <p>RULES :   SURVIVAL</p><p></p><p></p><script>x()</script><a href=\"https://x\">Forums</a></body></html>";
+    assert_eq!(page_text(html), ("TEST".into(), "WELCOME TO TEST!\nRULES : SURVIVAL\n\nForums".into()));
+    // No closing tag, no end of the tag: nothing is taken out.
+    assert_eq!(page_text("<title>x"), (String::new(), "x".into()));
+    assert_eq!(page_text("a <title"), (String::new(), "a <title".into()));
+    assert_eq!(page_text("<p></p>"), (String::new(), String::new()));
+    assert_eq!(page_text("<p>x</p><p> </p>"), (String::new(), "x".into()), "no blank line at the end");
+}
+
+#[test]
+fn a_short_page_shows_in_the_game_and_a_long_one_in_the_browser() {
+    let (mut e, rec) = env();
+    let w = "com/noodlecake/noodlewebview/NoodleWebView";
+    let h = e.string("<title>TEST</title><p>WELCOME TO TEST!</p>");
+    e.scall(w, "showBlockheadsWebView", "(Ljava/lang/String;ZJ)V", &[h, Value::Int(0), Value::Long(0)]).unwrap();
+    assert!(rec.take().is_empty(), "nothing goes to the browser");
+    let a = e.vm.dialog_alert().expect("the page's dialog");
+    assert_eq!((a.title.as_str(), a.message.as_str()), ("TEST", "WELCOME TO TEST!"));
+    assert_eq!(a.buttons, [("OK".to_string(), 0)]);
+    // OK closes it; there is no game alert to answer.
+    e.vm.alert_click(&mut e.cpu, &a, 0).unwrap();
+    assert!(!e.vm.dialog_shown());
+    let long = format!("<p>{}</p>", "x".repeat(IN_GAME_PAGE_CHARS + 1));
+    let h = e.string(&long);
+    e.scall(w, "showBlockheadsWebView", "(Ljava/lang/String;ZJ)V", &[h, Value::Int(0), Value::Long(0)]).unwrap();
+    assert_eq!(rec.take(), [format!("html {} []", long.len())]);
+    assert!(!e.vm.dialog_shown());
+    // A host that shows pages in place of the game gets the short one too, as it is.
+    rec.pages.store(true, std::sync::atomic::Ordering::SeqCst);
+    let short = "<title>TEST</title><p>WELCOME TO TEST!</p>";
+    let h = e.string(short);
+    e.scall(w, "showBlockheadsWebView", "(Ljava/lang/String;ZJ)V", &[h, Value::Int(0), Value::Long(0)]).unwrap();
+    assert_eq!(rec.take(), [format!("html {} []", short.len())]);
+    assert!(!e.vm.dialog_shown());
 }

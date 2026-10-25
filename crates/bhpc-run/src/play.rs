@@ -143,7 +143,7 @@ impl PlayConfig {
             fps_position: bhpc_app::hud::Corner::TopLeft,
             unlock_fps: false,
             game_speed: 1.0,
-            zoom: crate::aspect::GameZoom::Phone,
+            zoom: crate::aspect::GameZoom::Tablet,
             ui_scale: 1.0,
             controller: true,
             hide_dpad: false,
@@ -877,7 +877,12 @@ fn desktop_hooks(flags: &Arc<Flags>, embedded: bool, pictures: Option<PathBuf>) 
     });
     let pages = std::env::temp_dir().join("blockheads-pc-pages");
     let opener = crate::desktop::Opener::from_env(&|k| std::env::var(k).ok());
-    Arc::new(crate::desktop::Desktop::new(opener, pages, pictures, copy, notice))
+    let desk = crate::desktop::Desktop::new(opener, pages, pictures, copy, notice);
+    if embedded {
+        // In the launcher's window pages show in place of the game, as on the phone.
+        return Arc::new(desk.with_page_sink(Box::new(|h| println!("{}", bhpc_launcher::embed::page_line(h)))));
+    }
+    Arc::new(desk)
 }
 
 fn guest_main(
@@ -1382,6 +1387,24 @@ impl UiThread {
                         eprintln!("[zoom] {a:?} at {at:?} {centre:?}: {z:.4} -> {to}");
                     }
                 }
+                HostAction::OpenChat => {
+                    // In a world and not paused (the pause menu would sit over the chat).
+                    let (Some((imp, sel)), Some(view)) = (g.chat, g.ui.game_view()) else { continue };
+                    if g.ui.world(&mem).is_none() || g.ui.pause_shown(&mem) {
+                        continue;
+                    }
+                    let main = self.main.clone();
+                    let run = move |c: &mut Cpu| {
+                        c.set_ticks(FOREVER);
+                        if let Err(e) = c.call(imp, &[view, sel]) {
+                            eprintln!("[play] chat: guest stopped: {e:?}");
+                        }
+                    };
+                    match main {
+                        Some(q) => q.call(c, run),
+                        None => run(c),
+                    }
+                }
                 HostAction::Pause => {
                     let Some(world) = g.ui.world(&mem) else { continue };
                     let (imp, sel) = if g.ui.pause_shown(&mem) { g.resume } else { g.pause };
@@ -1452,6 +1475,28 @@ impl UiThread {
                 a.to,
                 if done { " (done)" } else { "" }
             );
+        }
+    }
+
+    /// While the chat is open or a text field has the keyboard, the world's idle timer is held at zero (typing is
+    /// no touch, and after a minute without one the game pauses itself). The pause menu closes the chat (the game
+    /// leaves it open under the menu): its CLOSE button is pressed.
+    fn close_chat_when_paused(&self, c: &mut Cpu) {
+        let Some(g) = &self.game else { return };
+        if self.vm.text_focus().is_some() || self.vm.chat_close_button().is_some() {
+            g.ui.reset_idle(&c.mem().clone());
+        }
+        if !g.ui.take_paused() {
+            return;
+        }
+        let Some((close, composing)) = self.vm.chat_close_button() else { return };
+        let vm = self.vm.clone();
+        let presses = if composing { 2 } else { 1 };
+        let answered = crate::input::on_main(self.main.as_ref(), c, move |c| {
+            (0..presses).try_for_each(|_| vm.press_button(c, close))
+        });
+        if let Err(e) = answered {
+            eprintln!("[play] closing the chat: {e:?}");
         }
     }
 
@@ -1807,6 +1852,7 @@ impl UiThread {
             let content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
             self.game_actions(c, &actions, content, mapper.pad().cursor(), now, &mut wheel);
             self.wheel_frame(c, now, &mut wheel);
+            self.close_chat_when_paused(c);
             {
                 let mut v = flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner);
                 v.cursor = mapper.pad().cursor();
@@ -2249,6 +2295,8 @@ struct GameHooks {
     ui: Arc<crate::gameui::GameUi>,
     pause: (u32, u32),
     resume: (u32, u32),
+    /// `-[GameView showChatUI]` (implementation, selector name): the chat key opens the game's own chat.
+    chat: Option<(u32, u32)>,
     /// `-[GameView pinchGesture:velocity:state:center:numberOfTouches:]` (implementation, selector name): the wheel
     /// zooms through it so the game keeps the point under the cursor in place.
     pinch: Option<(u32, u32)>,
@@ -2295,12 +2343,19 @@ fn install_game_ui(sess: &mut Session, hide_dpad: bool) -> Result<Arc<GameHooks>
         .map(|(cls, sel, dpad)| method(cls, sel).map(|(imp, _)| (imp, *cls, *sel, *dpad)))
         .collect::<Result<_, _>>()?;
     let (pause, resume) = (method("World", "pauseButtonTapped")?, method("World", "pauseResumeButtonTapped")?);
+    let chat = method("GameView", "showChatUI").inspect_err(|e| eprintln!("[play] no chat key: {e}")).ok();
     let pinch = method("GameView", crate::gameui::PINCH_SELECTOR)
         .inspect_err(|e| eprintln!("[play] the wheel zooms around the centre: {e}"))
         .ok();
-    let ui = Arc::new(crate::gameui::GameUi::new(ivars).dpad_hidden(hide_dpad));
+    let idle = export("OBJC_IVAR_$_World.pauseIdleTimer").and_then(|at| mem.read_u32(at).ok()).unwrap_or(0);
+    if idle == 0 {
+        eprintln!("[play] no World.pauseIdleTimer: typing in the chat may let the game pause itself");
+    }
+    let ui = Arc::new(crate::gameui::GameUi::new(ivars).dpad_hidden(hide_dpad).with_idle_timer(idle));
     let g = ui.clone();
     hook_at(sess, render, "-[GameView render:]", move |c| g.saw_game_view(c.reg(0)))?;
+    let g = ui.clone();
+    hook_at(sess, pause.0, "-[World pauseButtonTapped]", move |_| g.saw_pause())?;
     for (imp, cls, sel, dpad) in hidden {
         let g = ui.clone();
         let renders = sel.starts_with("render:");
@@ -2310,7 +2365,7 @@ fn install_game_ui(sess: &mut Session, hide_dpad: bool) -> Result<Arc<GameHooks>
         })?;
     }
     sess.cpu.clear_cache();
-    Ok(Arc::new(GameHooks { ui, pause, resume, pinch }))
+    Ok(Arc::new(GameHooks { ui, pause, resume, chat, pinch }))
 }
 
 /// The "Game speed" option (see `gamespeed`): scale the steps `-[World update:accurateDT:pinchScale:dragInProgress:]`

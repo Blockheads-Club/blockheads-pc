@@ -33,6 +33,9 @@
     { value: 'tablet', key: 'gfx.zoomTablet' }
   ];
   const scale = $derived(Math.round(store.cfg!.window.ui_scale * 100));
+  /** The slider's value while it is dragged (saved on release), so the percentage follows the thumb. */
+  let dragged = $state<number | null>(null);
+  const shownScale = $derived(dragged ?? scale);
   /** Unlimited, the usual caps, and a hand-edited value from launcher.toml when it is none of those. */
   const fpsLimits = $derived.by(() => {
     const values = [...FPS_LIMITS];
@@ -130,10 +133,15 @@
       step="5"
       value={scale}
       aria-label={t('gfx.scale')}
-      aria-valuetext={t('gfx.percent', { n: scale })}
-      onchange={(e) => store.patchConfig((c) => (c.window.ui_scale = Number(e.currentTarget.value) / 100))}
+      aria-valuetext={t('gfx.percent', { n: shownScale })}
+      oninput={(e) => (dragged = Number(e.currentTarget.value))}
+      onchange={(e) => {
+        const v = Number(e.currentTarget.value);
+        dragged = null;
+        store.patchConfig((c) => (c.window.ui_scale = v / 100));
+      }}
     />
-    <span class="mono val">{t('gfx.percent', { n: scale })}</span>
+    <span class="mono val">{t('gfx.percent', { n: shownScale })}</span>
   </Row>
 {/if}
 

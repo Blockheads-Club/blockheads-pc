@@ -122,6 +122,9 @@ fn default_bindings_and_conflicts() {
     assert_eq!(kb.get(Action::HideUi).to_string(), "H");
     assert_eq!(Action::HideUi.label(), "Hide game buttons");
     assert_eq!(Action::from_name("hide_ui"), Some(Action::HideUi));
+    assert_eq!(kb.get(Action::Chat).to_string(), "T");
+    assert_eq!(Action::Chat.label(), "Open chat");
+    assert_eq!(Action::from_name("chat"), Some(Action::Chat));
     kb.set(Action::Pan, kb.touch);
     assert_eq!(kb.conflicts(), vec![(Action::Touch, Action::Pan)]);
 }
@@ -160,7 +163,7 @@ fn old_window_tables_get_the_new_defaults() {
     assert_eq!((c.window.width, c.window.vsync, c.window.show_fps, c.window.fps_limit), (1600, false, false, 60));
     assert_eq!(c.window.fps_position, crate::window::FpsPosition::TopLeft);
     assert_eq!(c.window.game_speed, 1.0);
-    assert_eq!(c.window.zoom, crate::window::GameZoom::Phone);
+    assert_eq!(c.window.zoom, crate::window::GameZoom::Tablet);
     assert_eq!(c.window.ui_scale, 1.25);
     // The old slider's values outside today's range come back at its ends.
     let scaled = |v: &str| LaunchConfig::from_toml(&old.replace("1.25", v)).unwrap().window.ui_scale;

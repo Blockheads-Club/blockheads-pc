@@ -80,6 +80,8 @@ struct Last {
     frame: Arc<UiFrame>,
 }
 
+/// Drawn after the text of the field or view that has the keyboard (typing goes to its end).
+const CARET: char = '|';
 /// A frame answered without rebuilding the item list is checked again after this many frames anyway, in case the views'
 /// pixels changed in a way [`Vm::ui_changed`] did not hear of.
 pub(crate) const RECHECK_FRAMES: u32 = 60;
@@ -244,7 +246,7 @@ impl Vm {
                 space,
                 land: self.landscape(),
             };
-            pl.walk(w, (root.frame[0] + ox, root.frame[1] + oy), screen, 1.0, 0);
+            pl.walk(w, root.frame, (root.frame[0] + ox, root.frame[1] + oy), screen, 1.0, 0);
         }
         out
     }
@@ -271,30 +273,31 @@ impl Planner<'_> {
         Some(Arc::new(Bmp { w, h, px }))
     }
 
-    fn walk(&mut self, v: Obj, origin: (f32, f32), clip: Rect, alpha: f32, depth: usize) {
+    /// Draw `v`, placed at `frame` (its size) with its corner at `origin`, and its subviews.
+    fn walk(&mut self, v: Obj, frame: [f32; 4], origin: (f32, f32), clip: Rect, alpha: f32, depth: usize) {
         let views: &HashMap<Obj, View> = &self.st.ui.views;
         let Some(info) = views.get(&v) else { return };
         if info.hidden || info.alpha <= 0.01 || depth > MAX_DEPTH {
             return;
         }
         let alpha = alpha * info.alpha;
-        let rect =
-            [origin.0, origin.1, origin.0 + info.frame[2] - info.frame[0], origin.1 + info.frame[3] - info.frame[1]];
+        let rect = [origin.0, origin.1, origin.0 + frame[2] - frame[0], origin.1 + frame[3] - frame[1]];
         let window = info.kind == "Window";
         let clip = if info.clips && !window { intersect(clip, rect) } else { clip };
         if !window {
-            self.draw_view(info, rect, clip, alpha);
+            let focused = self.st.text_focus == Some(v);
+            self.draw_view(info, rect, clip, alpha, focused);
         }
         for c in &info.children {
             let Some(ci) = views.get(c) else { continue };
-            let shift = Landscape::shift(self.land, info, ci);
-            let co =
-                (origin.0 + ci.frame[0] - info.bounds[0] + shift.0, origin.1 + ci.frame[1] - info.bounds[1] + shift.1);
-            self.walk(*c, co, clip, alpha, depth + 1);
+            let f = crate::ui::placed(self.land, views, info, ci);
+            let co = (origin.0 + f[0] - info.bounds[0], origin.1 + f[1] - info.bounds[1]);
+            self.walk(*c, f, co, clip, alpha, depth + 1);
         }
     }
 
-    fn draw_view(&mut self, info: &View, rect: Rect, clip: Rect, alpha: f32) {
+    /// `focused`: the view has the keyboard (a text field or view then shows a caret after its text).
+    fn draw_view(&mut self, info: &View, rect: Rect, clip: Rect, alpha: f32, focused: bool) {
         if let Some(argb) = info.bg.filter(|c| c >> 24 != 0) {
             // A scrim that covers the whole portrait space covers the whole window (the space is smaller than it).
             let s = self.space;
@@ -323,11 +326,15 @@ impl Planner<'_> {
         }
         let has_caption = info.kind == "Button" && info.children.is_empty();
         let drawn = matches!(info.kind.as_str(), "Label" | "TextField" | "TextView") || has_caption;
-        if drawn && !info.text.is_empty() {
+        let text = if focused && drawn { format!("{}{CARET}", info.text) } else { info.text.clone() };
+        if drawn && !text.is_empty() {
             let face = info.style.font.map(|t| face_in(self.st, t)).unwrap_or_default();
             let font = load_font(self.vm, self.fonts, &face);
-            let style = TextStyle { font: None, ..info.style.clone() };
-            self.out.push(Item::Text { rect, clip, alpha, text: info.text.clone(), font, style });
+            // A text view (`UITextView`: the chat's messages and input line) wraps all its text; the line count the
+            // game sets on it is for labels.
+            let lines = if info.kind == "TextView" { 0 } else { info.style.lines };
+            let style = TextStyle { font: None, lines, ..info.style.clone() };
+            self.out.push(Item::Text { rect, clip, alpha, text, font, style });
         }
     }
 }

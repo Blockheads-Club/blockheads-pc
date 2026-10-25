@@ -46,11 +46,12 @@ impl FpsPosition {
 pub enum GameZoom {
     /// Like a phone: 375 points on the short side, what the Android game gets on a 1080p phone (667x375 points at
     /// 16:9), the game's phone layout.
-    #[default]
     Phone,
     /// Closer, the old desktop default: an iPhone 5's 568x320 points (everything about 17 % bigger).
     Close,
     /// Like a tablet: an iPad's 768 points on the short side (more world, smaller interface; the game's iPad layout).
+    /// The default: a desktop window is a big screen, and the iPad layout's chat is a panel, not the whole window.
+    #[default]
     Tablet,
 }
 
@@ -108,7 +109,7 @@ impl Default for WindowOptions {
             ui_scale: 1.0,
             show_fps: false,
             fps_position: FpsPosition::TopLeft,
-            zoom: GameZoom::Phone,
+            zoom: GameZoom::Tablet,
             fps_limit: 60,
             game_speed: 1.0,
             parallel_threads: true,

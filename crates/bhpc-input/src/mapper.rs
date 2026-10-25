@@ -441,6 +441,12 @@ impl InputMapper {
             }
             return;
         }
+        if b.chat.fires(Input::Key(key), mods) && self.text.is_none() {
+            if pressed && !repeat {
+                sink.host_action(HostAction::OpenChat);
+            }
+            return;
+        }
         // The back binding stands for the Android back key; the Escape key itself is only that when it is bound.
         let key = if b.back.fires(Input::Key(key), mods) {
             HostKey::Escape

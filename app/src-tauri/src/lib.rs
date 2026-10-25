@@ -482,6 +482,12 @@ pub fn run() {
             app.state::<App>().session().set_copy_handler(move |t| {
                 let _ = h.run_on_main_thread(move || embed::copy_text(&t));
             });
+            // Pages the in-window game shows (the server's welcome message, help) arrive as `@page` lines; the main
+            // window shows them in place of the game, as the phone's web view does.
+            let h = app.handle().clone();
+            app.state::<App>().session().set_page_handler(move |html| {
+                let _ = h.emit_to("main", "game-page", html);
+            });
             if let Err(e) = open_splash(app) {
                 eprintln!("splash window failed: {e}");
                 if let Some(w) = app.get_webview_window("main") {

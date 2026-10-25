@@ -174,7 +174,7 @@ impl LaunchConfig {
         if self.window.show_fps && self.window.fps_position != crate::window::FpsPosition::TopLeft {
             a.extend(["--fps-position".to_string(), self.window.fps_position.flag().to_string()]);
         }
-        if self.window.zoom != crate::window::GameZoom::Phone {
+        if self.window.zoom != crate::window::GameZoom::default() {
             a.extend(["--zoom".to_string(), self.window.zoom.flag().to_string()]);
         }
         if self.window.ui_scale != 1.0 {

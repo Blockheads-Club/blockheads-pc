@@ -212,7 +212,7 @@ describe('Window and graphics step', () => {
     expect(store.draft?.window).toMatchObject({ width: 1920, height: 1080 });
     await waitFor(() => expect(mock.api.resizeWindow).toHaveBeenCalledWith(1920, 1080));
     const zoom = screen.getByLabelText('Game zoom') as HTMLSelectElement;
-    expect([...zoom.options].map((o) => o.textContent)).toEqual(['Phone (recommended)', 'Close-up (bigger)', 'Tablet (more world)']);
+    expect([...zoom.options].map((o) => o.textContent)).toEqual(['Phone', 'Close-up (bigger)', 'Tablet (recommended, more world)']);
     expect(zoom.value).toBe('phone');
     await fireEvent.change(zoom, { target: { value: 'tablet' } });
     expect(store.draft?.window.zoom).toBe('tablet');
@@ -229,6 +229,10 @@ describe('Window and graphics step', () => {
     expect(scale).toHaveAttribute('min', '80');
     expect(scale).toHaveAttribute('max', '130');
     expect(scale).toHaveAttribute('step', '5');
+    // While dragging the percentage follows the thumb; the value is saved on release.
+    await fireEvent.input(scale, { target: { value: '90' } });
+    expect(screen.getByText('90 %')).toBeVisible();
+    expect(store.draft?.window.ui_scale).toBe(1.25);
     await fireEvent.change(scale, { target: { value: '115' } });
     expect(store.draft?.window.ui_scale).toBe(1.15);
     expect(screen.getByText('115 %')).toBeVisible();

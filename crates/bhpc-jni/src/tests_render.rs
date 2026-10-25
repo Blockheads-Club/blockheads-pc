@@ -740,7 +740,7 @@ fn golden_dialog_with_fields() {
     let window = view(&mut e, "Window", 1, [0.0; 4]);
     let root = view(&mut e, "View", 2, [0.0, 0.0, 1024.0, 768.0]);
     add(&mut e, window, root);
-    let dialog = view(&mut e, "View", 3, [200.0, 300.0, 560.0, 600.0]);
+    let dialog = view(&mut e, "View", 3, [204.0, 300.0, 564.0, 600.0]);
     add(&mut e, root, dialog);
     set(&mut e, dialog, "_setBackgroundColor", "(I)V", &[Value::Int(argb(230, 30, 30, 40))]);
     let field = view(&mut e, "TextField", 4, [20.0, 20.0, 340.0, 60.0]);
@@ -776,7 +776,7 @@ fn golden_dialog_with_fields() {
     add(&mut e, dialog, faded);
     set(&mut e, faded, "_setBackgroundColor", "(I)V", &[Value::Int(argb(255, 200, 40, 40))]);
     set(&mut e, faded, "_setAlpha", "(F)V", &[Value::Float(0.5)]);
-    golden("dialog", &e.vm.render_ui().unwrap(), 0xab89_6260_cf12_7458);
+    golden("dialog", &e.vm.render_ui().unwrap(), 0x8e8f_fc0c_f921_f458);
 }
 
 /// The picture drawn from scratch, without the renderer's cache (which is kept for the next frame).
@@ -1174,4 +1174,26 @@ fn alerts_wait_for_their_turn_and_can_be_dismissed() {
     e.vm.close_dialog(empty);
     assert!(!e.vm.dialog_shown());
     assert!(e.vm.swap_buffers(), "the default graphics hooks present nothing");
+}
+
+#[test]
+fn the_focused_text_view_shows_a_caret() {
+    let mut e = env_with_font();
+    let window = view(&mut e, "Window", 1, [0.0; 4]);
+    let tv = view(&mut e, "TextView", 2, [10.0, 300.0, 300.0, 350.0]);
+    add(&mut e, window, tv);
+    let f = face(&mut e, "fonts/Face.ttf");
+    set_font(&mut e, tv, f, 20.0);
+    set(&mut e, tv, "setTextColor", "(I)V", &[Value::Int(argb(255, 255, 255, 255))]);
+    assert!(e.vm.render_ui().is_none(), "nothing to draw yet");
+    e.vm.set_text_focus(Some(tv));
+    e.vm.set_text_focus(Some(tv));
+    let caret = e.vm.render_ui().expect("the caret alone");
+    e.vm.set_text_of(tv, "hi");
+    let typed = e.vm.render_ui().unwrap();
+    e.vm.set_text_focus(None);
+    let plain = e.vm.render_ui().unwrap();
+    assert!(caret.rgba.iter().any(|&b| b != 0), "the caret is drawn");
+    assert!(caret.rgba != typed.rgba);
+    assert!(typed.rgba != plain.rgba, "the caret goes away with the focus");
 }

@@ -364,9 +364,13 @@ impl FrameWriter {
 /// `%XX`-escaped so the text stays on one line.
 pub const COPY_PREFIX: &str = "@copy ";
 
-/// The `@copy` line for `text`.
-pub fn copy_line(text: &str) -> String {
-    let mut out = String::from(COPY_PREFIX);
+/// Runner -> launcher (stdout): the game shows an HTML page (the server's welcome message, help). The in-window game
+/// has the launcher show it in place of the game, as the phone shows its web view; escaped like [`COPY_PREFIX`].
+pub const PAGE_PREFIX: &str = "@page ";
+
+/// `prefix` and `text` on one line: `%` and control characters `%XX`-escaped.
+fn escaped_line(prefix: &str, text: &str) -> String {
+    let mut out = String::from(prefix);
     for c in text.chars() {
         if c == '%' || c.is_control() {
             let mut b = [0u8; 4];
@@ -380,9 +384,9 @@ pub fn copy_line(text: &str) -> String {
     out
 }
 
-/// The text of an `@copy` line (`None` for any other line).
-pub fn parse_copy(line: &str) -> Option<String> {
-    let rest = line.trim_end_matches(['\r', '\n']).strip_prefix(COPY_PREFIX)?.as_bytes();
+/// The text of an [`escaped_line`] with this prefix (`None` for any other line).
+fn parse_escaped(prefix: &str, line: &str) -> Option<String> {
+    let rest = line.trim_end_matches(['\r', '\n']).strip_prefix(prefix)?.as_bytes();
     let mut out = Vec::with_capacity(rest.len());
     let mut i = 0;
     while i < rest.len() {
@@ -402,6 +406,26 @@ pub fn parse_copy(line: &str) -> Option<String> {
         }
     }
     Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// The `@copy` line for `text`.
+pub fn copy_line(text: &str) -> String {
+    escaped_line(COPY_PREFIX, text)
+}
+
+/// The text of an `@copy` line (`None` for any other line).
+pub fn parse_copy(line: &str) -> Option<String> {
+    parse_escaped(COPY_PREFIX, line)
+}
+
+/// The `@page` line for a self-contained HTML page.
+pub fn page_line(html: &str) -> String {
+    escaped_line(PAGE_PREFIX, html)
+}
+
+/// The HTML of an `@page` line (`None` for any other line).
+pub fn parse_page(line: &str) -> Option<String> {
+    parse_escaped(PAGE_PREFIX, line)
 }
 
 pub const MOD_CTRL: u8 = 1;

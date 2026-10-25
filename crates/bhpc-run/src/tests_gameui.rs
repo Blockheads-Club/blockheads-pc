@@ -134,6 +134,10 @@ fn objects_grid_pause_and_dpad_of_a_world() {
     assert_eq!((none.game_view(), none.world(&m)), (None, None));
     assert!(none.grid(&m, (1000.0, 800.0)).is_none() && !none.pause_shown(&m) && none.dpad(&m).is_none());
     assert_eq!(none.zoom(&m), None);
+    // The game opening its pause menu is noted once.
+    assert!(!none.take_paused());
+    none.saw_pause();
+    assert!(none.take_paused() && !none.take_paused());
     assert!(!none.set_zoom(&m, 2.0));
     let g = in_world(&m);
     assert_eq!(g.world(&m), Some(WORLD));
@@ -141,6 +145,12 @@ fn objects_grid_pause_and_dpad_of_a_world() {
     let c = grid.screen((100.5, 50.5)).unwrap();
     assert!((c.0 - 500.0).abs() < 0.05 && (c.1 - 400.0).abs() < 0.05, "{c:?}");
     assert!((grid.tile_size(c) - 20.0).abs() < 0.2);
+    // The idle timer: only reset once its place is known.
+    assert!(!g.reset_idle(&m) && !GameUi::new(ivars()).with_idle_timer(0x40).reset_idle(&m));
+    m.write_u32(WORLD + 0x40, 42f32.to_bits()).unwrap();
+    let g = g.with_idle_timer(0x40);
+    assert!(g.reset_idle(&m));
+    assert_eq!(m.read_u32(WORLD + 0x40).unwrap(), 0f32.to_bits());
     // Pause menu.
     assert!(!g.pause_shown(&m));
     m.write_u8(PAUSE + ivars().view_displayed, 1).unwrap();

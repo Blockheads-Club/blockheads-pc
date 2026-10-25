@@ -188,6 +188,11 @@ pub trait SystemHooks: Send + Sync {
     fn show_html(&self, _html: &str, _files: &[(String, Vec<u8>)]) -> bool {
         false
     }
+    /// [`SystemHooks::show_html`] shows pages in place of the game (the launcher's window), as the phone's web view
+    /// does: then even the server's short welcome message goes there instead of an in-game dialog.
+    fn shows_pages(&self) -> bool {
+        false
+    }
     /// Put `text` on the desktop clipboard.
     fn set_clipboard(&self, _text: &str) {}
     /// The desktop clipboard's text, if the host can read it.

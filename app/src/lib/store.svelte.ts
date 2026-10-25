@@ -11,7 +11,7 @@ import { baseName, copyText, MIN_EDGE, recommendedSize, stageMatches, stageSize 
 
 export type Screen = 'splash' | 'setup' | 'home' | 'playing' | 'settings' | 'mods';
 export type Section = SettingsPage;
-export type DialogName = 'join' | 'update' | 'logs' | 'close' | 'import' | 'resetKeys' | null;
+export type DialogName = 'join' | 'update' | 'logs' | 'close' | 'import' | 'resetKeys' | 'page' | null;
 export const SETUP_STEPS = 6;
 export const MAX_LOG = 5000;
 export const REPO_URL = 'https://github.com/Blockheads-Club/blockheads-pc';
@@ -58,6 +58,8 @@ export class AppStore {
   /** The Settings page shown; kept while the app runs, so Settings reopens where it was left. */
   section = $state<Section>('game');
   dialog = $state<DialogName>(null);
+  /** The page the game shows (self-contained HTML) while the `page` dialog is open. */
+  page = $state('');
   /** The setup draft; the saved config takes over when setup finishes. */
   draft = $state<LaunchConfig | null>(null);
   legalOk = $state(false);
@@ -548,6 +550,17 @@ export class AppStore {
   }
 
   /** Quit from the tray: ask first while a game runs. */
+  /** The game shows a page: it takes the place of the game (and of any other dialog) until closed. */
+  showPage(html: string) {
+    this.page = html;
+    this.dialog = 'page';
+  }
+
+  closePage() {
+    this.page = '';
+    if (this.dialog === 'page') this.dialog = null;
+  }
+
   requestQuit() {
     if (this.active) this.dialog = 'close';
     else void api.appQuit().catch((e) => this.fail(e));

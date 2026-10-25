@@ -195,7 +195,9 @@ describe('page', () => {
 
   it('asks before quitting from the tray while the game runs, and labels the tray menu', async () => {
     let quit: (() => void) | undefined;
+    let page: ((html: string) => void) | undefined;
     mock.api.onQuitRequested = vi.fn(async (cb: () => void) => { quit = cb; return () => {}; });
+    mock.api.onGamePage = vi.fn(async (cb: (html: string) => void) => { page = cb; return () => {}; });
     mock.api.boot = vi.fn(async () => makeBoot());
     mock.api.gamePoll = vi.fn(async () => makeSnap({ state: 'running', running_secs: 1 }));
     render(Page);
@@ -205,6 +207,9 @@ describe('page', () => {
     quit?.();
     expect(await screen.findByRole('alertdialog')).toBeVisible();
     expect(mock.api.trayLabels).toHaveBeenCalledWith('Show Blockheads PC', 'Quit');
+    // A page the game shows takes the place of the game.
+    page?.('<title>HI</title>');
+    expect(await screen.findByRole('dialog', { name: 'HI' })).toBeVisible();
   });
 
   it('rounds the window except maximized, fullscreen or native (macOS)', async () => {
@@ -279,6 +284,7 @@ describe('page', () => {
 
   it('survives a window without close events and picks the OS from the user agent', async () => {
     mock.api.onQuitRequested = vi.fn(async () => { throw new Error('no window'); });
+    mock.api.onGamePage = vi.fn(async () => { throw new Error('no window'); });
     mock.api.trayLabels = vi.fn(async () => { throw new Error('no tray'); });
     mock.win.onResized = vi.fn(async () => { throw new Error('no window'); });
     mock.api.boot = vi.fn(async () => makeBoot());

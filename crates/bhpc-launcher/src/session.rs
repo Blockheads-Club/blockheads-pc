@@ -147,6 +147,8 @@ pub struct Session {
     grace: Duration,
     /// Called with the text of every `@copy` line of the game (see [`crate::embed::copy_line`]).
     on_copy: CopyHandler,
+    /// Called with the HTML of every `@page` line of the game (see [`crate::embed::page_line`]).
+    on_page: CopyHandler,
     /// The last `@mods` report of the running game.
     live: LiveMods,
     /// How long an in-window game asked to quit may take to save and end (see [`Session::stop`]).
@@ -156,7 +158,7 @@ pub struct Session {
 /// The running game's last mod report.
 pub type LiveMods = Arc<Mutex<Option<Vec<crate::mods::live::LiveMod>>>>;
 
-/// What the launcher does with text the game copied.
+/// What the launcher does with text the game copied (or a page it shows).
 pub type CopyHandler = Arc<Mutex<Option<Box<dyn Fn(String) + Send>>>>;
 
 /// How long [`Session::stop`] waits for an in-window game to close itself (it saves first: background, terminate).
@@ -168,21 +170,21 @@ impl Default for Session {
     }
 }
 
+/// What [`pump`] feeds besides the log: the progress tracker (with the start), the copy and page handlers, the
+/// live mod report.
+type Track = (Arc<Mutex<Tracker>>, Instant, [CopyHandler; 2], LiveMods);
+
 /// Reads lines into the log. With `track`, progress lines (see [`progress`]) go to the tracker, `@copy` lines to the
-/// copy handler and `@mods` lines to the live mod report instead of the log.
+/// copy handler, `@page` lines to the page handler and `@mods` lines to the live mod report instead of the log.
 /// (Not generic, so that stdout and stderr share one instantiation.)
-fn pump(
-    source: Box<dyn Read + Send>,
-    log: Arc<Mutex<LogBuffer>>,
-    track: Option<(Arc<Mutex<Tracker>>, Instant, CopyHandler, LiveMods)>,
-) -> JoinHandle<()> {
+fn pump(source: Box<dyn Read + Send>, log: Arc<Mutex<LogBuffer>>, track: Option<Track>) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(source);
         let mut buf = Vec::new();
         while reader.read_until(b'\n', &mut buf).map(|n| n > 0).unwrap_or(false) {
             let line = String::from_utf8_lossy(&buf).trim_end().to_string();
             buf.clear();
-            if let Some((tracker, began, copy, live)) = &track {
+            if let Some((tracker, began, [copy, page], live)) = &track {
                 if let Some(mods) = crate::mods::live::parse(&line) {
                     *live.lock().expect("live lock") = Some(mods);
                     continue;
@@ -191,8 +193,9 @@ fn pump(
                     tracker.lock().expect("tracker lock").feed(parsed, began.elapsed());
                     continue;
                 }
-                if let Some(text) = crate::embed::parse_copy(&line) {
-                    if let Some(f) = copy.lock().expect("copy lock").as_ref() {
+                let handled = [(crate::embed::parse_copy(&line), copy), (crate::embed::parse_page(&line), page)];
+                if let Some((text, handler)) = handled.into_iter().find_map(|(t, h)| t.map(|t| (t, h))) {
+                    if let Some(f) = handler.lock().expect("handler lock").as_ref() {
                         f(text);
                     }
                     continue;
@@ -248,6 +251,7 @@ impl Session {
             stall: progress::STALL,
             grace,
             on_copy: Arc::default(),
+            on_page: Arc::default(),
             live: Arc::default(),
             quit_grace: QUIT_GRACE,
         }
@@ -256,6 +260,11 @@ impl Session {
     /// What to do with text the game copies (in-window mode: put it on the desktop clipboard).
     pub fn set_copy_handler(&mut self, f: impl Fn(String) + Send + 'static) {
         *self.on_copy.lock().expect("copy lock") = Some(Box::new(f));
+    }
+
+    /// What to do with a page the game shows (in-window mode: show it in place of the game).
+    pub fn set_page_handler(&mut self, f: impl Fn(String) + Send + 'static) {
+        *self.on_page.lock().expect("page lock") = Some(Box::new(f));
     }
 
     /// Keeps the step durations of every start in this file and derives the next start's weights from it.
@@ -295,7 +304,8 @@ impl Session {
         let started = Instant::now();
         let mut readers = Vec::new();
         readers.extend(child.stdout.take().map(|s| {
-            let track = (self.tracker.clone(), started, self.on_copy.clone(), self.live.clone());
+            let track =
+                (self.tracker.clone(), started, [self.on_copy.clone(), self.on_page.clone()], self.live.clone());
             pump(Box::new(s), self.log.clone(), Some(track))
         }));
         readers.extend(child.stderr.take().map(|s| pump(Box::new(s), self.log.clone(), None)));

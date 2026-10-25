@@ -113,8 +113,9 @@ describe('api', () => {
     await api.onSplashState((s) => seen.push(s));
     await api.onSplashRetry(() => seen.push('retry'));
     await api.onQuitRequested(() => seen.push('quit'));
-    expect(seen).toEqual(['p', 'retry', 'quit']);
-    expect(event.listen.mock.calls.map((c) => c[0])).toEqual(['splash-state', 'splash-retry', 'quit-requested']);
+    await api.onGamePage((h) => seen.push(`page ${h}`));
+    expect(seen).toEqual(['p', 'retry', 'quit', 'page p']);
+    expect(event.listen.mock.calls.map((c) => c[0])).toEqual(['splash-state', 'splash-retry', 'quit-requested', 'game-page']);
   });
 
   it('opens links and the native pickers', async () => {

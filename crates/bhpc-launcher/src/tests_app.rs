@@ -206,18 +206,18 @@ fn run_args_and_config_expansion() {
     assert!(!c.run_args().contains(&"--game-speed".to_string()));
     c.window.game_speed = 1.5;
     assert_eq!(c.run_args()[14..], ["--game-speed", "1.5"]);
-    // The zoom only when it is not the phone-like default.
+    // The zoom only when it is not the tablet default.
     c.window.game_speed = 1.0;
     assert!(!c.run_args().contains(&"--zoom".to_string()));
     use crate::window::GameZoom;
-    for (z, flag) in [(GameZoom::Close, "close"), (GameZoom::Tablet, "tablet")] {
+    for (z, flag) in [(GameZoom::Close, "close"), (GameZoom::Phone, "phone")] {
         c.window.zoom = z;
         assert_eq!(c.run_args()[14..], ["--zoom", flag]);
         assert_eq!(GameZoom::parse(flag), Some(z));
     }
-    assert_eq!(GameZoom::parse("phone"), Some(GameZoom::Phone));
+    assert_eq!(GameZoom::parse("tablet"), Some(GameZoom::Tablet));
     assert_eq!(GameZoom::parse("huge"), None);
-    c.window.zoom = GameZoom::Phone;
+    c.window.zoom = GameZoom::Tablet;
     // The game UI scale only when it is not 100 %.
     assert!(!c.run_args().contains(&"--ui-scale".to_string()));
     c.window.ui_scale = 1.15;
@@ -394,6 +394,15 @@ mod unix {
         lines.sort();
         assert_eq!(lines, ["@copy b", "done"], "stderr is never parsed");
         assert_eq!(*got.lock().unwrap(), ["a\nb"]);
+        // Pages go to their own handler.
+        let pages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let p = pages.clone();
+        s.set_page_handler(move |t| p.lock().unwrap().push(t));
+        let (prog, args) = sh("echo '@page <p>hi%0A</p>'; echo end");
+        s.start(&prog, &args, &[]).unwrap();
+        assert_eq!(until_done(&mut s, true).lines, ["end"]);
+        assert_eq!(*pages.lock().unwrap(), ["<p>hi\n</p>"]);
+        assert_eq!(got.lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -1016,4 +1025,8 @@ fn launcher_links_and_copy_lines() {
     assert_eq!(copy_line("a%\nb"), "@copy a%25%0Ab");
     assert_eq!(parse_copy("@copy 50% %zz %4"), Some("50% %zz %4".to_string()));
     assert_eq!(parse_copy("@progress apk 0 1"), None);
+    use crate::embed::{page_line, parse_page};
+    assert_eq!(page_line("<b>1%</b>\n"), "@page <b>1%25</b>%0A");
+    assert_eq!(parse_page(&page_line("<p>\u{e9}\r\n</p>")).as_deref(), Some("<p>\u{e9}\r\n</p>"));
+    assert_eq!(parse_page("@copy x"), None);
 }

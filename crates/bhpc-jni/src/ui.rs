@@ -122,22 +122,134 @@ pub(crate) struct Landscape {
 }
 
 impl Landscape {
-    /// How far a child's origin moves back when it is a landscape layout inside the portrait space: the game's chat
-    /// is laid out for the landscape screen (a full-screen view, below the root view), the popups for the portrait
-    /// space; [`Vm::ui_offset`] centres the latter. `parent` is the child's parent.
-    pub(crate) fn shift(land: Option<Landscape>, parent: &View, child: &View) -> (f32, f32) {
-        match land {
-            Some(l)
-                if parent.kind != "Window"
-                    && child.frame[0] == 0.0
-                    && child.frame[1] == 0.0
-                    && (child.frame[2], child.frame[3]) == l.size =>
-            {
-                (-l.offset.0, -l.offset.1)
-            }
-            _ => (0.0, 0.0),
+    /// How far a child's origin moves back when it is a landscape layout inside the portrait space. The window's
+    /// landscape root (its full-screen child) holds both: the game's popups, laid out for the portrait space and
+    /// centred across it, which [`Vm::ui_offset`] centres in the window, and the chat, laid out for the landscape
+    /// screen (full-screen on a phone, a panel at the left on a tablet), whose (0, 0) is the window's corner.
+    /// `parent` is the child's parent; `views` finds the parent's own parent.
+    pub(crate) fn shift(
+        land: Option<Landscape>,
+        views: &HashMap<Obj, View>,
+        parent: &View,
+        child: &View,
+    ) -> (f32, f32) {
+        let Some(l) = land else { return (0.0, 0.0) };
+        let root = parent.frame == [0.0, 0.0, l.size.0, l.size.1]
+            && parent.parent.and_then(|g| views.get(&g)).is_some_and(|g| g.kind == "Window");
+        let portrait_centre = l.size.0.min(l.size.1) / 2.0;
+        let centred = ((child.frame[0] + child.frame[2]) / 2.0 - portrait_centre).abs() < 1.0;
+        if root && !centred {
+            (-l.offset.0, -l.offset.1)
+        } else {
+            (0.0, 0.0)
         }
     }
+}
+
+/// Space between the desktop chat's parts.
+const CHAT_PAD: f32 = 4.0;
+
+/// The parts of the game's chat panel (a view with a text view and a scroll view among its children) the desktop
+/// layout places, and the size of the box it draws (its background picture, else the panel).
+struct ChatPanel<'a> {
+    size: (f32, f32),
+    header: Option<&'a View>,
+    /// The input line; the game takes it out of the panel while it lists the messages.
+    text: Option<&'a View>,
+    scroll: &'a View,
+    /// The header's right-most shown button (SEND) while the input line is shown (the game is composing).
+    send: Option<&'a View>,
+    /// The input line is shown: the panel is composing a message (otherwise it lists them, with NEW in the header).
+    composing: bool,
+}
+
+fn size_of(f: &[f32; 4]) -> (f32, f32) {
+    (f[2] - f[0], f[3] - f[1])
+}
+
+fn chat_panel<'a>(views: &'a HashMap<Obj, View>, panel: &View) -> Option<ChatPanel<'a>> {
+    let kids = || panel.children.iter().filter_map(|c| views.get(c));
+    let text = kids().find(|v| v.kind == "TextView");
+    let scroll = kids().find(|v| v.kind == "ScrollView")?;
+    let at_corner = |v: &&View| v.frame[0] == 0.0 && v.frame[1] == 0.0;
+    let bg = kids().filter(at_corner).find(|v| v.kind == "ImageView");
+    let size = size_of(&bg.unwrap_or(panel).frame);
+    let buttons = |h: &View| -> Vec<&'a View> {
+        h.children.iter().filter_map(|c| views.get(c)).filter(|v| v.kind == "Button").collect()
+    };
+    let header = kids().filter(at_corner).find(|v| v.kind == "View" && !buttons(v).is_empty());
+    // Without its input line the panel is known by its title.
+    let titled =
+        |h: &View| h.children.iter().filter_map(|c| views.get(c)).any(|v| v.kind == "Label" && v.text == "CHAT");
+    if text.is_none() && !header.is_some_and(titled) {
+        return None;
+    }
+    let composing = text.is_some_and(|t| !t.hidden);
+    let send = header.map(buttons).filter(|_| composing).and_then(|b| {
+        let shown: Vec<&View> = b.into_iter().filter(|v| !v.hidden).collect();
+        (shown.len() > 1).then(|| shown.into_iter().max_by(|x, y| x.frame[0].total_cmp(&y.frame[0])))?
+    });
+    Some(ChatPanel { size, header, text, scroll, send, composing })
+}
+
+/// Where the desktop chat puts `child` of `parent` (`left, top, right, bottom` in the parent's content), when it is
+/// a part of the game's chat panel. The game draws the panel as on a phone: header (CLOSE, CHAT, SEND), the input
+/// line under it, then the messages with the newest at the top. On the desktop the header spans the box, the
+/// messages follow it from the oldest to the newest, and the input line sits at the bottom with SEND at its right.
+/// Only drawing and touches move; the game's own layout is unchanged.
+fn chat_frame(views: &HashMap<Obj, View>, parent: &View, child: &View) -> Option<[f32; 4]> {
+    let grand = || parent.parent.and_then(|p| views.get(&p));
+    if let Some(c) = chat_panel(views, parent) {
+        let (w, h) = c.size;
+        // Without the input line the messages reach the bottom.
+        let row = c.text.filter(|_| c.composing).map_or(0.0, |t| t.frame[3] - t.frame[1]);
+        let send_w = c.send.map_or(0.0, |b| b.frame[2] - b.frame[0] + CHAT_PAD);
+        let head = c.header.map(|v| v.frame[3]).or(c.text.map(|t| t.frame[1])).unwrap_or(0.0);
+        if c.header.is_some_and(|v| std::ptr::eq(v, child)) {
+            return Some([0.0, 0.0, w, head]);
+        }
+        if std::ptr::eq(child, c.scroll) {
+            return Some([CHAT_PAD, head + CHAT_PAD, w - CHAT_PAD, h - row - CHAT_PAD]);
+        }
+        // The input line and what lies in its band (the picture behind it).
+        if c.text.is_some_and(|t| child.frame[1] >= t.frame[1] && child.frame[1] < t.frame[3]) {
+            // The text starts a little in from the box's edge.
+            let left = if child.kind == "TextView" { CHAT_PAD } else { 0.0 };
+            return Some([left, h - row, w - send_w - CHAT_PAD, h]);
+        }
+        return None;
+    }
+    // The header's own parts: the title and the line under it span the box, SEND goes next to the input line.
+    if let Some(c) =
+        grand().and_then(|g| chat_panel(views, g)).filter(|c| c.header.is_some_and(|v| std::ptr::eq(v, parent)))
+    {
+        let (w, h) = c.size;
+        let (cw, ch) = size_of(&child.frame);
+        if c.send.is_some_and(|b| std::ptr::eq(b, child)) {
+            // SEND is only taken while the input line is shown.
+            let row = c.text.map_or(0.0, |t| t.frame[3] - t.frame[1]);
+            let top = h - row + (row - ch) / 2.0 - parent.frame[1];
+            return Some([w - CHAT_PAD - cw, top, w - CHAT_PAD, top + ch]);
+        }
+        if child.kind == "Label" || (child.kind == "View" && ch <= 4.0) {
+            return Some([0.0, child.frame[1], w, child.frame[3]]);
+        }
+        return None;
+    }
+    // A message row: mirrored in the shown part of the list, so the newest is at the bottom.
+    let panel = grand().and_then(|g| chat_panel(views, g)).filter(|c| std::ptr::eq(c.scroll, parent))?;
+    let list = chat_frame(views, grand()?, panel.scroll).unwrap_or(parent.frame);
+    let (top, ch) = (child.frame[1] - parent.bounds[1], child.frame[3] - child.frame[1]);
+    let mirrored = (list[3] - list[1]) - top - ch + parent.bounds[1];
+    Some([child.frame[0], mirrored, child.frame[2], mirrored + ch])
+}
+
+/// Where `child` lies in `parent`'s content (`left, top, right, bottom`): its frame, placed by the desktop chat
+/// layout ([`chat_frame`]) and moved back when it is a landscape layout ([`Landscape::shift`]).
+pub(crate) fn placed(land: Option<Landscape>, views: &HashMap<Obj, View>, parent: &View, child: &View) -> [f32; 4] {
+    let f = chat_frame(views, parent, child).unwrap_or(child.frame);
+    let (dx, dy) = Landscape::shift(land, views, parent, child);
+    [f[0] + dx, f[1] + dy, f[2] + dx, f[3] + dy]
 }
 
 fn contains(f: &[f32; 4], origin: (f32, f32), x: f32, y: f32) -> bool {
@@ -243,9 +355,9 @@ impl Vm {
         let mut shown = !root.hidden && root.alpha > 0.01;
         for pair in chain.windows(2).rev() {
             let (parent, child) = (views.get(&pair[1])?, views.get(&pair[0])?);
-            let shift = Landscape::shift(land, parent, child);
-            origin.0 += child.frame[0] - parent.bounds[0] + shift.0;
-            origin.1 += child.frame[1] - parent.bounds[1] + shift.1;
+            let f = placed(land, views, parent, child);
+            origin.0 += f[0] - parent.bounds[0];
+            origin.1 += f[1] - parent.bounds[1];
             shown &= !child.hidden && child.alpha > 0.01;
         }
         Some((origin, shown && root.kind == "Window"))
@@ -254,14 +366,17 @@ impl Vm {
     /// Frame of `view` in window coordinates `(x, y, w, h)`, with whether it is shown.
     pub fn view_rect(&self, view: Obj) -> Option<([f32; 4], bool)> {
         let st = self.st();
-        let (o, shown) = Self::abs_origin(&st.ui.views, view, self.landscape())?;
-        let f = st.ui.views.get(&view)?.frame;
+        let land = self.landscape();
+        let (o, shown) = Self::abs_origin(&st.ui.views, view, land)?;
+        let v = st.ui.views.get(&view)?;
+        let f = v.parent.and_then(|p| st.ui.views.get(&p)).map_or(v.frame, |p| placed(land, &st.ui.views, p, v));
         Some(([o.0, o.1, f[2] - f[0], f[3] - f[1]], shown))
     }
 
     fn hit(
         views: &HashMap<Obj, View>,
         v: Obj,
+        frame: [f32; 4],
         origin: (f32, f32),
         land: Option<Landscape>,
         x: f32,
@@ -273,16 +388,15 @@ impl Vm {
         }
         // Like the renderer, only a clipping view confines its subviews: the game's landscape root view holds the
         // portrait popups, whose buttons lie below its bottom edge.
-        let inside = info.kind == "Window" || contains(&info.frame, origin, x, y);
+        let inside = info.kind == "Window" || contains(&frame, origin, x, y);
         if !inside && info.clips {
             return None;
         }
         for c in info.children.iter().rev() {
             let Some(ci) = views.get(c) else { continue };
-            let shift = Landscape::shift(land, info, ci);
-            let co =
-                (origin.0 + ci.frame[0] - info.bounds[0] + shift.0, origin.1 + ci.frame[1] - info.bounds[1] + shift.1);
-            if let Some(h) = Self::hit(views, *c, co, land, x, y) {
+            let f = placed(land, views, info, ci);
+            let co = (origin.0 + f[0] - info.bounds[0], origin.1 + f[1] - info.bounds[1]);
+            if let Some(h) = Self::hit(views, *c, f, co, land, x, y) {
                 return Some(h);
             }
         }
@@ -300,7 +414,7 @@ impl Vm {
         let land = self.landscape();
         windows.into_iter().find_map(|w| {
             let root = st.ui.views.get(&w)?;
-            let h = Self::hit(&st.ui.views, w, (root.frame[0], root.frame[1]), land, x, y)?;
+            let h = Self::hit(&st.ui.views, w, root.frame, (root.frame[0], root.frame[1]), land, x, y)?;
             let v = st.ui.views.get(&h)?;
             Some(Hit { view: h, kind: v.kind.clone(), handle: v.handle })
         })
@@ -438,6 +552,22 @@ impl Vm {
             }
         }
         found.map(|f| f.1)
+    }
+
+    /// The CLOSE button of the shown chat panel (the left-most button of its header) and whether the panel is
+    /// composing a message: then CLOSE first goes back to the list, and a second press closes the panel.
+    pub fn chat_close_button(&self) -> Option<(Obj, bool)> {
+        let st = self.st();
+        let views = &st.ui.views;
+        let land = self.landscape();
+        views.iter().find_map(|(o, v)| {
+            let panel = chat_panel(views, v)?;
+            let header = panel.header?;
+            Self::abs_origin(views, *o, land).filter(|(_, shown)| *shown)?;
+            let buttons =
+                header.children.iter().filter_map(|b| views.get(b).filter(|v| v.kind == "Button").map(|v| (*b, v)));
+            buttons.min_by(|a, b| a.1.frame[0].total_cmp(&b.1.frame[0])).map(|(b, _)| (b, panel.composing))
+        })
     }
 
     /// Tap a button as the view system does for a touch inside it: `TouchDown`, then `TouchUpInside`.

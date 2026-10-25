@@ -378,6 +378,15 @@ fn landscape_layouts_inside_the_portrait_space_are_not_shifted() {
     let (ux, uy) = e.vm.screen_to_ui(750.0, 30.0);
     assert_eq!(e.vm.hit_test(ux, uy).map(|h| h.view), Some(send));
     assert_eq!(e.vm.control_screen_pos("send"), Some((750.0, 35.0)));
+    // the tablet chat: a panel at the left of the landscape root, its (20, 20) the window's
+    let panel = view(&mut e, "View", 8, Some((20.0, 20.0, 220.0, 300.0)));
+    add(&mut e, root, panel);
+    let (r, _) = e.vm.view_rect(panel).unwrap();
+    assert_eq!(e.vm.ui_to_screen(r[0], r[1]), (20.0, 20.0));
+    // a popup centred across the portrait space (480 wide) stays there
+    let popup = view(&mut e, "View", 9, Some((140.0, 300.0, 340.0, 500.0)));
+    add(&mut e, root, popup);
+    assert_eq!(e.vm.view_rect(popup).unwrap().0, [140.0, 300.0, 200.0, 200.0]);
     // the root itself, a full-screen child of the window and a smaller view are placed in the portrait space
     assert_eq!(e.vm.view_rect(root).unwrap().0, [0.0, 0.0, 800.0, 480.0]);
     let full = view(&mut e, "View", 7, Some((0.0, 0.0, 800.0, 480.0)));
@@ -407,8 +416,89 @@ fn landscape_layouts_inside_the_portrait_space_are_not_shifted() {
 fn the_text_of_a_text_view_is_kept_for_the_renderer() {
     let mut e = Env::new();
     let tv = view(&mut e, "TextView", 4, Some((0.0, 0.0, 100.0, 50.0)));
-    e.vm.set_text_of(tv, "Türkçe");
+    assert_eq!(e.vm.text_of(tv), "", "no text yet");
+    e.vm.replace_text(tv, 0, 0, "Türkçe!");
+    e.vm.replace_text(tv, 6, 5, "");
+    assert_eq!(e.vm.text_of(tv), "Türkçe", "replacing past the end is clamped");
     assert!(e.vm.dump_views().contains("\"Türkçe\""));
     assert_eq!(e.vm.view_kind(tv).as_deref(), Some("TextView"));
     assert_eq!(e.vm.view_kind(Obj(0)), None);
+}
+
+#[test]
+fn the_chat_reads_like_a_desktop_chat() {
+    let mut e = Env::new();
+    let window = view(&mut e, "Window", 1, None);
+    let root = view(&mut e, "View", 2, Some((0.0, 0.0, 800.0, 480.0)));
+    let panel = view(&mut e, "View", 3, Some((20.0, 20.0, 220.0, 300.0)));
+    let bg = view(&mut e, "ImageView", 4, Some((0.0, 0.0, 200.0, 280.0)));
+    let header = view(&mut e, "View", 5, Some((0.0, 0.0, 120.0, 30.0)));
+    let close = view(&mut e, "Button", 6, Some((5.0, 5.0, 45.0, 25.0)));
+    let title = view(&mut e, "Label", 7, Some((40.0, 5.0, 80.0, 25.0)));
+    let line = view(&mut e, "View", 8, Some((0.0, 28.0, 120.0, 30.0)));
+    let send = view(&mut e, "Button", 9, Some((75.0, 5.0, 115.0, 25.0)));
+    let field_bg = view(&mut e, "ImageView", 10, Some((0.0, 30.0, 120.0, 70.0)));
+    let text = view(&mut e, "TextView", 11, Some((0.0, 30.0, 120.0, 70.0)));
+    let scroll = view(&mut e, "ScrollView", 12, Some((0.0, 72.0, 120.0, 272.0)));
+    let newest = view(&mut e, "View", 13, Some((0.0, 0.0, 120.0, 40.0)));
+    let older = view(&mut e, "View", 14, Some((0.0, 40.0, 120.0, 80.0)));
+    add(&mut e, window, root);
+    add(&mut e, root, panel);
+    for c in [bg, header, field_bg, text, scroll] {
+        add(&mut e, panel, c);
+    }
+    for c in [close, title, line, send] {
+        add(&mut e, header, c);
+    }
+    add(&mut e, scroll, newest);
+    add(&mut e, scroll, older);
+    // `x, y, w, h` relative to the panel
+    let at = |e: &Env, v: Obj| {
+        let (p, r) = (e.vm.view_rect(panel).unwrap().0, e.vm.view_rect(v).unwrap().0);
+        [r[0] - p[0], r[1] - p[1], r[2], r[3]]
+    };
+    assert_eq!(at(&e, header), [0.0, 0.0, 200.0, 30.0], "the header spans the box");
+    assert_eq!((at(&e, title), at(&e, line)), ([0.0, 5.0, 200.0, 20.0], [0.0, 28.0, 200.0, 2.0]));
+    assert_eq!(at(&e, close), [5.0, 5.0, 40.0, 20.0], "CLOSE stays");
+    assert_eq!(at(&e, bg), [0.0, 0.0, 200.0, 280.0], "the box itself stays");
+    assert_eq!(at(&e, scroll), [4.0, 34.0, 192.0, 202.0], "the messages follow the header");
+    assert_eq!(at(&e, field_bg), [0.0, 240.0, 152.0, 40.0], "the input line at the bottom");
+    assert_eq!(at(&e, text), [4.0, 240.0, 148.0, 40.0]);
+    assert_eq!(at(&e, send), [156.0, 250.0, 40.0, 20.0], "SEND next to it");
+    let s = at(&e, scroll)[1];
+    assert_eq!((at(&e, newest)[1] - s, at(&e, older)[1] - s), (162.0, 122.0), "the newest message at the bottom");
+    // touches find SEND where it is drawn; Return and the pause menu find the buttons
+    let r = e.vm.view_rect(send).unwrap().0;
+    assert_eq!(e.vm.hit_test(r[0] + 5.0, r[1] + 5.0).map(|h| h.view), Some(send));
+    assert_eq!(e.vm.return_button(text), Some(send));
+    assert_eq!(e.vm.chat_close_button(), Some((close, true)));
+    // scrolled by 20: the shown part moves
+    let b = rect(&mut e, 0.0, 20.0, 120.0, 220.0);
+    e.call(scroll, "setBounds", "(Landroid/graphics/RectF;)V", &[b]).unwrap();
+    assert_eq!(at(&e, newest)[1] - s, 182.0);
+    // the list without the input line (NEW instead of SEND): the messages reach the bottom, the header keeps NEW
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(1)]).unwrap();
+    assert_eq!(at(&e, scroll), [4.0, 34.0, 192.0, 242.0]);
+    assert_eq!(at(&e, send), [75.0, 5.0, 40.0, 20.0]);
+    assert_eq!(e.vm.chat_close_button(), Some((close, false)));
+    // The game takes the input line out while it lists: the panel is then known by its title.
+    e.vm.ui_detach(text);
+    e.vm.ui_detach(field_bg);
+    assert_eq!(at(&e, scroll)[1], 72.0, "an untitled panel without an input line is no chat");
+    let t = e.string("CHAT");
+    e.call(title, "setText", "(Ljava/lang/String;)V", &[t]).unwrap();
+    assert_eq!(at(&e, scroll), [4.0, 34.0, 192.0, 242.0]);
+    let s = at(&e, scroll)[1];
+    let b = rect(&mut e, 0.0, 0.0, 120.0, 200.0);
+    e.call(scroll, "setBounds", "(Landroid/graphics/RectF;)V", &[b]).unwrap();
+    assert_eq!(at(&e, newest)[1] - s, 202.0, "the newest still at the bottom");
+    assert_eq!(e.vm.chat_close_button(), Some((close, false)));
+    e.call(panel, "setHidden", "(Z)V", &[Value::Int(1)]).unwrap();
+    assert_eq!(e.vm.chat_close_button(), None, "no chat shown");
+    // a scroll view outside a chat panel keeps its order
+    let list = view(&mut e, "ScrollView", 20, Some((300.0, 0.0, 400.0, 100.0)));
+    let row = view(&mut e, "View", 21, Some((0.0, 0.0, 100.0, 20.0)));
+    add(&mut e, root, list);
+    add(&mut e, list, row);
+    assert_eq!(e.vm.view_rect(row).unwrap().0[1], e.vm.view_rect(list).unwrap().0[1]);
 }

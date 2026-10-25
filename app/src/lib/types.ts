@@ -36,6 +36,7 @@ export interface KeyBindings {
   back: string;
   fullscreen: string;
   hide_ui: string;
+  chat: string;
 }
 export type ActionId = keyof KeyBindings;
 

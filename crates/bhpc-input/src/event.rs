@@ -110,6 +110,8 @@ pub enum HostAction {
     },
     /// Open (or close) the game's pause menu.
     Pause,
+    /// Open the game's chat (like Minecraft's T).
+    OpenChat,
 }
 
 /// `com.apportable.Lifecycle` static natives.
@@ -378,6 +380,8 @@ pub struct Bindings {
     pub fullscreen: Trigger,
     /// Hide / show the game's on-screen buttons (a host action; ignored while a text field has focus).
     pub hide_ui: Trigger,
+    /// Open the chat (a host action; ignored while a text field has focus).
+    pub chat: Trigger,
 }
 
 impl Default for Bindings {
@@ -390,6 +394,7 @@ impl Default for Bindings {
             back: Trigger::plain(Input::Key(HostKey::Escape)),
             fullscreen: Trigger::plain(Input::Key(HostKey::F(11))),
             hide_ui: Trigger::plain(Input::Key(HostKey::Char('h'))),
+            chat: Trigger::plain(Input::Key(HostKey::Char('t'))),
         }
     }
 }

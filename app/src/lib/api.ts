@@ -24,6 +24,8 @@ export const api = {
   onSplashRetry: (cb: () => void) => listen('splash-retry', () => cb()),
   /** Quit from the tray (or the close button when there is no tray): the window decides, see `store.requestQuit`. */
   onQuitRequested: (cb: () => void) => listen('quit-requested', () => cb()),
+  /** A page the in-window game shows (self-contained HTML). */
+  onGamePage: (cb: (html: string) => void) => listen<string>('game-page', (e) => cb(e.payload)),
   trayLabels: (show: string, quit: string) => invoke<void>('tray_labels', { show, quit }),
   boot: () => invoke<BootState>('boot'),
   saveConfig: (config: LaunchConfig) => invoke<LaunchConfig>('save_config', { config }),

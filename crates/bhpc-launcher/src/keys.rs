@@ -23,12 +23,22 @@ pub enum Action {
     Fullscreen,
     /// Hide / show the game's own on-screen buttons.
     HideUi,
+    /// Open the game's chat.
+    Chat,
 }
 
 impl Action {
     /// All actions in UI order.
-    pub const ALL: [Action; 7] =
-        [Action::Touch, Action::Pan, Action::Zoom, Action::Pinch, Action::Back, Action::Fullscreen, Action::HideUi];
+    pub const ALL: [Action; 8] = [
+        Action::Touch,
+        Action::Pan,
+        Action::Zoom,
+        Action::Pinch,
+        Action::Back,
+        Action::Fullscreen,
+        Action::HideUi,
+        Action::Chat,
+    ];
 
     /// Name used in `--bind NAME=BINDING` flags.
     pub fn name(self) -> &'static str {
@@ -40,6 +50,7 @@ impl Action {
             Action::Back => "back",
             Action::Fullscreen => "fullscreen",
             Action::HideUi => "hide_ui",
+            Action::Chat => "chat",
         }
     }
 
@@ -58,6 +69,7 @@ impl Action {
             Action::Back => "Back",
             Action::Fullscreen => "Toggle fullscreen",
             Action::HideUi => "Hide game buttons",
+            Action::Chat => "Open chat",
         }
     }
 }
@@ -280,6 +292,7 @@ pub struct KeyBindings {
     pub back: Binding,
     pub fullscreen: Binding,
     pub hide_ui: Binding,
+    pub chat: Binding,
 }
 
 impl Default for KeyBindings {
@@ -293,6 +306,7 @@ impl Default for KeyBindings {
             back: Binding::plain(Input::Key(Key::Escape)),
             fullscreen: Binding::plain(Input::Key(Key::F(11))),
             hide_ui: Binding::plain(Input::Key(Key::Char('H'))),
+            chat: Binding::plain(Input::Key(Key::Char('T'))),
         }
     }
 }
@@ -308,6 +322,7 @@ impl KeyBindings {
             Action::Back => self.back,
             Action::Fullscreen => self.fullscreen,
             Action::HideUi => self.hide_ui,
+            Action::Chat => self.chat,
         }
     }
 
@@ -321,6 +336,7 @@ impl KeyBindings {
             Action::Back => self.back = b,
             Action::Fullscreen => self.fullscreen = b,
             Action::HideUi => self.hide_ui = b,
+            Action::Chat => self.chat = b,
         }
     }
 
@@ -349,6 +365,7 @@ impl KeyBindings {
             back: self.back.trigger(),
             fullscreen: self.fullscreen.trigger(),
             hide_ui: self.hide_ui.trigger(),
+            chat: self.chat.trigger(),
         }
     }
 

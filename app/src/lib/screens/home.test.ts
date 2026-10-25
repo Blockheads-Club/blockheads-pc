@@ -17,6 +17,7 @@ import Home from './Home.svelte';
 import ImportDialog from './ImportDialog.svelte';
 import JoinDialog from './JoinDialog.svelte';
 import LogsDialog from './LogsDialog.svelte';
+import PageDialog from './PageDialog.svelte';
 import Playing from './Playing.svelte';
 import UpdateDialog from './UpdateDialog.svelte';
 
@@ -257,7 +258,7 @@ describe('Playing inside the window', () => {
 
 describe('dialogs', () => {
   it('close with Escape', async () => {
-    for (const [d, C] of [['join', JoinDialog], ['logs', LogsDialog], ['close', CloseDialog], ['import', ImportDialog], ['update', UpdateDialog]] as const) {
+    for (const [d, C] of [['join', JoinDialog], ['logs', LogsDialog], ['close', CloseDialog], ['import', ImportDialog], ['update', UpdateDialog], ['page', PageDialog]] as const) {
       store.dialog = d;
       store.update = { stage: 'available', info: { version: '1', size_mb: 1, notes: [] }, progress: null, error: '', checked: true };
       const { unmount } = render(C as never);
@@ -265,6 +266,60 @@ describe('dialogs', () => {
       expect(store.dialog).toBeNull();
       unmount();
     }
+  });
+
+  it('shows a page of the game in place of the game', async () => {
+    store.showPage('<title> WELCOME </title><p>Rules</p>');
+    expect(store.dialog).toBe('page');
+    const { unmount } = render(PageDialog);
+    expect(screen.getByRole('dialog', { name: 'WELCOME' })).toBeVisible();
+    const frame = screen.getByTitle('WELCOME') as HTMLIFrameElement;
+    expect(frame.getAttribute('sandbox')).toBe('allow-same-origin');
+    // Links go to the browser (web and mail only); the frame itself never navigates.
+    // (The frame's own load event, as in the launcher.)
+    await waitFor(() => expect(frame.contentDocument?.readyState).toBe('complete'));
+    const doc = frame.contentDocument!;
+    doc.body.innerHTML = '<a href="https://x.net/a"><b>web</b></a><a href="mailto:a@b">mail</a><a href="file:///etc">file</a><a>none</a><span>text</span>';
+    const clickOn = (el: Element) => {
+      const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    mock.api.openUrl.mockRejectedValueOnce(new Error('no browser'));
+    expect(clickOn(doc.querySelector('b')!)).toBe(true);
+    expect(clickOn(doc.querySelector('a[href^="mailto"]')!)).toBe(true);
+    expect(clickOn(doc.querySelector('a[href^="file"]')!)).toBe(true);
+    expect(clickOn(doc.querySelector('a:not([href])')!)).toBe(false);
+    expect(clickOn(doc.querySelector('span')!)).toBe(false);
+    doc.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    // The welcome page's "Show More Info" (an inline script in the game) works without scripts.
+    doc.body.innerHTML = '<button id="spoilerButton">Show More Info</button><div id="spoiler" style="display:none">SEED</div>';
+    const button = doc.getElementById('spoilerButton')!;
+    const box = doc.getElementById('spoiler')!;
+    clickOn(button);
+    expect([button.textContent, box.style.display]).toEqual(['Hide', '']);
+    clickOn(button);
+    expect([button.textContent, box.style.display]).toEqual(['Show More Info', 'none']);
+    box.remove();
+    clickOn(button);
+    expect(button.textContent).toBe('Show More Info');
+    button.textContent = '';
+    delete button.dataset.label;
+    doc.body.insertAdjacentHTML('beforeend', '<div id="spoiler" style="display:none"></div>');
+    clickOn(button);
+    clickOn(button);
+    expect(button.textContent).toBe('');
+    expect(mock.api.openUrl.mock.calls).toEqual([['https://x.net/a'], ['mailto:a@b']]);
+    await click('Back to the game');
+    expect([store.dialog, store.page]).toEqual([null, '']);
+    unmount();
+    // Without a title of its own; another dialog opened meanwhile stays.
+    store.showPage('<p>x</p>');
+    render(PageDialog);
+    expect(screen.getByRole('dialog', { name: 'Game page' })).toBeVisible();
+    store.dialog = 'logs';
+    store.closePage();
+    expect([store.dialog, store.page]).toEqual(['logs', '']);
   });
 
   it('explains how to join a server', async () => {

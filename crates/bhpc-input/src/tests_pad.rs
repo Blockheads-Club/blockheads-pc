@@ -409,6 +409,21 @@ fn the_hide_buttons_key_is_a_host_action_but_not_while_typing() {
     assert_eq!(r.actions, vec![HostAction::ToggleGameButtons, HostAction::StartTextInput]);
 }
 
+#[test]
+fn the_chat_key_opens_the_chat_but_not_while_typing() {
+    let mut m = InputMapper::new(cfg());
+    let mut r = Recorder::new();
+    let t = |pressed, repeat| HostEvent::Key { key: HostKey::Char('t'), pressed, repeat, mods: Mods::default() };
+    m.handle(t(true, false), 0, &mut r);
+    m.handle(t(true, true), 1, &mut r);
+    m.handle(t(false, false), 2, &mut r);
+    assert_eq!(r.actions, vec![HostAction::OpenChat]);
+    assert!(r.events.is_empty(), "the key does not reach the game");
+    m.set_text_focus(Some((5, "")), &mut r);
+    m.handle(t(true, false), 4, &mut r);
+    assert_eq!(r.actions, vec![HostAction::OpenChat, HostAction::StartTextInput]);
+}
+
 /// Like [`grid`], with the camera over world point `(cx, cy)` at `dist` tiles (20 px tiles at 48.28).
 fn grid_at(cx: f32, cy: f32, dist: f32) -> Grid {
     let mut mv = ID;

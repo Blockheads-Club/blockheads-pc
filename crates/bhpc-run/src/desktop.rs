@@ -115,12 +115,20 @@ pub struct Desktop {
     pub copy: Sink,
     /// Shows a short notice over the game.
     pub notice: Sink,
+    /// Shows a self-contained page in place of the game (the launcher's window); `None`: pages go to the browser.
+    pub page: Option<Sink>,
     next_page: AtomicU32,
 }
 
 impl Desktop {
     pub fn new(opener: Opener, pages: PathBuf, pictures: Option<PathBuf>, copy: Sink, notice: Sink) -> Desktop {
-        Desktop { opener, pages, pictures, copy, notice, next_page: AtomicU32::new(0) }
+        Desktop { opener, pages, pictures, copy, notice, page: None, next_page: AtomicU32::new(0) }
+    }
+
+    /// Pages go to `page` (self-contained, see [`inline_page`]) instead of the browser.
+    pub fn with_page_sink(mut self, page: Sink) -> Desktop {
+        self.page = Some(page);
+        self
     }
 
     /// Write a page and its resources into a fresh folder below [`Desktop::pages`]; the page's path.
@@ -143,6 +151,59 @@ impl Desktop {
     }
 }
 
+/// Standard base64 of `data` (padded).
+fn base64(data: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(ABC[(n >> (18 - 6 * i)) as usize & 63]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// `text` with every quoted or `url(...)` reference to a file replaced by its `data:` URL.
+fn inline_refs(text: &str, urls: &[(&str, String)]) -> String {
+    let mut out = text.to_string();
+    for (name, url) in urls {
+        for (open, close) in [("\"", "\""), ("'", "'"), ("(", ")")] {
+            out = out.replace(&format!("{open}{name}{close}"), &format!("{open}{url}{close}"));
+        }
+    }
+    out
+}
+
+/// A page and its files as one HTML document: pictures become `data:` URLs, style sheets are added inline (the
+/// launcher shows it without scripts or file access).
+pub fn inline_page(html: &str, files: &[(String, Vec<u8>)]) -> String {
+    let mime = |name: &str| match name.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "css" => "text/css",
+        _ => "application/octet-stream",
+    };
+    let urls: Vec<(&str, String)> = files
+        .iter()
+        .filter(|(n, _)| mime(n) != "text/css")
+        .map(|(n, d)| (n.as_str(), format!("data:{};base64,{}", mime(n), base64(d))))
+        .collect();
+    let styles: String = files
+        .iter()
+        .filter(|(n, _)| mime(n) == "text/css")
+        .map(|(_, d)| format!("<style>{}</style>", inline_refs(&String::from_utf8_lossy(d), &urls)))
+        .collect();
+    format!("{styles}{}", inline_refs(html, &urls))
+}
+
 /// `file://` URL of a local path.
 pub fn file_url(p: &Path) -> String {
     let s = p.display().to_string().replace('\\', "/");
@@ -157,6 +218,11 @@ impl bhpc_jni::SystemHooks for Desktop {
     }
 
     fn show_html(&self, html: &str, files: &[(String, Vec<u8>)]) -> bool {
+        if let Some(page) = &self.page {
+            eprintln!("[desktop] page of {} bytes shown in the window", html.len());
+            page(&inline_page(html, files));
+            return true;
+        }
         match self.write_page(html, files) {
             Ok(page) => {
                 eprintln!("[desktop] page {}", page.display());
@@ -167,6 +233,10 @@ impl bhpc_jni::SystemHooks for Desktop {
                 false
             }
         }
+    }
+
+    fn shows_pages(&self) -> bool {
+        self.page.is_some()
     }
 
     fn set_clipboard(&self, text: &str) {

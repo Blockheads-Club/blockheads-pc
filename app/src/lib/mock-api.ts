@@ -2,7 +2,7 @@ import { vi } from 'vitest';
 import type { ApkReport, BootState, LaunchConfig, Prefs, Snapshot } from './types';
 import { makeModsApi } from './mods/mock';
 
-export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H' };
+export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H', chat: 'T' };
 
 export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
   return {
@@ -44,7 +44,7 @@ export function makeReport(over: Partial<ApkReport> = {}): ApkReport {
 }
 
 export function makeBoot(over: Partial<BootState> = {}): BootState {
-  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', zoom: 'phone', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, prefs_saved: true, update_requested: false, ...over };
+  return { config: makeConfig(), defaults: makeConfig({ apk: '', data_dir: '/default-data', window: { width: 1024, height: 768, fullscreen: false, vsync: true, ui_scale: 1, show_fps: false, fps_position: 'top-left', zoom: 'tablet', fps_limit: 60, game_speed: 1, parallel_threads: true } }), prefs: { ...PREFS }, prefs_saved: true, update_requested: false, ...over };
 }
 
 /** A fake of everything `$lib/api` exports. */
@@ -59,6 +59,7 @@ export function makeApi(over: Record<string, unknown> = {}) {
     onSplashState: vi.fn(async () => () => {}),
     onSplashRetry: vi.fn(async () => () => {}),
     onQuitRequested: vi.fn(async () => () => {}),
+    onGamePage: vi.fn(async () => () => {}),
     trayLabels: vi.fn(async () => {}),
     boot: vi.fn(async () => makeBoot()),
     saveConfig: vi.fn(async (c: LaunchConfig) => c),

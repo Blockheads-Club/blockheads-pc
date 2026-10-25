@@ -452,9 +452,13 @@ impl Vm {
 
     /// The user picked button `index` of `alert`: `nativeOnClick(mObject, index)`, then `nativeOnDismiss(mObject)`.
     pub fn alert_click(&self, cpu: &mut Cpu, alert: &crate::vm::Alert, index: i32) -> Result<(), Throw> {
-        let id = self.get_field(alert.view, "mObject");
-        self.call_method(cpu, alert.view, "nativeOnClick", "(II)V", &[id, Value::Int(index)])?;
-        self.call_method(cpu, alert.view, "nativeOnDismiss", "(I)V", &[id])?;
+        // A page's dialog (`NoodleWebView`) has no game alert behind it.
+        let page = self.class_of(alert.view).map(|k| self.class_name(k));
+        if page.as_deref() != Some(crate::jlib::desktop::PAGE_DIALOG_CLASS) {
+            let id = self.get_field(alert.view, "mObject");
+            self.call_method(cpu, alert.view, "nativeOnClick", "(II)V", &[id, Value::Int(index)])?;
+            self.call_method(cpu, alert.view, "nativeOnDismiss", "(I)V", &[id])?;
+        }
         if alert.field.is_some() && self.text_focus() == alert.field {
             self.set_text_focus(None);
         }
@@ -468,7 +472,11 @@ impl Vm {
     }
 
     pub fn set_text_focus(&self, field: Option<Obj>) {
-        self.st().text_focus = field;
+        let changed = std::mem::replace(&mut self.st().text_focus, field) != field;
+        if changed {
+            // The focused view draws the caret.
+            self.ui_changed();
+        }
     }
 
     /// Current contents of a text field (what Java `getText` returns).

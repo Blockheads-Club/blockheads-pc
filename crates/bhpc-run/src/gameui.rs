@@ -251,6 +251,11 @@ pub struct GameUi {
     /// The controller's walking finger is on the D-pad: the hidden D-pad still takes that touch.
     walking: AtomicBool,
     game_view: AtomicU32,
+    /// The game opened its pause menu (`-[World pauseButtonTapped]`) since [`GameUi::take_paused`] last asked.
+    paused: AtomicBool,
+    /// Offset of `World.pauseIdleTimer` (0: unknown): the seconds without a touch after which a client's world
+    /// opens the pause menu by itself (60). Typing touches nothing, so the host resets it while the chat is used.
+    idle_timer: AtomicU32,
 }
 
 fn f32_at(mem: &GuestMemory, at: u32) -> Option<f32> {
@@ -272,6 +277,19 @@ fn flag(mem: &GuestMemory, at: u32) -> bool {
 impl GameUi {
     pub fn new(ivars: Ivars) -> GameUi {
         GameUi { ivars, ..GameUi::default() }
+    }
+
+    /// Where `World.pauseIdleTimer` lies (see [`GameUi::reset_idle`]).
+    pub fn with_idle_timer(self, offset: u32) -> GameUi {
+        self.idle_timer.store(offset, Ordering::SeqCst);
+        self
+    }
+
+    /// Restart the world's idle timer (as a touch does), so it does not pause the game; false without a world or
+    /// a known timer.
+    pub fn reset_idle(&self, mem: &GuestMemory) -> bool {
+        let off = self.idle_timer.load(Ordering::SeqCst);
+        off != 0 && self.world(mem).is_some_and(|w| mem.write_u32(w.wrapping_add(off), 0f32.to_bits()).is_ok())
     }
 
     /// Keep the D-pad alone hidden (`dpad`) for the whole run.
@@ -319,6 +337,16 @@ impl GameUi {
     /// `-[GameView render:]` ran on `view`.
     pub fn saw_game_view(&self, view: u32) {
         self.game_view.store(view, Ordering::SeqCst);
+    }
+
+    /// The game is opening its pause menu.
+    pub fn saw_pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether the game opened its pause menu since the last call.
+    pub fn take_paused(&self) -> bool {
+        self.paused.swap(false, Ordering::SeqCst)
     }
 
     /// The `GameView` seen last.

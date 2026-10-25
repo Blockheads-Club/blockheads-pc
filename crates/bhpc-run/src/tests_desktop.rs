@@ -75,6 +75,27 @@ fn pictures_folder() {
 }
 
 #[test]
+fn pages_in_one_piece() {
+    use crate::desktop::inline_page;
+    let files = [
+        ("style.css".to_string(), b"body { background: url(bg.jpg) }".to_vec()),
+        ("bg.jpg".into(), b"ab".to_vec()),
+        ("i/x.PNG".into(), b"abc".to_vec()),
+        ("f.gif".into(), b"a".to_vec()),
+        ("v.svg".into(), Vec::new()),
+        ("d.bin".into(), b"abcd".to_vec()),
+    ];
+    let html = "<link href=\"style.css\"><img src=\"i/x.PNG\"><img src='f.gif'><img src=\"v.svg\"><a href=\"d.bin\">";
+    assert_eq!(
+        inline_page(html, &files),
+        "<style>body { background: url(data:image/jpeg;base64,YWI=) }</style><link href=\"style.css\">\
+         <img src=\"data:image/png;base64,YWJj\"><img src='data:image/gif;base64,YQ=='>\
+         <img src=\"data:image/svg+xml;base64,\"><a href=\"data:application/octet-stream;base64,YWJjZA==\">"
+    );
+    assert_eq!(inline_page("<p>x</p>", &[]), "<p>x</p>");
+}
+
+#[test]
 fn desktop_hooks() {
     let d = scratch("hooks");
     let log = d.join("log");
@@ -125,6 +146,15 @@ fn desktop_hooks() {
         let e = bad_file.write_page("x", &[(name.into(), vec![])]).unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{name:?}");
     }
+    // In the launcher's window a page is shown there, in one piece.
+    let shown = Arc::new(Mutex::new(Vec::<String>::new()));
+    let s3 = shown.clone();
+    let inwin = Desktop::new(recorder(&log), d.join("p4"), None, Box::new(|_| {}), Box::new(|_| {}))
+        .with_page_sink(Box::new(move |h| s3.lock().unwrap().push(h.to_string())));
+    assert!(inwin.shows_pages() && !desk.shows_pages());
+    assert!(inwin.show_html("<b>hi</b>", &[]));
+    assert_eq!(*shown.lock().unwrap(), ["<b>hi</b>"]);
+    assert!(!d.join("p4").exists(), "nothing written");
     // The page folder itself cannot be made: a plain error.
     let blocked = Desktop::new(recorder(&log), d.join("blocker/p3"), None, Box::new(|_| {}), Box::new(|_| {}));
     assert!(blocked.write_page("x", &[]).is_err());

@@ -16,7 +16,7 @@ export const PAGES: { id: SettingsPage; icon: IconName; labelKey: Key }[] = [
   { id: 'about', icon: 'info', labelKey: 'set.nav.about' }
 ];
 
-export const ACTIONS: ActionId[] = ['touch', 'pan', 'zoom', 'pinch', 'back', 'fullscreen', 'hide_ui'];
+export const ACTIONS: ActionId[] = ['touch', 'pan', 'zoom', 'pinch', 'back', 'fullscreen', 'hide_ui', 'chat'];
 
 /**
  * A searchable setting. `id` is also the DOM id of its row on the page (the scroll and focus target);
@@ -46,7 +46,8 @@ const ACTION_WORDS: Record<ActionId, string[]> = {
   hide_ui: [
     'hud', 'hide', 'buttons', 'interface', 'screenshot', 'gizle', 'düğmeler', 'arayüz', 'ekran görüntüsü',
     'скрыть', 'кнопки', 'интерфейс', 'скриншот', 'жасыру', 'батырмалар'
-  ]
+  ],
+  chat: ['chat', 'message', 'talk', 't', 'sohbet', 'mesaj', 'yaz', 'чат', 'сообщение', 'хабар', 'сөйлесу']
 };
 const MOD_WORDS = ['mod', 'mods', 'modlar', 'мод', 'моды', 'модтар', 'плагин', 'addon', 'eklenti'];
 const PAD_WORDS = [

@@ -23,7 +23,7 @@ fn flags_default_to_the_plain_desktop_window() {
             fps_position: bhpc_app::hud::Corner::TopLeft,
             unlock_fps: false,
             game_speed: 1.0,
-            zoom: crate::aspect::GameZoom::Phone,
+            zoom: crate::aspect::GameZoom::Tablet,
             ui_scale: 1.0,
             controller: true,
             hide_dpad: false,

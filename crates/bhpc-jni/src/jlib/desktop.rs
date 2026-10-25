@@ -118,6 +118,49 @@ pub(crate) fn html_to_text(html: &str) -> String {
     out
 }
 
+/// Pages whose text is at most this long (the server's welcome) show in the game as a dialog, as the Android web view
+/// does over the game; longer ones (help, credits) and pages without text open in the browser.
+pub(crate) const IN_GAME_PAGE_CHARS: usize = 1500;
+/// Class of the stand-in view of a page's dialog: it has no native click callbacks to answer.
+pub(crate) const PAGE_DIALOG_CLASS: &str = "pc/blockheads/desktop/PageDialog";
+
+/// Text between the first `<tag ...>` and its `</tag>` (ASCII case-insensitive), and the html without that block.
+fn take_block(html: &str, tag: &str) -> Option<(String, String)> {
+    let lower = html.to_ascii_lowercase();
+    let start = lower.find(&format!("<{tag}"))?;
+    let open_end = start + lower[start..].find('>')? + 1;
+    let close = format!("</{tag}>");
+    let end = open_end + lower[open_end..].find(&close)?;
+    let inner = html[open_end..end].to_string();
+    Some((inner, format!("{}{}", &html[..start], &html[end + close.len()..])))
+}
+
+/// Title and text of a page for its in-game dialog: `<title>` (else empty), then the body as plain text without
+/// `<head>`, `<title>`, `<style>` and `<script>`, one line per block, blank lines merged.
+pub(crate) fn page_text(html: &str) -> (String, String) {
+    let title = take_block(html, "title").map(|(t, _)| html_to_text(&t).trim().to_string()).unwrap_or_default();
+    let mut body = html.to_string();
+    for tag in ["head", "title", "style", "script"] {
+        while let Some((_, rest)) = take_block(&body, tag) {
+            body = rest;
+        }
+    }
+    for t in ["</h1>", "</h2>", "</h3>", "</h4>", "</li>", "</tr>", "</table>", "</H1>", "</H2>", "</H3>", "</LI>"] {
+        body = body.replace(t, &format!("{t}<br>"));
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for l in html_to_text(&body).lines() {
+        let l = l.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !l.is_empty() || lines.last().is_some_and(|p| !p.is_empty()) {
+            lines.push(l);
+        }
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    (title, lines.join("\n"))
+}
+
 /// The relative resources an HTML page refers to (`src="x"`, `href="x"`, `url(x)`), in order, without duplicates.
 pub(crate) fn relative_refs(html: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -191,6 +234,7 @@ pub(crate) fn install(vm: &Vm) {
                 void()
             },
         );
+    vm.define(PAGE_DIALOG_CLASS);
     vm.define("com/noodlecake/noodlewebview/NoodleWebView").static_method(
         "showBlockheadsWebView",
         "(Ljava/lang/String;ZJ)V",
@@ -198,6 +242,13 @@ pub(crate) fn install(vm: &Vm) {
             let html = c.string(0).unwrap_or_default();
             if c.int(1) != 0 {
                 c.vm.log("NoodleWebView: the editable page (server welcome message) is shown read-only");
+            }
+            let (title, text) = page_text(&html);
+            if !c.vm.0.system.shows_pages() && !text.is_empty() && text.chars().count() <= IN_GAME_PAGE_CHARS {
+                let view = new_obj(c.vm, PAGE_DIALOG_CLASS);
+                let buttons = vec![("OK".to_string(), 0)];
+                c.vm.open_dialog(crate::vm::Alert { view, title, message: text, buttons, cancel: None, field: None });
+                return void();
             }
             let files = page_files(c.vm, &html);
             c.vm.0.system.show_html(&html, &files);
