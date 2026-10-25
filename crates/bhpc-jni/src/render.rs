@@ -12,7 +12,7 @@
 //! over a copy of the last picture.
 
 use crate::jlib::{bitmap_info_in, face_in, Face, BOLD, ITALIC};
-use crate::ui::{TextStyle, View};
+use crate::ui::{Landscape, TextStyle, View};
 use crate::value::Obj;
 use crate::vm::{State, Vm};
 use ab_glyph::{point, Font, FontArc, PxScale, ScaleFont};
@@ -235,7 +235,15 @@ impl Vm {
         let space = [ox, oy, ox + space.0, oy + space.1];
         for w in windows {
             let Some(root) = st.ui.views.get(&w) else { continue };
-            let mut pl = Planner { vm: self, st: &st, fonts: &mut cache.fonts, out: &mut out, screen, space };
+            let mut pl = Planner {
+                vm: self,
+                st: &st,
+                fonts: &mut cache.fonts,
+                out: &mut out,
+                screen,
+                space,
+                land: self.landscape(),
+            };
             pl.walk(w, (root.frame[0] + ox, root.frame[1] + oy), screen, 1.0, 0);
         }
         out
@@ -250,6 +258,7 @@ struct Planner<'a> {
     /// The window and the portrait space of the views, in window pixels.
     screen: Rect,
     space: Rect,
+    land: Option<Landscape>,
 }
 
 /// Views nest a few levels; this only guards against a cycle that `ui_attach` should never build.
@@ -278,7 +287,9 @@ impl Planner<'_> {
         }
         for c in &info.children {
             let Some(ci) = views.get(c) else { continue };
-            let co = (origin.0 + ci.frame[0] - info.bounds[0], origin.1 + ci.frame[1] - info.bounds[1]);
+            let shift = Landscape::shift(self.land, info, ci);
+            let co =
+                (origin.0 + ci.frame[0] - info.bounds[0] + shift.0, origin.1 + ci.frame[1] - info.bounds[1] + shift.1);
             self.walk(*c, co, clip, alpha, depth + 1);
         }
     }

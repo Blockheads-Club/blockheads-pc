@@ -210,7 +210,9 @@ Umbrella rules: `../AGENTS.md`.
 - The game's chat messages are dictionaries (`message`, `alias`), not strings; a client's `livePlayerInfos` may hold
   peer ids. Wrong guesses show up as millions of `unrecognized selector` lines that slow the game to a crawl.
 - `scripts/e2e-mods.sh` needs a blockheads-server with mods (`BHPC_SERVER_BIN`); the server stops when its last
-  player leaves. The in-game chat input field is laid out off screen in the port: the e2e says a `/command` through
+  player leaves. The in-game chat is a `UITextView` (Java `TextView`, natives `textShouldChange`/`textDidChange`; Enter presses the
+  SEND button, `Vm::return_button`) in a full-screen landscape view that is not shifted into the portrait space
+  (`ui::Landscape`); its hidden `TextField` sits off screen on purpose. The e2e says a `/command` through
   the runner's control channel (`--control`, stdin line `mods-chat TEXT`, also `mods-reload`), which calls the game's
   own `-[BHClient sendChatMessage:sendToClients:]`; the typed path above that is unit-tested.
 - Finding game methods: `BHPC_DEV_OBJC_DUMP=FILE` prints the methods of the named classes; class names come from the

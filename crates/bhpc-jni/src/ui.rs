@@ -114,6 +114,32 @@ pub struct Hit {
     pub handle: i32,
 }
 
+/// The landscape window as the views see it, for [`Landscape::shift`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Landscape {
+    size: (f32, f32),
+    offset: (f32, f32),
+}
+
+impl Landscape {
+    /// How far a child's origin moves back when it is a landscape layout inside the portrait space: the game's chat
+    /// is laid out for the landscape screen (a full-screen view, below the root view), the popups for the portrait
+    /// space; [`Vm::ui_offset`] centres the latter. `parent` is the child's parent.
+    pub(crate) fn shift(land: Option<Landscape>, parent: &View, child: &View) -> (f32, f32) {
+        match land {
+            Some(l)
+                if parent.kind != "Window"
+                    && child.frame[0] == 0.0
+                    && child.frame[1] == 0.0
+                    && (child.frame[2], child.frame[3]) == l.size =>
+            {
+                (-l.offset.0, -l.offset.1)
+            }
+            _ => (0.0, 0.0),
+        }
+    }
+}
+
 fn contains(f: &[f32; 4], origin: (f32, f32), x: f32, y: f32) -> bool {
     let (w, h) = (f[2] - f[0], f[3] - f[1]);
     x >= origin.0 && x < origin.0 + w && y >= origin.1 && y < origin.1 + h
@@ -162,6 +188,11 @@ impl Vm {
         );
     }
 
+    /// Short class name of a recorded view.
+    pub fn view_kind(&self, view: Obj) -> Option<String> {
+        self.st().ui.views.get(&view).map(|v| v.kind.clone())
+    }
+
     /// Change a recorded view (unknown views are ignored).
     pub(crate) fn ui_update(&self, view: Obj, f: impl FnOnce(&mut View)) {
         let mut st = self.st();
@@ -199,7 +230,7 @@ impl Vm {
     }
 
     /// Window-space origin of `view` and whether it hangs below a `Window`, visible all the way.
-    fn abs_origin(views: &HashMap<Obj, View>, view: Obj) -> Option<((f32, f32), bool)> {
+    fn abs_origin(views: &HashMap<Obj, View>, view: Obj, land: Option<Landscape>) -> Option<((f32, f32), bool)> {
         let mut chain = vec![view];
         while let Some(p) = views.get(chain.last()?)?.parent {
             if chain.contains(&p) {
@@ -212,8 +243,9 @@ impl Vm {
         let mut shown = !root.hidden && root.alpha > 0.01;
         for pair in chain.windows(2).rev() {
             let (parent, child) = (views.get(&pair[1])?, views.get(&pair[0])?);
-            origin.0 += child.frame[0] - parent.bounds[0];
-            origin.1 += child.frame[1] - parent.bounds[1];
+            let shift = Landscape::shift(land, parent, child);
+            origin.0 += child.frame[0] - parent.bounds[0] + shift.0;
+            origin.1 += child.frame[1] - parent.bounds[1] + shift.1;
             shown &= !child.hidden && child.alpha > 0.01;
         }
         Some((origin, shown && root.kind == "Window"))
@@ -222,12 +254,19 @@ impl Vm {
     /// Frame of `view` in window coordinates `(x, y, w, h)`, with whether it is shown.
     pub fn view_rect(&self, view: Obj) -> Option<([f32; 4], bool)> {
         let st = self.st();
-        let (o, shown) = Self::abs_origin(&st.ui.views, view)?;
+        let (o, shown) = Self::abs_origin(&st.ui.views, view, self.landscape())?;
         let f = st.ui.views.get(&view)?.frame;
         Some(([o.0, o.1, f[2] - f[0], f[3] - f[1]], shown))
     }
 
-    fn hit(views: &HashMap<Obj, View>, v: Obj, origin: (f32, f32), x: f32, y: f32) -> Option<Obj> {
+    fn hit(
+        views: &HashMap<Obj, View>,
+        v: Obj,
+        origin: (f32, f32),
+        land: Option<Landscape>,
+        x: f32,
+        y: f32,
+    ) -> Option<Obj> {
         let info = views.get(&v)?;
         if info.hidden || info.alpha <= 0.01 || !info.interactive {
             return None;
@@ -240,8 +279,10 @@ impl Vm {
         }
         for c in info.children.iter().rev() {
             let Some(ci) = views.get(c) else { continue };
-            let co = (origin.0 + ci.frame[0] - info.bounds[0], origin.1 + ci.frame[1] - info.bounds[1]);
-            if let Some(h) = Self::hit(views, *c, co, x, y) {
+            let shift = Landscape::shift(land, info, ci);
+            let co =
+                (origin.0 + ci.frame[0] - info.bounds[0] + shift.0, origin.1 + ci.frame[1] - info.bounds[1] + shift.1);
+            if let Some(h) = Self::hit(views, *c, co, land, x, y) {
                 return Some(h);
             }
         }
@@ -256,9 +297,10 @@ impl Vm {
         let mut windows: Vec<Obj> =
             st.ui.views.iter().filter(|(_, v)| v.kind == "Window" && v.parent.is_none()).map(|(o, _)| *o).collect();
         windows.sort_by_key(|o| std::cmp::Reverse(o.0));
+        let land = self.landscape();
         windows.into_iter().find_map(|w| {
             let root = st.ui.views.get(&w)?;
-            let h = Self::hit(&st.ui.views, w, (root.frame[0], root.frame[1]), x, y)?;
+            let h = Self::hit(&st.ui.views, w, (root.frame[0], root.frame[1]), land, x, y)?;
             let v = st.ui.views.get(&h)?;
             Some(Hit { view: h, kind: v.kind.clone(), handle: v.handle })
         })
@@ -278,6 +320,12 @@ impl Vm {
         }
     }
 
+    /// The landscape window, when the views' portrait space is shifted in it (see [`Landscape::shift`]).
+    pub(crate) fn landscape(&self) -> Option<Landscape> {
+        let (w, h) = self.screen_size();
+        (w > h).then(|| Landscape { size: (w as f32, h as f32), offset: self.ui_offset() })
+    }
+
     /// Window pixels to the coordinates of the Java views (see [`Vm::ui_offset`]).
     pub fn screen_to_ui(&self, x: f32, y: f32) -> (f32, f32) {
         let (ox, oy) = self.ui_offset();
@@ -294,6 +342,7 @@ impl Vm {
     fn shown_with_text(&self, needle: &str) -> Vec<Obj> {
         let st = self.st();
         let needle = needle.to_lowercase();
+        let land = self.landscape();
         let mut found: Vec<Obj> = st
             .ui
             .views
@@ -301,7 +350,7 @@ impl Vm {
             .filter(|(o, v)| {
                 !v.text.is_empty()
                     && v.text.to_lowercase().contains(&needle)
-                    && Self::abs_origin(&st.ui.views, **o).is_some_and(|(_, shown)| shown)
+                    && Self::abs_origin(&st.ui.views, **o, land).is_some_and(|(_, shown)| shown)
             })
             .map(|(o, _)| *o)
             .collect();
@@ -366,6 +415,38 @@ impl Vm {
                 Ok(true)
             }
         }
+    }
+
+    /// The button the return key stands for in a text view: the right-most shown button below the view's parent (the
+    /// chat's SEND, which sits opposite its CLOSE).
+    pub fn return_button(&self, field: Obj) -> Option<Obj> {
+        let st = self.st();
+        let views = &st.ui.views;
+        let mut found: Option<(f32, Obj)> = None;
+        let mut todo = vec![views.get(&field)?.parent?];
+        while let Some(v) = todo.pop() {
+            let Some(info) = views.get(&v) else { continue };
+            if info.hidden || info.alpha <= 0.01 {
+                continue;
+            }
+            todo.extend(info.children.iter().copied());
+            if info.kind == "Button" && info.enabled {
+                let x = Self::abs_origin(views, v, self.landscape()).map_or(0.0, |o| o.0 .0);
+                if found.is_none_or(|f| x > f.0) {
+                    found = Some((x, v));
+                }
+            }
+        }
+        found.map(|f| f.1)
+    }
+
+    /// Tap a button as the view system does for a touch inside it: `TouchDown`, then `TouchUpInside`.
+    pub fn press_button(&self, cpu: &mut bhpc_cpu::Cpu, button: Obj) -> Result<(), Throw> {
+        let handle = self.st().ui.views.get(&button).map_or(0, |v| v.handle);
+        for mask in [TOUCH_DOWN, TOUCH_UPINSIDE] {
+            self.call_method(cpu, button, "event", "(II)V", &[Value::Int(handle), Value::Int(mask)])?;
+        }
+        Ok(())
     }
 
     /// `WxH` of a bitmap and how many of its pixels are not fully transparent (for the dump).

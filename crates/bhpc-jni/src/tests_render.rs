@@ -341,6 +341,26 @@ fn a_scrim_over_the_portrait_space_covers_the_window() {
 }
 
 #[test]
+fn a_landscape_layout_fills_the_window_from_its_corner() {
+    let mut e = Env::new();
+    let window = view(&mut e, "Window", 1, [0.0; 4]);
+    let root = view(&mut e, "View", 2, [0.0, 0.0, 800.0, 480.0]);
+    add(&mut e, window, root);
+    // the chat is a full-screen child of the landscape root: its (0, 0) is the window's
+    let chat = view(&mut e, "View", 4, [0.0, 0.0, 800.0, 480.0]);
+    add(&mut e, root, chat);
+    set(&mut e, chat, "_setBackgroundColor", "(I)V", &[Value::Int(argb(255, 9, 8, 7))]);
+    let bar = view(&mut e, "View", 5, [0.0, 0.0, 100.0, 20.0]);
+    add(&mut e, chat, bar);
+    set(&mut e, bar, "_setBackgroundColor", "(I)V", &[Value::Int(argb(255, 1, 2, 3))]);
+    let f = e.vm.render_ui().unwrap();
+    assert_eq!(px(&f, 0, 0), [1, 2, 3, 255]);
+    assert_eq!(px(&f, 99, 19), [1, 2, 3, 255]);
+    assert_eq!(px(&f, 100, 19), [9, 8, 7, 255]);
+    assert_eq!(px(&f, 799, 479), [9, 8, 7, 255]);
+}
+
+#[test]
 fn portrait_windows_need_no_shift() {
     let mut p = crate::tests::test_platform();
     (p.screen_width, p.screen_height) = (480, 800);

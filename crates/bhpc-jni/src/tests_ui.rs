@@ -353,3 +353,62 @@ fn only_clipping_views_confine_their_subviews() {
     assert_eq!(e.vm.hit_test(100.0, 640.0), None, "a clipping root hides and shields it");
     assert_eq!(e.vm.hit_test(100.0, 300.0), None, "inside the root, outside the button");
 }
+
+#[test]
+fn landscape_layouts_inside_the_portrait_space_are_not_shifted() {
+    let mut e = Env::new();
+    let window = view(&mut e, "Window", 1, None);
+    let root = view(&mut e, "View", 2, Some((0.0, 0.0, 800.0, 480.0)));
+    // the chat: a full-screen view of the landscape root, laid out for the landscape window
+    let chat = view(&mut e, "View", 3, Some((0.0, 0.0, 800.0, 480.0)));
+    let text = view(&mut e, "TextView", 4, Some((0.0, 80.0, 800.0, 180.0)));
+    let close = view(&mut e, "Button", 5, Some((0.0, 0.0, 100.0, 70.0)));
+    let send = view(&mut e, "Button", 6, Some((700.0, 0.0, 800.0, 70.0)));
+    add(&mut e, window, root);
+    add(&mut e, root, chat);
+    for c in [text, close, send] {
+        add(&mut e, chat, c);
+    }
+    set_text(&mut e, send, "SEND", 0);
+    let (r, shown) = e.vm.view_rect(chat).unwrap();
+    assert!(shown);
+    assert_eq!(r, [-160.0, 160.0, 800.0, 480.0]);
+    assert_eq!(e.vm.ui_to_screen(r[0], r[1]), (0.0, 0.0), "the window's corner");
+    // touches and lookups find the controls where they are drawn
+    let (ux, uy) = e.vm.screen_to_ui(750.0, 30.0);
+    assert_eq!(e.vm.hit_test(ux, uy).map(|h| h.view), Some(send));
+    assert_eq!(e.vm.control_screen_pos("send"), Some((750.0, 35.0)));
+    // the root itself, a full-screen child of the window and a smaller view are placed in the portrait space
+    assert_eq!(e.vm.view_rect(root).unwrap().0, [0.0, 0.0, 800.0, 480.0]);
+    let full = view(&mut e, "View", 7, Some((0.0, 0.0, 800.0, 480.0)));
+    add(&mut e, window, full);
+    assert_eq!(e.vm.view_rect(full).unwrap().0, [0.0, 0.0, 800.0, 480.0]);
+    // the return key of the text view stands for the right-most shown, enabled button of its panel
+    assert_eq!(e.vm.return_button(text), Some(send));
+    e.call(send, "setHidden", "(Z)V", &[Value::Int(1)]).unwrap();
+    assert_eq!(e.vm.return_button(text), Some(close));
+    e.call(close, "setEnabled", "(Z)V", &[Value::Int(0)]).unwrap();
+    assert_eq!(e.vm.return_button(text), None);
+    assert_eq!(e.vm.return_button(window), None, "no panel");
+    // a button is tapped with a touch down and a touch up inside
+    let ret = e.code(&[0xE12F_FF1E]);
+    let control = e.vm.class_named("com/apportable/ui/Control").unwrap();
+    e.vm.register_native(control, "event", "(II)V", ret);
+    let vm = e.vm.clone();
+    vm.press_button(&mut e.cpu, send).unwrap();
+    assert_eq!(event_calls(&e), 2);
+    // portrait windows have no landscape layouts to move
+    let mut p = crate::tests::test_platform();
+    (p.screen_width, p.screen_height) = (480, 800);
+    assert!(Env::with(|c| c.platform = p).vm.landscape().is_none());
+}
+
+#[test]
+fn the_text_of_a_text_view_is_kept_for_the_renderer() {
+    let mut e = Env::new();
+    let tv = view(&mut e, "TextView", 4, Some((0.0, 0.0, 100.0, 50.0)));
+    e.vm.set_text_of(tv, "Türkçe");
+    assert!(e.vm.dump_views().contains("\"Türkçe\""));
+    assert_eq!(e.vm.view_kind(tv).as_deref(), Some("TextView"));
+    assert_eq!(e.vm.view_kind(Obj(0)), None);
+}

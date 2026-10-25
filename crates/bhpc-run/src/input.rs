@@ -207,6 +207,11 @@ fn deliver_with_controls(
 fn deliver_natives(vm: &Vm, cpu: &mut Cpu, ev: &GuestEvent, focus: Option<Obj>) -> (bool, Vec<String>) {
     let (mut result, mut errors) = (true, Vec::new());
     let text_target = ev.text_field().is_some();
+    if let (true, Some(field)) = (text_target, focus) {
+        if vm.view_kind(field).as_deref() == Some("TextView") {
+            return deliver_text_view(vm, cpu, ev, field);
+        }
+    }
     for (i, t) in ev.targets().iter().enumerate() {
         let args = args_for(vm, ev, i);
         let r = if t.method == "nativeRootGeometryChanged" {
@@ -221,6 +226,63 @@ fn deliver_natives(vm: &Vm, cpu: &mut Cpu, ev: &GuestEvent, focus: Option<Obj>) 
         match r {
             Ok(v) => result = !matches!(v, Value::Int(0)),
             Err(e) => errors.push(format!("{}.{}: {e:?}", t.class, t.method)),
+        }
+    }
+    (result, errors)
+}
+
+/// A multi-line text view (`UITextView`, the chat input) has other natives than a text field: Android's input filter
+/// asks `textShouldChange(handle, text, start, length)` about what is typed (start and length of the typed text, not
+/// of the range it replaces), the text watcher reports `textDidChange(handle, whole text)`, and the editor's action
+/// key asks about the whole text once more before it reports it.
+fn deliver_text_view(vm: &Vm, cpu: &mut Cpu, ev: &GuestEvent, field: Obj) -> (bool, Vec<String>) {
+    let handle = vm.get_field(field, "mObject");
+    let mut errors = Vec::new();
+    let mut result = true;
+    let mut call = |vm: &Vm, cpu: &mut Cpu, name: &str, sig: &str, args: &[Value]| match vm
+        .call_method(cpu, field, name, sig, args)
+    {
+        Ok(v) => !matches!(v, Value::Int(0)),
+        Err(e) => {
+            errors.push(format!("TextView.{name}: {e:?}"));
+            true
+        }
+    };
+    let units = |s: &str| Value::Int(s.encode_utf16().count() as i32);
+    match ev {
+        GuestEvent::TextShouldChange { replacement, .. } => {
+            let text = Value::Ref(Some(vm.new_string(replacement)));
+            result = call(
+                vm,
+                cpu,
+                "textShouldChange",
+                "(ILjava/lang/String;II)Z",
+                &[handle, text, Value::Int(0), units(replacement)],
+            );
+        }
+        GuestEvent::TextDidChange { .. } => {
+            let text = Value::Ref(Some(vm.new_string(&vm.text_of(field))));
+            call(vm, cpu, "textDidChange", "(ILjava/lang/String;)V", &[handle, text]);
+        }
+        // `TextShouldReturn`: the only other text event.
+        _ => {
+            let whole = vm.text_of(field);
+            let text = Value::Ref(Some(vm.new_string(&whole)));
+            call(
+                vm,
+                cpu,
+                "textShouldChange",
+                "(ILjava/lang/String;II)Z",
+                &[handle, text, Value::Int(0), units(&whole)],
+            );
+            let text = Value::Ref(Some(vm.new_string(&whole)));
+            call(vm, cpu, "textDidChange", "(ILjava/lang/String;)V", &[handle, text]);
+            // The return key sends (a chat message): the field's panel has the button for it.
+            if let Some(b) = vm.return_button(field) {
+                if let Err(e) = vm.press_button(cpu, b) {
+                    errors.push(format!("return button: {e:?}"));
+                }
+            }
         }
     }
     (result, errors)

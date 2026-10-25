@@ -243,6 +243,105 @@ fn controls_take_touches_and_text_goes_to_the_focused_field() {
 }
 
 #[test]
+fn a_text_view_gets_the_text_view_natives_and_its_return_key_presses_the_send_button() {
+    use std::sync::Mutex;
+    let (mut cpu, jni) = rig();
+    let vm = jni.vm.clone();
+    let ctx = Value::Ref(Some(vm.activity()));
+    let rect = vm
+        .new_object(
+            &mut cpu,
+            "android/graphics/RectF",
+            "(FFFF)V",
+            &[Value::Float(0.0), Value::Float(0.0), Value::Float(100.0), Value::Float(50.0)],
+        )
+        .unwrap();
+    let make = |cpu: &mut bhpc_cpu::Cpu, kind: &str, handle: i32| {
+        let class = format!("com/apportable/ui/{kind}");
+        let sig = format!("(Landroid/content/Context;ILandroid/graphics/RectF;)L{class};");
+        let args = [ctx, Value::Int(handle), Value::Ref(Some(rect))];
+        vm.call_static(cpu, &class, "create", &sig, &args).unwrap().as_ref().unwrap()
+    };
+    let panel = make(&mut cpu, "View", 1);
+    let text = make(&mut cpu, "TextView", 7);
+    let send = make(&mut cpu, "Button", 8);
+    for child in [text, send] {
+        vm.call_method(&mut cpu, panel, "addSubview", "(Lcom/apportable/ui/View;)V", &[Value::Ref(Some(child))])
+            .unwrap();
+    }
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (l1, l2, l3) = (log.clone(), log.clone(), log.clone());
+    let answer = Arc::new(std::sync::atomic::AtomicI32::new(1));
+    let a = answer.clone();
+    vm.define("com/apportable/ui/TextView")
+        .method("textShouldChange", "(ILjava/lang/String;II)Z", move |c| {
+            let t = c.string(1).unwrap_or_default();
+            l1.lock().unwrap().push(format!("should {} {t:?} {} {}", c.int(0), c.int(2), c.int(3)));
+            Ok(Value::Int(a.load(std::sync::atomic::Ordering::SeqCst)))
+        })
+        .method("textDidChange", "(ILjava/lang/String;)V", move |c| {
+            let t = c.string(1).unwrap_or_default();
+            l2.lock().unwrap().push(format!("did {} {t:?}", c.int(0)));
+            Ok(Value::Int(0))
+        });
+    vm.define("com/apportable/ui/Button").method("event", "(II)V", move |c| {
+        l3.lock().unwrap().push(format!("button {} {}", c.int(0), c.int(1)));
+        Ok(Value::Int(0))
+    });
+    let mut sink = JniSink {
+        vm: &vm,
+        cpu: &mut cpu,
+        actions: Vec::new(),
+        errors: Vec::new(),
+        returned: false,
+        main: None,
+        game: None,
+    };
+    vm.set_text_focus(Some(text));
+    // Typed text asks the input filter (handle, the typed text, its start and length); the guest may refuse.
+    let typed = GuestEvent::TextShouldChange { field: 7, location: 3, length: 0, replacement: "ğ".into() };
+    assert!(sink.deliver(&typed));
+    assert_eq!(vm.text_of(text), "ğ");
+    answer.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert!(!sink.deliver(&typed));
+    assert_eq!(vm.text_of(text), "ğ", "refused");
+    answer.store(1, std::sync::atomic::Ordering::SeqCst);
+    // The text watcher reports the whole text.
+    sink.deliver(&GuestEvent::TextDidChange { field: 7 });
+    // The return key asks about and reports the whole text, then presses the button that sends it.
+    sink.deliver(&GuestEvent::TextShouldReturn { field: 7 });
+    assert!(sink.errors.is_empty(), "{:?}", sink.errors);
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            "should 7 \"ğ\" 0 1",
+            "should 7 \"ğ\" 0 1",
+            "did 7 \"ğ\"",
+            "should 7 \"ğ\" 0 1",
+            "did 7 \"ğ\"",
+            "button 8 1",
+            "button 8 64"
+        ]
+    );
+    // Events that are not text events mean nothing to a text view, and failing natives are reported.
+    vm.define("com/apportable/ui/TextView").method("textDidChange", "(ILjava/lang/String;)V", |_| {
+        Err(bhpc_jni::Throw::Stop(bhpc_cpu::Stop::Host("no".into())))
+    });
+    vm.define("com/apportable/ui/Button")
+        .method("event", "(II)V", |_| Err(bhpc_jni::Throw::Stop(bhpc_cpu::Stop::Host("no".into()))));
+    sink.deliver(&GuestEvent::TextShouldReturn { field: 7 });
+    assert!(sink.errors.iter().any(|e| e.starts_with("TextView.textDidChange")), "{:?}", sink.errors);
+    assert!(sink.errors.iter().any(|e| e.starts_with("return button")), "{:?}", sink.errors);
+    // without a button for it the return key only reports the text
+    let alone = make(&mut *sink.cpu, "TextView", 9);
+    assert!(sink.vm.return_button(alone).is_none());
+    sink.errors.clear();
+    vm.set_text_focus(Some(alone));
+    sink.deliver(&GuestEvent::TextShouldReturn { field: 9 });
+    assert!(sink.errors.iter().all(|e| !e.starts_with("return button")), "{:?}", sink.errors);
+}
+
+#[test]
 fn control_touches_and_clicks_cross_the_content_surface() {
     use crate::input::{content_to_screen, screen_to_window};
     use bhpc_input::Geometry;

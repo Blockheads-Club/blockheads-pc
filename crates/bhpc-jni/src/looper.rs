@@ -482,7 +482,8 @@ impl Vm {
     pub fn set_text_of(&self, field: Obj, text: &str) {
         let s = self.new_string(text);
         self.set_field(field, "mText", Value::Ref(Some(s)));
-        // The input dialog draws it.
+        // The input dialog and the view tree draw it.
+        self.ui_update(field, |v| v.text = text.to_string());
         self.ui_changed();
     }
 
