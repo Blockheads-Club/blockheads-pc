@@ -30,6 +30,8 @@ pub struct JoinMod {
     pub listed: bool,
     /// The mod also has a server half ("Client + server"); else it only runs here.
     pub with_server: bool,
+    /// Taken at the last join of this server and unchanged: the prompt lists only the other mods.
+    pub known: bool,
 }
 
 /// What went wrong, for the layout of the failure notice.
@@ -133,6 +135,7 @@ impl JoinView {
                         permissions: perms,
                         listed: e.listed,
                         with_server: e.info.sides.iter().any(|s| s == "server"),
+                        known: e.known,
                     }
                 })
                 .collect(),

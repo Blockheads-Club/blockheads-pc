@@ -76,6 +76,9 @@ pub struct Entry {
     /// SHA-256 (hex) of the file as it arrived, taken from the bytes before the session checked them. `None` while
     /// nothing complete arrived (cached mods, a download that stopped).
     pub received: Option<String>,
+    /// The player took this very file (same SHA-256) when last joining this server and it is still cached: the
+    /// prompt does not ask about it again.
+    pub known: bool,
     /// The player takes this mod. Always true for required mods; an optional mod can be switched off, and one with
     /// a [`Refusal`] cannot be switched on.
     pub enabled: bool,
@@ -480,6 +483,7 @@ impl JoinFlow {
                 Output::Prompt { required, mods, .. } => {
                     self.required = required;
                     self.entries = mods.iter().filter(|o| o.client).map(|o| self.entry(o)).collect();
+                    self.mark_known();
                     if self.resume {
                         // "Try again": the player already chose; apply it and go on without asking again.
                         self.resume = false;
@@ -488,6 +492,12 @@ impl JoinFlow {
                             e.enabled = e.refusal.is_none() && optional.contains(&e.info.id);
                         }
                         actions.extend(self.decide(true, native, Instant::now()));
+                        continue;
+                    }
+                    if !self.entries.is_empty() && self.entries.iter().all(|e| e.known) {
+                        // Nothing new since the last join here: take the same mods without asking (their native
+                        // code, if any, was confirmed then).
+                        actions.extend(self.decide(true, true, Instant::now()));
                         continue;
                     }
                     actions.push(Action::Prompt);
@@ -529,6 +539,16 @@ impl JoinFlow {
         actions
     }
 
+    /// Marks the mods taken at the last join of this server (same file, still cached) and takes them again.
+    fn mark_known(&mut self) {
+        let Some(rec) = cache::server_record(&self.cfg.dirs, &self.cfg.address) else { return };
+        for e in &mut self.entries {
+            let sha = hex(&e.info.sha256);
+            e.known = e.cached && e.refusal.is_none() && rec.mods.iter().any(|m| m.sha256.eq_ignore_ascii_case(&sha));
+            e.enabled |= e.known;
+        }
+    }
+
     fn entry(&self, o: &Offer) -> Entry {
         let info = o.info.clone();
         let listed = self.cfg.index.as_ref().and_then(|i| i.find(&info.id)).is_some_and(|im| {
@@ -547,6 +567,7 @@ impl JoinFlow {
             cached: o.cached,
             listed,
             enabled: info.client_required || refusal.is_none(),
+            known: false,
             refusal,
             info,
         }

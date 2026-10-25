@@ -61,13 +61,15 @@ pub(super) fn focusables(j: &JoinView) -> Vec<Hit> {
     if zone(j) && !j.mods.iter().any(|m| m.enabled && m.refused) {
         v.push(Hit::NativeBox);
     }
-    v.extend(j.mods.iter().enumerate().filter(|(_, m)| !m.required && !m.refused).map(|(i, _)| Hit::Toggle(i)));
+    v.extend(
+        j.mods.iter().enumerate().filter(|(_, m)| !m.required && !m.refused && !m.known).map(|(i, _)| Hit::Toggle(i)),
+    );
     v
 }
 
-/// The danger zone shows when a mod the player takes has native code.
+/// The danger zone shows when a mod the player takes has native code that was not confirmed at the last join.
 fn zone(j: &JoinView) -> bool {
-    j.mods.iter().any(|m| m.native && m.enabled)
+    j.mods.iter().any(|m| m.native && m.enabled && !m.known)
 }
 
 /// "Try again" is offered: the flow can start the download again and the failure is a stopped download.
@@ -546,7 +548,8 @@ impl ModUi {
         let focused = items.get(self.focus).copied();
         let optional_any = j.mods.iter().any(|m| !m.required);
         let shown: Vec<(usize, &crate::view::JoinMod)> =
-            j.mods.iter().enumerate().filter(|(_, m)| m.enabled || j.stage == JoinStage::Prompt).collect();
+            // The prompt lists what is new or changed since the last join here.
+            j.mods.iter().enumerate().filter(|(_, m)| if j.stage == JoinStage::Prompt { !m.known } else { m.enabled }).collect();
         let mut y = y;
         for (n, (i, m)) in shown.iter().enumerate() {
             if y + row_h + px.p(60.0) > limit && n + 1 < shown.len() {

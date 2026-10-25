@@ -23,6 +23,7 @@ fn jm(name: &str, native: bool, perms: &[&str]) -> JoinMod {
         permissions: perms.iter().map(|s| s.to_string()).collect(),
         listed: !native,
         with_server: true,
+        known: false,
     }
 }
 

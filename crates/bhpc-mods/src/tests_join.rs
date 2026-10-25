@@ -232,6 +232,23 @@ fn full_download_with_acks_resume_and_cache() {
     // The launcher's cache record.
     let rec = std::fs::read_to_string(d.path().join("mods-cache/servers/127.0.0.1_15151.toml")).unwrap();
     assert!(rec.contains("Mod big"), "{rec}");
+    // The same server again with the same files: no prompt, the same mods are taken.
+    let mut k = JoinFlow::new(cfg(d.path()));
+    k.contact(t);
+    k.player_info();
+    k.packet(&hello(2, true), t);
+    let a = k.packet(&list(vec![info("big", &big, false), info("small", &small, false)]), t);
+    assert!(!a.contains(&Action::Prompt), "{a:?}");
+    assert!(k.entries().iter().all(|e| e.known && e.enabled));
+    assert!(matches!(&sent(&a)[0], Message::Ready(_)), "{a:?}");
+    // A changed mod is asked about again; the unchanged one is not listed.
+    let mut n = JoinFlow::new(cfg(d.path()));
+    n.contact(t);
+    n.player_info();
+    n.packet(&hello(2, true), t);
+    let a = n.packet(&list(vec![info("big", &big, false), info("small", b"changed", false)]), t);
+    assert!(a.contains(&Action::Prompt), "{a:?}");
+    assert_eq!(n.entries().iter().map(|e| e.known).collect::<Vec<_>>(), [true, false]);
     // A second join finds both in the cache: HELLO lists them and nothing downloads.
     let mut c = cfg(d.path());
     c.address = "other:1".into();
@@ -559,6 +576,7 @@ fn entry_names() {
         done: true,
         received: None,
         enabled: true,
+        known: false,
     };
     assert_eq!(e.to_download(), 0);
     e.cached = false;

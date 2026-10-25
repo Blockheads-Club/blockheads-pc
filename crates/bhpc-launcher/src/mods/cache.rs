@@ -102,6 +102,12 @@ fn read_servers(dirs: &ModsDirs) -> Vec<(String, ServerRecord)> {
     out
 }
 
+/// The record of the server at `address` (its last join), if any.
+pub fn server_record(dirs: &ModsDirs, address: &str) -> Option<ServerRecord> {
+    let text = std::fs::read_to_string(dirs.servers().join(format!("{}.toml", server_key(address)))).ok()?;
+    toml::from_str(&text).ok()
+}
+
 /// After a join: stores the server's checked packages (once per SHA-256) and its record.
 pub fn record_join(dirs: &ModsDirs, name: &str, address: &str, cands: &[Candidate], now: u64) -> MRes<String> {
     std::fs::create_dir_all(dirs.blobs()).map_err(io_err)?;

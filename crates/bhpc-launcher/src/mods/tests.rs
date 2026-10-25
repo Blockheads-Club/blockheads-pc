@@ -822,6 +822,9 @@ fn server_cache_shares_files_and_clears() {
     let k1 = cache::record_join(&d, "Sunny Isle", "mira.example.net:15151", &[mm.clone(), pet, tl], 300).unwrap();
     let k2 = cache::record_join(&d, "Dodo Land", "192.168.1.20:15151", &[mm.clone(), race], 200).unwrap();
     assert_eq!(cache::cached_blob(&d, &mm.sha256).unwrap(), d.blobs().join(format!("{}.bhmod", mm.sha256)));
+    let rec = cache::server_record(&d, "192.168.1.20:15151").unwrap();
+    assert_eq!((rec.name.as_str(), rec.last_played, rec.mods.len()), ("Dodo Land", 200, 2));
+    assert!(cache::server_record(&d, "unknown:1").is_none());
     assert!(cache::cached_blob(&d, "../etc").is_none());
     assert!(cache::cached_blob(&d, &"z".repeat(64)).is_none());
     assert!(cache::cached_blob(&d, &"0".repeat(64)).is_none());
