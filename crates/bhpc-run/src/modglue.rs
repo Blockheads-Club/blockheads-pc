@@ -432,6 +432,7 @@ impl ModGlue {
             }
         });
         apply_effects(&self.objc, c);
+        crate::cosmetics::frame(c);
         self.join_from_menu(c);
         publish(&self.shared, false);
     }
@@ -698,6 +699,17 @@ fn sync_join(sh: &Shared) {
 
 /// Starts the session's mods at the first update of a world, then fires `tick`.
 /// The world the game updated last (0: none yet).
+/// The local player's id on the joined server (`-[BHNetClientMatch localPlayerID]`), empty when not online.
+pub(crate) fn local_player_id(o: &Objc, c: &mut Cpu) -> String {
+    let Some(conn) = MAIN.with(|m| m.borrow().conn) else { return String::new() };
+    let id = o.send(c, conn.matcher, "localPlayerID", &[]);
+    if id == 0 {
+        String::new()
+    } else {
+        o.string(c, id)
+    }
+}
+
 pub(crate) fn current_world() -> u32 {
     MAIN.with(|m| m.borrow().world)
 }

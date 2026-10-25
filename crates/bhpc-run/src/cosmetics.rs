@@ -92,6 +92,13 @@ struct State {
     originals: HashMap<(u32, &'static str), u32>,
     /// Vanilla `InventoryItem`s lent to empty slots, by item type.
     items: HashMap<u16, u32>,
+    /// The item type each lent slot held before (by blockhead and slot), put back before the next rebuild.
+    lent: HashMap<(u32, usize), u16>,
+    /// This client's own blockheads (retained: the frame refreshes them on the main thread, where their update and
+    /// drawing never run on PC), with the frames left before the next refresh.
+    own: HashMap<u32, u32>,
+    /// The cosmetics serial the own blockheads were last queued for.
+    own_serial: u64,
 }
 
 thread_local! {
@@ -193,7 +200,57 @@ pub fn clear() {
         let mut s = s.borrow_mut();
         s.content.clear();
         s.seen.clear();
+        s.lent.clear();
+        // Their retain is left to the ended session (a few objects).
+        s.own.clear();
     });
+}
+
+/// The Objective-C helper and ivars for [`frame`] (set where the hooks are registered, maybe on another thread).
+static OWN_GLUE: std::sync::OnceLock<(Arc<Objc>, Ivars)> = std::sync::OnceLock::new();
+
+/// Frames between a blockhead's creation and its refresh: the game makes the clothing textures in between.
+const OWN_DELAY: u32 = 3;
+
+/// Once per frame on the main thread: refreshes this client's own blockheads a few frames after they appeared and
+/// whenever the cosmetics changed (on PC their update and drawing run on other threads, where the hooks skip).
+pub(crate) fn frame(c: &mut Cpu) {
+    if !on_main() || !active() {
+        return;
+    }
+    let Some((o, iv)) = OWN_GLUE.get().cloned() else { return };
+    let due: Vec<u32> = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let serial = s.content.serial();
+        if serial != s.own_serial {
+            s.own_serial = serial;
+            s.own.values_mut().for_each(|n| *n = (*n).max(1));
+        }
+        let mut due = Vec::new();
+        for (bh, n) in s.own.iter_mut() {
+            if *n > 0 {
+                *n -= 1;
+                if *n == 0 {
+                    due.push(*bh);
+                }
+            }
+        }
+        due
+    });
+    for bh in due {
+        // Its creation already counted as seen, before the game had made the textures: rebuild it anyway.
+        STATE.with(|s| s.borrow_mut().seen.remove(&bh));
+        refresh(&o, c, &iv, bh);
+    }
+}
+
+/// Remembers one of this client's own blockheads for [`frame`] (retained once).
+fn note_own(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32) {
+    if is_net(c, iv, bh) || STATE.with(|s| s.borrow().own.contains_key(&bh)) {
+        return;
+    }
+    o.send(c, bh, "retain", &[]);
+    STATE.with(|s| s.borrow_mut().own.insert(bh, OWN_DELAY));
 }
 
 /// Which parts of a blockhead to refresh.
@@ -231,11 +288,12 @@ fn player_of(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32, dev: bool) -> String {
     }
     let off = iv.offset(c, "clientID");
     let id = c.mem().read_u32(bh + off).unwrap_or(0);
-    if id == 0 {
-        String::new()
-    } else {
-        o.string(c, id)
+    let id = if id == 0 { String::new() } else { o.string(c, id) };
+    if id.is_empty() && !is_net(c, iv, bh) {
+        // The game leaves `clientID` empty on this client's own blockheads: they belong to the local player.
+        return crate::modglue::local_player_id(o, c);
     }
+    id
 }
 
 fn worn(c: &mut Cpu, iv: &Ivars, bh: u32) -> [Option<u16>; 4] {
@@ -370,6 +428,17 @@ fn item(o: &Objc, c: &mut Cpu, item_type: u16) -> u32 {
 /// `updateClothingCubes` reads `inventoryItems[0]` (the clothing group item) `.subItems[slot][0]`; the item is put
 /// into that slot's array for the duration of the call. Returns the slot arrays to empty again afterwards.
 fn lend_items(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32, player: &str) -> Vec<u32> {
+    let names = ["shoesItemType", "pantsItemType", "shirtItemType", "hatItemType"];
+    // The game keeps the item type of a slot that went empty: undo the last lending, or a removed cosmetic stays.
+    let undo: Vec<_> = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let keys: Vec<_> = s.lent.keys().filter(|k| k.0 == bh).copied().collect();
+        keys.into_iter().filter_map(|k| s.lent.remove(&k).map(|v| (k.1, v))).collect()
+    });
+    for (i, was) in undo {
+        let off = iv.offset(c, names[i]);
+        let _ = c.mem().write_u16(bh + off, was);
+    }
     let off = iv.offset(c, "inventoryItems");
     let inv = c.mem().read_u32(bh + off).unwrap_or(0);
     if inv == 0 {
@@ -396,8 +465,9 @@ fn lend_items(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32, player: &str) -> Vec<u
         }
         let it = item(o, c, wear);
         o.send(c, arr, "addObject:", &[it]);
-        let names = ["shoesItemType", "pantsItemType", "shirtItemType", "hatItemType"];
         let off = iv.offset(c, names[i]);
+        let was = c.mem().read_u16(bh + off).unwrap_or(0);
+        STATE.with(|s| s.borrow_mut().lent.insert((bh, i), was));
         let _ = c.mem().write_u16(bh + off, wear);
         trace(|| format!("lent item {wear} to {bh:#x} slot {i}"));
         lent.push(arr);
@@ -499,6 +569,7 @@ fn weapon_window(inv: &mut crate::objchook::Invocation<'_>) {
 pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
     let t = |s: &str| Target::parse(s).expect("valid target");
     GLUE.with(|g| *g.borrow_mut() = Some((o.clone(), iv.clone())));
+    let _ = OWN_GLUE.set((o.clone(), iv.clone()));
     // Which blockhead is drawing (weapon skins): before hooks, nothing is changed. The matrices are unions
     // (`v156@0:4f8(_GLKMatrix4=...)12(...)76i140i144i148i152`), which a runtime signature cannot describe.
     let matrix = crate::objchook::Ty::Struct { words: 16, align8: false };
@@ -522,6 +593,11 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
                 // The body: a plain before hook (a nested original drops the body of the blockhead on screen; the
                 // body never draws a sprite item, and the next call from outside ends the window).
                 crate::weapons::entered("draw", inv.receiver());
+                // Cosmetics: the blockhead's update runs on a game thread, its drawing here.
+                if let Some((o, iv)) = GLUE.with(|g| g.borrow().clone()) {
+                    let bh = inv.receiver();
+                    refresh(&o, inv.cpu(), &iv, bh);
+                }
             }
         },
     );
@@ -596,6 +672,7 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
         let bh = inv.receiver();
         let dev = STATE.with(|s| !s.borrow().dev.is_empty());
         let player = player_of(&oo, inv.cpu(), &ii, bh, dev);
+        note_own(&oo, inv.cpu(), &ii, bh);
         let lent = lend_items(&oo, inv.cpu(), &ii, bh, &player);
         let r = inv.call_original();
         for arr in lent {
@@ -622,48 +699,51 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
         let _ = inv.call_original();
         apply_to(&oo, inv.cpu(), &ii, bh, Which::Both);
     });
-    // The per-frame trigger: a blockhead is refreshed the first time it is seen and whenever the cosmetics changed.
-    let (oo, ii) = (o, iv);
+    // The per-frame triggers: a blockhead is refreshed the first time it is seen and whenever the cosmetics changed.
+    // Its update runs on a game thread on PC (the hook then only does the dev aids), its drawing on the main thread.
+    let (oo, ii) = (o.clone(), iv.clone());
     hooks.hook(t("-[Blockhead update:accurateDT:isSimulation:]"), None, move |inv| {
         if on_main() {
             let bh = inv.receiver();
             let net = is_net(inv.cpu(), &ii, bh);
             crate::items::dev_give(&oo, inv.cpu(), bh, net);
             crate::blocks::dev_place(&oo, inv.cpu(), &ii, bh, net);
-        }
-        if !on_main() || !active() {
-            return;
-        }
-        let bh = inv.receiver();
-        let (serial, seen) = STATE.with(|s| {
-            let s = s.borrow();
-            (s.content.serial(), s.seen.get(&bh).copied())
-        });
-        if seen == Some(serial) {
-            return;
-        }
-        STATE.with(|s| s.borrow_mut().seen.insert(bh, serial));
-        let c = inv.cpu();
-        let dev = STATE.with(|s| !s.borrow().dev.is_empty());
-        let player = player_of(&oo, c, &ii, bh, dev);
-        let w = worn(c, &ii, bh);
-        let look = STATE.with(|s| s.borrow().content.look(&player, w));
-        let had = STATE.with(|s| s.borrow().originals.keys().any(|k| k.0 == bh));
-        trace(|| {
-            format!("refresh {bh:#x} of {player:?}: {look:?} (had overrides: {had}, net: {})", is_net(c, &ii, bh))
-        });
-        if look.is_empty() && !had {
-            return;
-        }
-        if is_net(c, &ii, bh) {
-            // Other players' blockheads are never rebuilt by the game: put the old textures back, then override.
-            restore(&oo, c, &ii, bh, Which::Both, false);
-            apply_to(&oo, c, &ii, bh, Which::Both);
-        } else {
-            oo.send(c, bh, "updateClothingCubes", &[]);
-            oo.send(c, bh, "updateSkin", &[]);
+            refresh(&oo, inv.cpu(), &ii, bh);
         }
     });
+}
+
+/// Brings a blockhead up to date with the cosmetics: the first time it is seen (its creation built the clothing
+/// before the game could make the textures) and whenever they changed.
+fn refresh(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32) {
+    if !active() {
+        return;
+    }
+    let (serial, seen) = STATE.with(|s| {
+        let s = s.borrow();
+        (s.content.serial(), s.seen.get(&bh).copied())
+    });
+    if seen == Some(serial) {
+        return;
+    }
+    STATE.with(|s| s.borrow_mut().seen.insert(bh, serial));
+    let dev = STATE.with(|s| !s.borrow().dev.is_empty());
+    let player = player_of(o, c, iv, bh, dev);
+    let w = worn(c, iv, bh);
+    let look = STATE.with(|s| s.borrow().content.look(&player, w));
+    let had = STATE.with(|s| s.borrow().originals.keys().any(|k| k.0 == bh));
+    trace(|| format!("refresh {bh:#x} of {player:?}: {look:?} (had overrides: {had}, net: {})", is_net(c, iv, bh)));
+    if look.is_empty() && !had {
+        return;
+    }
+    if is_net(c, iv, bh) {
+        // Other players' blockheads are never rebuilt by the game: put the old textures back, then override.
+        restore(o, c, iv, bh, Which::Both, false);
+        apply_to(o, c, iv, bh, Which::Both);
+    } else {
+        o.send(c, bh, "updateClothingCubes", &[]);
+        o.send(c, bh, "updateSkin", &[]);
+    }
 }
 
 fn is_net(c: &mut Cpu, iv: &Ivars, bh: u32) -> bool {
