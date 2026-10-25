@@ -242,8 +242,8 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bhmod-manifest"
-version = "0.2.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=47ab9140ca051524bcdc9637a8d09191b53a364a#47ab9140ca051524bcdc9637a8d09191b53a364a"
+version = "0.3.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=506077d45f12e4aadd111204a78eab2f97244369#506077d45f12e4aadd111204a78eab2f97244369"
 dependencies = [
  "semver",
  "serde",
