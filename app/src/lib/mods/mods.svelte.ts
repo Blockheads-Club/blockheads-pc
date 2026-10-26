@@ -172,7 +172,7 @@ export class ModsStore {
     this.tab = tab;
     store.go('mods');
     void this.load();
-    if (tab === 'browse') void this.loadBrowse();
+    if (tab === 'browse') void this.loadBrowse(!this.browse);
     if (tab === 'servers') void this.loadServers();
   }
 
@@ -180,7 +180,7 @@ export class ModsStore {
     this.tab = tab;
     this.showDetail = false;
     this.bDetail = null;
-    if (tab === 'browse' && !this.browse) void this.loadBrowse();
+    if (tab === 'browse' && !this.browse) void this.loadBrowse(true);
     if (tab === 'servers') void this.loadServers();
   }
 
@@ -201,7 +201,8 @@ export class ModsStore {
     }
   }
 
-  /** The public list; once per session, quiet updates follow when the setting is on. */
+  /** The public list: downloaded the first time it is shown in a session (the saved copy when offline), so a stale
+      copy never stands for it; quiet updates follow when the setting is on. */
   async loadBrowse(refresh = false) {
     this.browseLoading = true;
     try {

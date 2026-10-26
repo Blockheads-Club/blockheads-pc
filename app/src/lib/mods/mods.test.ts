@@ -108,15 +108,21 @@ describe('the mods store', () => {
     mods.open('browse');
     expect(store.screen).toBe('mods');
     await vi.waitFor(() => expect(mods.browse).not.toBeNull());
+    // The first look in a session downloads the list; later ones show what was loaded.
+    expect(mock.api.modsIndex).toHaveBeenLastCalledWith(true);
+    mods.open('browse');
+    expect(mock.api.modsIndex).toHaveBeenLastCalledWith(false);
+    mock.api.modsIndex.mockClear();
     mods.open('servers');
     await vi.waitFor(() => expect(mods.servers).not.toBeNull());
     mods.open();
     expect(mods.tab).toBe('servers');
     mods.setTab('browse');
-    expect(mock.api.modsIndex).toHaveBeenCalledTimes(1);
+    expect(mock.api.modsIndex).toHaveBeenCalledTimes(0);
     mods.browse = null;
     mods.setTab('browse');
-    expect(mock.api.modsIndex).toHaveBeenCalledTimes(2);
+    expect(mock.api.modsIndex).toHaveBeenCalledTimes(1);
+    expect(mock.api.modsIndex).toHaveBeenLastCalledWith(true);
     mods.setTab('mine');
     expect(mods.bDetail).toBeNull();
   });
