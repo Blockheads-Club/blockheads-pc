@@ -2169,6 +2169,16 @@ struct ScreenModeCalls {
     /// framebuffer, and the next frame makes one of the new size and calls `-[GameView resize:insets:]`.
     layout: (u32, u32),
     view: Arc<AtomicU32>,
+    /// `+[UIApplication sharedApplication]`, `-[UIApplication keyWindow]`, `-[UIScreen bounds]` (a struct return:
+    /// the result goes to `rect`, 16 bytes of guest memory) and `setFrame:` (sent through the runtime, `rt`):
+    /// the key window is made as big as the new screen. It keeps the first screen's size otherwise, and touches
+    /// outside it (in the part a bigger window added) were dropped by its hit test.
+    app_class: u32,
+    shared_app: (u32, u32),
+    key_window: (u32, u32),
+    bounds: (u32, u32),
+    rect: u32,
+    rt: crate::objchook::Runtime,
 }
 
 impl ScreenModeCalls {
@@ -2186,7 +2196,26 @@ impl ScreenModeCalls {
             return Err(format!("no screen ({screen:#x}) or mode ({mode:#x})"));
         }
         c.call(self.set_mode.0, &[screen, self.set_mode.1, mode]).map_err(err)?;
+        let app = c.call(self.shared_app.0, &[self.app_class, self.shared_app.1]).map_err(err)?.r0;
+        let window = if app == 0 { 0 } else { c.call(self.key_window.0, &[app, self.key_window.1]).map_err(err)?.r0 };
         let view = self.view.load(Ordering::SeqCst);
+        // The key window keeps the first screen's size: make it the new screen's, in landscape like it is (the
+        // screen's `bounds` is portrait). That is enough for touches; the GL view gets its size from the layout below.
+        if window != 0 {
+            c.call(self.bounds.0, &[self.rect, screen, self.bounds.1]).map_err(err)?;
+            let (bw, bh) = (
+                f32::from_bits(c.mem().read_u32(self.rect + 8).unwrap_or(0)),
+                f32::from_bits(c.mem().read_u32(self.rect + 12).unwrap_or(0)),
+            );
+            let (w, h) = (bw.max(bh), bw.min(bh));
+            if w > 0.0 && h > 0.0 {
+                let frame = [0f32.to_bits(), 0f32.to_bits(), w.to_bits(), h.to_bits()];
+                // The registered selector: a method list's name is not it (the message went unrecognised).
+                let sel = self.rt.sel(c, "setFrame:").map_err(err)?;
+                self.rt.send(c, window, sel, &frame).map_err(err)?;
+                eprintln!("[play] game window {w}x{h} points");
+            }
+        }
         if view != 0 {
             c.call(self.layout.0, &[view, self.layout.1]).map_err(err)?;
         }
@@ -2231,6 +2260,12 @@ fn follow_window_aspect(
         mode_class: mode,
         emulated: call(mode, "emulatedMode:", true)?,
         set_mode: call(screen_class, "setCurrentMode:", false)?,
+        app_class: class("UIApplication")?,
+        shared_app: call(class("UIApplication")?, "sharedApplication", true)?,
+        key_window: call(class("UIApplication")?, "keyWindow", false)?,
+        bounds: call(screen_class, "bounds", false)?,
+        rect: lock(&sess.st).heap.calloc(1, 16),
+        rt: crate::objchook::Runtime::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))?,
     };
     hook_at(sess, emulated, "+[UIScreenMode emulatedMode:]", |c| {
         let m = screen_mode(c.reg(2));
