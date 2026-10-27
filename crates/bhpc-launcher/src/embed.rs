@@ -690,6 +690,98 @@ pub fn hid_from_scancode(code: u32, extended: bool) -> Option<u32> {
     EXTENDED.iter().find(|&&(sc, _)| sc == code).and_then(|&(_, evdev)| hid_from_evdev(evdev))
 }
 
+/// USB HID usage id of a macOS virtual key code (`-[NSEvent keyCode]`, the `kVK_*` constants: the key's position on
+/// an ANSI keyboard, whatever the layout). Mapped through the evdev code of the same key, so the set of keys is the
+/// same as on Linux. `None` for keys the game has no use for.
+pub fn hid_from_mac_keycode(code: u16) -> Option<u32> {
+    const EVDEV: [(u16, u32); 64] = [
+        (0x00, 30),  // A
+        (0x01, 31),  // S
+        (0x02, 32),  // D
+        (0x03, 33),  // F
+        (0x04, 35),  // H
+        (0x05, 34),  // G
+        (0x06, 44),  // Z
+        (0x07, 45),  // X
+        (0x08, 46),  // C
+        (0x09, 47),  // V
+        (0x0B, 48),  // B
+        (0x0C, 16),  // Q
+        (0x0D, 17),  // W
+        (0x0E, 18),  // E
+        (0x0F, 19),  // R
+        (0x10, 21),  // Y
+        (0x11, 20),  // T
+        (0x12, 2),   // 1
+        (0x13, 3),   // 2
+        (0x14, 4),   // 3
+        (0x15, 5),   // 4
+        (0x16, 7),   // 6
+        (0x17, 6),   // 5
+        (0x18, 13),  // =
+        (0x19, 10),  // 9
+        (0x1A, 8),   // 7
+        (0x1B, 12),  // -
+        (0x1C, 9),   // 8
+        (0x1D, 11),  // 0
+        (0x1E, 27),  // ]
+        (0x1F, 24),  // O
+        (0x20, 22),  // U
+        (0x21, 26),  // [
+        (0x22, 23),  // I
+        (0x23, 25),  // P
+        (0x24, 28),  // Return
+        (0x25, 38),  // L
+        (0x26, 36),  // J
+        (0x27, 40),  // '
+        (0x28, 37),  // K
+        (0x29, 39),  // ;
+        (0x2A, 43),  // backslash
+        (0x2B, 51),  // ,
+        (0x2C, 53),  // /
+        (0x2D, 49),  // N
+        (0x2E, 50),  // M
+        (0x2F, 52),  // .
+        (0x30, 15),  // Tab
+        (0x31, 57),  // Space
+        (0x32, 41),  // `
+        (0x33, 14),  // Delete (backspace)
+        (0x35, 1),   // Escape
+        (0x38, 42),  // Shift
+        (0x39, 58),  // Caps Lock
+        (0x3A, 56),  // Option
+        (0x3B, 29),  // Control
+        (0x3C, 54),  // right Shift
+        (0x3D, 100), // right Option
+        (0x3E, 97),  // right Control
+        (0x73, 102), // Home
+        (0x74, 104), // Page Up
+        (0x75, 111), // Forward Delete
+        (0x77, 107), // End
+        (0x79, 109), // Page Down
+    ];
+    // F1..F12 and the arrows.
+    const MORE: [(u16, u32); 16] = [
+        (0x7A, 59),
+        (0x78, 60),
+        (0x63, 61),
+        (0x76, 62),
+        (0x60, 63),
+        (0x61, 64),
+        (0x62, 65),
+        (0x64, 66),
+        (0x65, 67),
+        (0x6D, 68),
+        (0x67, 87),
+        (0x6F, 88),
+        (0x7B, 105),
+        (0x7C, 106),
+        (0x7D, 108),
+        (0x7E, 103),
+    ];
+    EVDEV.iter().chain(MORE.iter()).find(|&&(k, _)| k == code).and_then(|&(_, evdev)| hid_from_evdev(evdev))
+}
+
 /// USB HID usage id of a Linux evdev key code (GDK's hardware keycode minus 8 on X11 and Wayland); the physical
 /// key, like an SDL scancode. `None` for keys the game has no use for.
 pub fn hid_from_evdev(code: u32) -> Option<u32> {

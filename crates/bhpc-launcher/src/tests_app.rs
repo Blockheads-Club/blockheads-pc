@@ -959,6 +959,39 @@ mod embed_tests {
     }
 
     #[test]
+    fn mac_key_codes_map_to_hid_usages() {
+        // A, Q, 1, 0, Return, Space, Escape, F1, F11, F12, the arrows, Shift, Option, right Control.
+        for (code, hid) in [
+            (0x00, 4),
+            (0x0C, 20),
+            (0x12, 30),
+            (0x1D, 39),
+            (0x24, 40),
+            (0x31, 44),
+            (0x35, 41),
+            (0x7A, 58),
+            (0x67, 68),
+            (0x6F, 69),
+            (0x7B, 80),
+            (0x7C, 79),
+            (0x7D, 81),
+            (0x7E, 82),
+            (0x38, 225),
+            (0x3A, 226),
+            (0x3E, 228),
+        ] {
+            assert_eq!(hid_from_mac_keycode(code), Some(hid), "key code {code:#x}");
+        }
+        // Command and unknown codes have no use in the game.
+        assert_eq!(hid_from_mac_keycode(0x37), None);
+        assert_eq!(hid_from_mac_keycode(0xFF), None);
+        // Every letter of the alphabet is reachable exactly once.
+        let letters: std::collections::BTreeSet<u32> =
+            (0..0x80).filter_map(hid_from_mac_keycode).filter(|h| (4..=29).contains(h)).collect();
+        assert_eq!(letters.len(), 26);
+    }
+
+    #[test]
     fn windows_scan_codes_map_to_hid_usages() {
         // Main block: same as evdev (Q, Enter, left Ctrl, Space, F1, F12).
         for (sc, hid) in [(0x10, 20), (0x1c, 40), (0x1d, 224), (0x39, 44), (0x3b, 58), (0x58, 69)] {
