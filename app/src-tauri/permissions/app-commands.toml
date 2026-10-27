@@ -28,6 +28,7 @@ permissions = [
   "allow-game-poll",
   "allow-embed-layout",
   "allow-embed-reveal",
+  "allow-embed-focus",
   "allow-embed-fullscreen",
   "allow-save-log",
   "allow-update-check",

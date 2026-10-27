@@ -29,6 +29,7 @@ const COMMANDS: &[&str] = &[
     "game_poll",
     "embed_layout",
     "embed_reveal",
+    "embed_focus",
     "embed_fullscreen",
     "save_log",
     "update_check",

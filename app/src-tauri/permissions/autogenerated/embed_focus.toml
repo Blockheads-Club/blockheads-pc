@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-embed-focus"
+description = "Enables the embed_focus command without any pre-configured scope."
+commands.allow = ["embed_focus"]
+
+[[permission]]
+identifier = "deny-embed-focus"
+description = "Denies the embed_focus command without any pre-configured scope."
+commands.deny = ["embed_focus"]
