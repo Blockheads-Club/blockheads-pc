@@ -170,6 +170,16 @@ Only these are excluded: vendored `third_party/` (dynarmic), the C++ shim in `cr
 never measured), and test code (`tests.rs`, `tests_*.rs`, `crates/*/tests/`, and the test-ELF builder
 `crates/bhpc-loader/src/testelf.rs`). Set `COVERAGE_PACKAGES="bhpc-cpu bhpc-mem"` to gate a subset of crates.
 
+## Releases
+
+Releases are automatic (semantic-release, `.releaserc.json`). When `ci` passes for a push to `dev`,
+`.github/workflows/auto-release.yml` reads the Conventional Commits since the last `v*` tag: `fix`/`perf` cut a patch
+release, `feat` a minor one, `BREAKING CHANGE` a major one; other types cut none. It sets the version
+(`scripts/set-version.mjs`), commits `chore(release): vX.Y.Z`, tags it, opens a draft release with the generated
+notes and dispatches `launcher-bundles.yml` with `release_tag` and `publish`, which builds that tag, attaches every
+installer and `latest.json`, publishes the release and rebuilds the website. Edit the notes on GitHub afterwards if
+they need more than the commit subjects.
+
 ## CPU embedding notes
 
 - Thunks (host functions bound to `svc` slots) live in a `ThunkTable` shared by all `Cpu`s of a guest; use

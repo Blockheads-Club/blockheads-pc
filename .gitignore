@@ -11,3 +11,4 @@
 *.profraw
 *.profdata
 /coverage/
+node_modules/

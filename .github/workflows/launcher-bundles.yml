@@ -5,7 +5,8 @@
 # Bundles hold the launcher, the sidecar and icons only; scripts/check-bundle.sh checks every bundle for the sidecar
 # and for game files that must never be in it.
 #
-# Run by hand with `release_tag` set (a draft or pre-release), the bundles also replace that release's assets.
+# Run with `release_tag` set (a draft or pre-release), it builds that tag and the bundles replace the release's assets;
+# with `publish` too it then publishes the release and rebuilds the website. auto-release.yml dispatches it that way.
 name: launcher-bundles
 
 on:
@@ -20,12 +21,18 @@ on:
         description: "Upload the bundles to this (draft or pre-)release, replacing its assets"
         required: false
         default: ""
+      publish:
+        description: "Publish the release once its assets are replaced (and rebuild the website)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: launcher-bundles-${{ github.ref }}
+  # A release build has its own group, so a later push to dev does not cancel it.
+  group: launcher-bundles-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -50,6 +57,8 @@ jobs:
           - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -184,6 +193,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       # Checkout first: it cleans the workspace, which would delete artifacts downloaded before it.
       - uses: actions/checkout@v4
@@ -220,3 +230,13 @@ jobs:
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
             while IFS= read -r a; do gh release delete-asset "$TAG" "$a" -R "$GITHUB_REPOSITORY" --yes; done
           find bundles -type f -print0 | xargs -0 gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber
+      # A release published with GITHUB_TOKEN starts no `release: published` workflow, so the website rebuild is
+      # dispatched here.
+      - name: Publish the release and rebuild the website
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release edit "$TAG" --draft=false -R "$GITHUB_REPOSITORY"
+          gh workflow run website-rebuild.yml -R "$GITHUB_REPOSITORY" --ref dev

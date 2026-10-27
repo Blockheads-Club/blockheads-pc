@@ -1,0 +1,42 @@
+{
+  "branches": [
+    "dev"
+  ],
+  "tagFormat": "v${version}",
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "node scripts/set-version.mjs ${nextRelease.version}",
+        "successCmd": "echo \"tag=${nextRelease.gitTag}\" >> \"$GITHUB_OUTPUT\""
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "README.md",
+          "Cargo.toml",
+          "Cargo.lock",
+          "app/package.json",
+          "app/src-tauri/Cargo.toml",
+          "app/src-tauri/Cargo.lock",
+          "app/src-tauri/tauri.conf.json"
+        ],
+        "message": "chore(release): v${nextRelease.version}"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "draftRelease": true,
+        "successComment": false,
+        "failComment": false,
+        "failTitle": false,
+        "releasedLabels": false
+      }
+    ]
+  ]
+}

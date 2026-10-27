@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: auto-release
+
+# Once ci passes for a push to dev, semantic-release (.releaserc.json) reads the Conventional Commits since the last
+# v* tag. When they call for a release (fix/perf -> patch, feat -> minor, BREAKING CHANGE -> major) it sets the new
+# version in every file (scripts/set-version.mjs), commits "chore(release): vX.Y.Z", tags it and opens a draft GitHub
+# release with the generated notes. Pushes made with GITHUB_TOKEN start no workflows, so this then dispatches
+# launcher-bundles.yml (build every installer, attach, publish).
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit ci tested. semantic-release skips the run when dev has moved on since (that push gets its own).
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - id: semrel
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: bunx semantic-release
+      - name: Build and publish the release
+        if: steps.semrel.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.semrel.outputs.tag }}
+        run: |
+          gh workflow run launcher-bundles.yml -R "$GITHUB_REPOSITORY" --ref dev -f release_tag="$TAG" -f publish=true
