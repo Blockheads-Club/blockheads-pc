@@ -200,7 +200,13 @@ fn open_splash(app: &tauri::App) -> tauri::Result<()> {
 #[tauri::command]
 fn boot() -> Res<Boot> {
     let data = ops::data_dir_from(std::env::var_os("BHPC_DATA_DIR"), LaunchConfig::default_data_dir()).map_err(text)?;
-    ops::boot(&ops::paths().map_err(text)?, data).map_err(text)
+    let paths = ops::paths().map_err(text)?;
+    let booted = ops::boot(&paths, data).map_err(text)?;
+    // Check the game file now, off the UI thread: the first Play finds it checked (hashing about 100 MB took 1-2 s).
+    if let Ok(Some(c)) = LaunchConfig::load(&paths.config()) {
+        std::thread::spawn(move || drop(bhpc_launcher::apk::validate_cached(&c.apk, c.force)));
+    }
+    Ok(booted)
 }
 
 #[tauri::command]

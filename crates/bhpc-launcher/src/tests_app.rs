@@ -378,6 +378,21 @@ mod unix {
     }
 
     #[test]
+    fn cancel_while_starting_ends_the_game_at_once() {
+        // Still starting (no @ready): nothing to save, so no grace period even for an in-window game.
+        let mut s = Session::new(Duration::from_secs(3600));
+        s.set_quit_grace(Duration::from_secs(30));
+        let (prog, mut args) = sh("echo '@progress constructors 1 10'; trap '' TERM; exec sleep 30");
+        args.push("--embed".into());
+        s.start(&prog, &args, &[]).unwrap();
+        assert_eq!(s.poll(0, true).state, GameState::Starting);
+        let t0 = std::time::Instant::now();
+        s.stop();
+        assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+        assert_eq!(s.poll(0, true).state, GameState::Stopped);
+    }
+
+    #[test]
     fn copy_lines_go_to_the_handler() {
         let mut s = Session::new(Duration::ZERO);
         // Without a handler the line is dropped all the same.
@@ -428,9 +443,13 @@ mod unix {
     fn stop_asks_an_in_window_game_to_quit_first() {
         let mut s = Session::new(Duration::from_secs(3600));
         // It reads `quit` and ends by itself: stopped, not killed.
-        let (prog, mut args) = sh("read l; [ \"$l\" = quit ] && exit 0; exit 5");
+        let (prog, mut args) = sh("echo @ready; read l; [ \"$l\" = quit ] && exit 0; exit 5");
         args.push("--embed".into());
         s.start(&prog, &args, &[]).unwrap();
+        let t0 = std::time::Instant::now();
+        while s.poll(0, true).state != GameState::Running && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         s.stop();
         let snap = s.poll(0, true);
         assert_eq!((snap.state, snap.exit_code, snap.signal), (GameState::Stopped, Some(0), None));

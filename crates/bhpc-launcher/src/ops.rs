@@ -203,7 +203,7 @@ pub fn launch_plan(paths: &Paths, exe_dir: &Path) -> Result<LaunchPlan, Launcher
     let config =
         LaunchConfig::load(&paths.config())?.ok_or_else(|| LauncherError::Io("setup is not finished".into()))?;
     config.window.validate().map_err(LauncherError::Window)?;
-    let info = apk::validate(&config.apk, config.force).map_err(LauncherError::Apk)?;
+    let info = apk::validate_cached(&config.apk, config.force).map_err(LauncherError::Apk)?;
     let prefs = Prefs::load(&paths.prefs())?;
     let title = game_title(&prefs.language, info.release.map(bhpc_loader::apk::Release::version));
     let mut env = Vec::new();

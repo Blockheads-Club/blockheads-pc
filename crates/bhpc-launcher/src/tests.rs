@@ -49,6 +49,23 @@ fn apk_validation() {
 }
 
 #[test]
+fn apk_validation_is_remembered_while_the_file_stays_the_same() {
+    let t = tempfile::tempdir().unwrap();
+    let p = fake_apk(t.path());
+    let hash = sha256_hex(LIB);
+    let good = [(Release::V1_7_6, hash.as_str())];
+    assert_eq!(apk::validate_cached_with(&p, &good, false).unwrap().release, Some(Release::V1_7_6));
+    // Remembered: the file is not checked again (an empty table would refuse it).
+    assert_eq!(apk::validate_cached_with(&p, &[], false).unwrap().release, Some(Release::V1_7_6));
+    // Another file at the same path (other size) is checked again; a failure is not remembered.
+    make_zip(&p, &[("lib/armeabi-v7a/libApplication.so", b"other library")]);
+    assert!(matches!(apk::validate_cached_with(&p, &good, false), Err(ApkError::UnknownBuild { .. })));
+    assert!(apk::validate_cached_with(&p, &[], true).unwrap().release.is_none());
+    // A file that cannot be read is not remembered either.
+    assert!(apk::validate_cached(&t.path().join("missing.apk"), false).is_err());
+}
+
+#[test]
 fn binding_roundtrip() {
     for s in [
         "Left",

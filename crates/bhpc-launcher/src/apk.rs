@@ -2,7 +2,10 @@
 
 use bhpc_loader::apk::{Apk, ApkError, Release, KNOWN_BUILDS};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 /// A validated APK.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +35,28 @@ pub fn validate(path: &Path, force: bool) -> Result<ApkInfo, ApkError> {
 pub fn validate_with(path: &Path, table: &[(Release, &str)], force: bool) -> Result<ApkInfo, ApkError> {
     let release = Apk::open(path)?.verify_with(table, force)?;
     Ok(ApkInfo { path: path.to_path_buf(), release })
+}
+
+/// [`validate`], remembered for the file as it is (path, size, modification time): pressing Play does not read and hash
+/// the whole APK (about 100 MB) again every time. A file that changed is checked again; failures are not remembered.
+pub fn validate_cached(path: &Path, force: bool) -> Result<ApkInfo, ApkError> {
+    validate_cached_with(path, &KNOWN_BUILDS, force)
+}
+
+/// [`validate_cached`] against a caller-supplied hash table.
+pub fn validate_cached_with(path: &Path, table: &[(Release, &str)], force: bool) -> Result<ApkInfo, ApkError> {
+    type Key = (PathBuf, u64, Option<SystemTime>, bool);
+    static SEEN: Mutex<Option<HashMap<Key, ApkInfo>>> = Mutex::new(None);
+    let key = std::fs::metadata(path).ok().map(|m| (path.to_path_buf(), m.len(), m.modified().ok(), force));
+    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(info) = key.as_ref().and_then(|k| seen.as_ref()?.get(k)) {
+        return Ok(info.clone());
+    }
+    let info = validate_with(path, table, force)?;
+    if let Some(k) = key {
+        seen.get_or_insert_with(HashMap::new).insert(k, info.clone());
+    }
+    Ok(info)
 }
 
 /// Outcome class of [`check`].

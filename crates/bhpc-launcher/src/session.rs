@@ -328,9 +328,11 @@ impl Session {
     /// (a game in its own window does not read its input and is killed at once).
     pub fn stop(&mut self) {
         self.refresh();
+        // A game still starting has nothing to save: it is ended at once (Cancel on the loading screen).
+        let booting = self.booting();
         if let Some(mut run) = self.run.take() {
             run.stopping = true;
-            if let Some(input) = run.input.take().filter(|_| run.embedded) {
+            if let Some(input) = run.input.take().filter(|_| run.embedded && !booting) {
                 // Dropping the sender ends the writer thread after this line, which closes the game's stdin.
                 let _ = input.send("quit".to_string());
                 let deadline = Instant::now() + self.quit_grace;
@@ -399,19 +401,23 @@ impl Session {
         }
     }
 
+    /// Whether the game is still starting: no `@ready` yet, or (a runner that prints no progress at all) inside the
+    /// grace period after its start.
+    fn booting(&self) -> bool {
+        let Some(run) = self.run.as_ref() else { return false };
+        match self.progress_info(run.started) {
+            Some(info) => !info.ready,
+            None => run.started.elapsed() < self.grace,
+        }
+    }
+
     /// Current state plus the log lines after `since`. `apk_present`: the game file still exists.
     pub fn poll(&mut self, since: usize, apk_present: bool) -> Snapshot {
         self.refresh();
         self.stop_if_stalled();
         self.learn();
-        let running = self.run.as_ref().map(|r| (r.started, r.started.elapsed()));
         let tracker = self.run.as_ref().and_then(|r| self.progress_info(r.started));
-        // A runner that prints no progress at all counts as starting for a short grace period.
-        let booting = match (&tracker, running) {
-            (Some(info), _) => !info.ready,
-            (None, Some((_, elapsed))) => elapsed < self.grace,
-            (None, None) => false,
-        };
+        let booting = self.booting();
         let state = match (&self.run, &self.last) {
             (Some(_), _) if booting => GameState::Starting,
             (Some(_), _) => GameState::Running,
