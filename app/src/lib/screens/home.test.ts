@@ -82,7 +82,33 @@ describe('Home', () => {
     expect(screen.queryByText(/Last session/)).toBeNull();
   });
 
-  it('explains a crash and offers the log', async () => {
+  it('shows the pressed button working until the backend answers', () => {
+    store.game = makeSnap({ state: 'stopped' });
+    store.busy = 'play';
+    render(Home);
+    const again = screen.getByRole('button', { name: 'Play again' });
+    expect(again).toBeDisabled();
+    expect(again).toHaveAttribute('aria-busy', 'true');
+    cleanup();
+    store.game = makeSnap({ state: 'running', running_secs: 60 });
+    store.busy = 'stop';
+    render(Home);
+    expect(screen.getByRole('button', { name: 'Back to game' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop game' })).toHaveAttribute('aria-busy', 'true');
+    cleanup();
+    store.screen = 'playing';
+    render(Playing);
+    const stop = screen.getByRole('button', { name: 'Stop game' });
+    expect(stop).toBeDisabled();
+    expect(stop).toHaveAttribute('aria-busy', 'true');
+    cleanup();
+    store.game = makeSnap({ state: 'starting' });
+    render(Playing);
+    expect(screen.getAllByRole('button', { name: 'Cancel' })[0]).toHaveAttribute('aria-busy', 'true');
+    store.busy = null;
+  });
+
+    it('explains a crash and offers the log', async () => {
     store.log = ['a', 'b', 'c', 'd'];
     store.game = makeSnap({ state: 'crashed', exit_code: 139 });
     render(Home);

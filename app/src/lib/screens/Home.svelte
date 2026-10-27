@@ -11,6 +11,7 @@
   import Icon from '../ui/Icon.svelte';
   import PlayButton from '../ui/PlayButton.svelte';
   import Progress from '../ui/Progress.svelte';
+  import Spinner from '../ui/Spinner.svelte';
   import StatusPill from '../ui/StatusPill.svelte';
   import { mods } from '../mods/mods.svelte';
   import { onMount } from 'svelte';
@@ -73,19 +74,21 @@
         <h1 id="gtitle">{t('home.game')} {#if version}<span class="mono v">{version}</span>{/if}</h1>
 
         {#if state === 'ready'}
-          <PlayButton size={compact ? 'md' : 'lg'} onclick={() => store.play()}>{t('home.play')}</PlayButton>
+          <PlayButton size={compact ? 'md' : 'lg'} disabled={!!store.busy} busy={store.busy === 'play'} onclick={() => store.play()}>{t('home.play')}</PlayButton>
         {:else if state === 'starting'}
           <PlayButton size={compact ? 'md' : 'lg'} disabled busy>{t('home.starting')}</PlayButton>
           <div class="prog"><Progress stage label={t('home.startingLabel')} value={g.progress ? Math.floor(g.progress.percent) : undefined} /><p class="sub">{t('home.startingHint')}</p></div>
         {:else if state === 'running'}
           {#if !compact}<p class="lead">{t('home.runningLead')}</p>{/if}
           <div class="row">
-            <PlayButton size="md" onclick={() => store.play()}>{t('home.back')}</PlayButton>
-            <button class="sbtn stop" onclick={() => store.stop()}><Icon name="stop" />{t('home.stop')}</button>
+            <PlayButton size="md" disabled={!!store.busy} onclick={() => store.play()}>{t('home.back')}</PlayButton>
+            <button class="sbtn stop" disabled={!!store.busy} aria-busy={store.busy === 'stop' || undefined} onclick={() => store.stop()}>
+              {#if store.busy === 'stop'}<Spinner size={16} light />{:else}<Icon name="stop" />{/if}{t('home.stop')}
+            </button>
           </div>
           {#if !compact}<p class="note">{t('home.saveHint')}</p>{/if}
         {:else if state === 'stopped'}
-          <PlayButton size={compact ? 'md' : 'lg'} onclick={() => store.play()}>{t('home.playAgain')}</PlayButton>
+          <PlayButton size={compact ? 'md' : 'lg'} disabled={!!store.busy} busy={store.busy === 'play'} onclick={() => store.play()}>{t('home.playAgain')}</PlayButton>
           {#if g.last_session_secs !== null}<p class="sub">{t('home.last', { d: duration(g.last_session_secs) })}</p>{/if}
         {:else if state === 'crashed'}
           <div class="alertbox" role="alert">
@@ -98,7 +101,7 @@
               <button class="sbtn sec" onclick={() => api.openUrl(`${REPO_URL}/issues/new`)}><Icon name="code" />{t('home.report')}</button>{/if}
             </div>
           </div>
-          <PlayButton size="md" onclick={() => store.play()}>{t('home.playAgain')}</PlayButton>
+          <PlayButton size="md" disabled={!!store.busy} busy={store.busy === 'play'} onclick={() => store.play()}>{t('home.playAgain')}</PlayButton>
         {:else}
           <div class="alertbox warn" role="alert">
             <p class="at wt"><Icon name="file" />{t('home.missing')}</p>
@@ -168,6 +171,8 @@
     display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0 20px;
     border-radius: 12px; font: 700 16px var(--f-body); cursor: pointer;
   }
+  /* Waiting for the backend (Stop pressed). */
+  .sbtn:disabled { opacity: 0.7; cursor: progress; }
   .sbtn:focus-visible { outline: 3px solid #86b9ff; outline-offset: 3px; }
   .stop { background: #ff8f80; color: #1c0d06; border: 2px solid #ff8f80; box-shadow: 0 3px 0 #8f3a2e; }
   .sec { background: #2a231f; color: #f5ede5; border: 2px solid #54483f; box-shadow: 0 3px 0 #000; min-height: 44px; font-size: 15px; }

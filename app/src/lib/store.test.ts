@@ -557,6 +557,30 @@ describe('playing', () => {
     expect(msgs()).toEqual(['x']);
   });
 
+  it('makes a second press wait for the first one', async () => {
+    let started!: () => void;
+    mock.api.gameStart = vi.fn(() => new Promise<void>((r) => (started = r)));
+    const first = store.play();
+    expect(store.busy).toBe('play');
+    await store.play();
+    await store.stop();
+    expect(mock.api.gameStart).toHaveBeenCalledTimes(1);
+    expect(mock.api.gameStop).not.toHaveBeenCalled();
+    started();
+    await first;
+    expect(store.busy).toBeNull();
+    let stopped!: () => void;
+    mock.api.gameStop = vi.fn(() => new Promise<void>((r) => (stopped = r)));
+    const stopping = store.stop();
+    expect(store.busy).toBe('stop');
+    await store.stop();
+    await store.play();
+    expect(mock.api.gameStop).toHaveBeenCalledTimes(1);
+    stopped();
+    await stopping;
+    expect(store.busy).toBeNull();
+  });
+
   it('polls on a timer until stopped', async () => {
     store.startPolling();
     store.startPolling();

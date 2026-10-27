@@ -5,6 +5,7 @@
   import type { Key } from '../messages';
   import type { BootProgress } from '../types';
   import Icon from '../ui/Icon.svelte';
+  import Spinner from '../ui/Spinner.svelte';
 
   /**
    * The loading screen of the game area (design: PC-Loading). Everything it shows comes from its props, so the
@@ -26,12 +27,14 @@
     logTail?: string[];
     oncancel: () => void;
     onretry: () => void;
+    /** Try again (`play`) or Cancel (`stop`) pressed and not done yet: that button spins, both wait. */
+    busy?: 'play' | 'stop' | null;
     oncopylog: () => void;
     onhome: () => void;
   }
   let {
     progress, version, failed = false, complete = false, handover = false, fullscreen = false, logTail = [],
-    oncancel, onretry, oncopylog, onhome
+    oncancel, onretry, oncopylog, onhome, busy = null
   }: Props = $props();
 
   const STEPS = 6;
@@ -126,11 +129,11 @@
 
     <div class="actions">
       {#if failed}
-        <button class="btn primary" bind:this={retry} onclick={onretry}><Icon name="refresh" />{t('common.retry')}</button>
+        <button class="btn primary" bind:this={retry} disabled={!!busy} aria-busy={busy === 'play' || undefined} onclick={onretry}>{#if busy === 'play'}<Spinner size={16} light />{:else}<Icon name="refresh" />{/if}{t('common.retry')}</button>
         <button class="btn" onclick={oncopylog}><Icon name="copy" />{t('logs.copy')}</button>
         <button class="btn ghost" onclick={onhome}><Icon name="home" />{t('load.backHome')}</button>
       {:else if !handover}
-        <button class="btn" bind:this={cancel} onclick={oncancel}><Icon name="x" />{t('common.cancel')}</button>
+        <button class="btn" bind:this={cancel} disabled={!!busy} aria-busy={busy === 'stop' || undefined} onclick={oncancel}>{#if busy === 'stop'}<Spinner size={16} light />{:else}<Icon name="x" />{/if}{t('common.cancel')}</button>
         <span class="esc"><kbd>Esc</kbd>{t('load.escHint')}</span>
       {/if}
     </div>
@@ -139,7 +142,7 @@
 </section>
 
 {#if fullscreen && !failed && !handover}
-  <div class="chip"><span>{t('status.starting')}</span><button class="chipbtn" onclick={oncancel}><Icon name="x" />{t('common.cancel')}</button></div>
+  <div class="chip"><span>{t('status.starting')}</span><button class="chipbtn" disabled={!!busy} aria-busy={busy === 'stop' || undefined} onclick={oncancel}>{#if busy === 'stop'}<Spinner size={12} light />{:else}<Icon name="x" />{/if}{t('common.cancel')}</button></div>
 {/if}
 
 <style>
@@ -198,6 +201,8 @@
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; border-radius: 10px; border: 2px solid var(--line-strong); background: var(--surface); color: var(--text); font: 700 15px/1.2 var(--f-body); box-shadow: var(--edge); cursor: pointer; white-space: nowrap; }
   .btn.primary { background: var(--primary); border-color: var(--primary-edge); color: var(--on-primary); box-shadow: 0 3px 0 var(--primary-edge); }
   .btn.ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--text-2); }
+  /* Waiting for the backend (Try again or Cancel pressed). */
+  .btn:disabled, .chipbtn:disabled { opacity: 0.7; cursor: progress; }
   .btn:focus-visible, .chipbtn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
   .esc { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--text-3); }
   kbd { font: 600 12px/1 var(--f-mono); padding: 3px 6px; border-radius: 5px; border: 1.5px solid var(--line-strong); color: var(--text-2); }

@@ -74,6 +74,9 @@ export class AppStore {
   game = $state<Snapshot>({ ...IDLE });
   /** The window is fullscreen (the title bar and strip are hidden while playing). */
   fullscreen = $state(false);
+  /** A press of Play / Play again / Try again (`play`) or Stop game / Cancel (`stop`) the backend is still working on:
+   * that button shows a spinner and every game button waits (a second press does nothing). */
+  busy = $state<'play' | 'stop' | null>(null);
   log = $state<string[]>([]);
   update = $state<{ stage: UpdateStage; info: UpdateInfo | null; progress: UpdateProgress | null; error: string; checked: boolean }>({
     stage: 'idle', info: null, progress: null, error: '', checked: false
@@ -460,10 +463,12 @@ export class AppStore {
   // ---- game --------------------------------------------------------------------------------------------------
 
   async play() {
+    if (this.busy) return;
     if (this.active) {
       this.screen = 'playing';
       return;
     }
+    this.busy = 'play';
     try {
       await api.gameStart();
       // The loading screen starts at 0 %, not where the last session ended, until the first poll comes back.
@@ -473,15 +478,21 @@ export class AppStore {
       await this.poll();
     } catch (e) {
       this.fail(e);
+    } finally {
+      this.busy = null;
     }
   }
 
   async stop() {
+    if (this.busy) return;
+    this.busy = 'stop';
     try {
       await api.gameStop();
       await this.poll();
     } catch (e) {
       this.fail(e);
+    } finally {
+      this.busy = null;
     }
   }
 

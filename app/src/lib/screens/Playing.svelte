@@ -6,6 +6,7 @@
   import LoadingView from '../parts/LoadingView.svelte';
   import BindingChips from '../ui/BindingChips.svelte';
   import Icon from '../ui/Icon.svelte';
+  import Spinner from '../ui/Spinner.svelte';
   import StatusPill from '../ui/StatusPill.svelte';
 
   const minutes = $derived(Math.floor((store.game.running_secs ?? 0) / 60));
@@ -92,10 +93,10 @@
     {#if embedded}<button class="sb ic" aria-label={t('fs.enter')} title={t('fs.enter')} onclick={() => store.toggleFullscreen()}><Icon name="max" /></button>{/if}
     <button class="sb ic" aria-label={t('home.q.join')} onclick={() => (store.dialog = 'join')}><Icon name="help" /></button>
     <button class="sb ic" aria-label={t('home.q.logs')} onclick={() => (store.dialog = 'logs')}><Icon name="terminal" /></button>
-    {#if starting}
-      <button class="sb cancel" onclick={() => store.stop()}><Icon name="x" />{t('common.cancel')}</button>
-    {:else if !failed}
-      <button class="sb stop" onclick={() => store.stop()}><Icon name="stop" />{t('home.stop')}</button>
+    {#if starting || !failed}
+      <button class={['sb', starting ? 'cancel' : 'stop']} disabled={!!store.busy} aria-busy={store.busy === 'stop' || undefined} onclick={() => store.stop()}>
+        {#if store.busy === 'stop'}<Spinner size={14} light />{:else}<Icon name={starting ? 'x' : 'stop'} />{/if}{starting ? t('common.cancel') : t('home.stop')}
+      </button>
     {/if}
   </nav>
   {/if}
@@ -124,6 +125,7 @@
         {complete}
         {handover}
         fullscreen={hideBars}
+        busy={store.busy}
         {logTail}
         oncancel={() => store.stop()}
         onretry={() => store.play()}
@@ -144,6 +146,8 @@
   .sb.ic { width: 34px; padding: 0; justify-content: center; }
   .sb.cancel { background: #3a312b; }
   .sb.stop { background: #ff8f80; color: #1c0d06; }
+  /* Waiting for the backend (Stop or Cancel pressed). */
+  .sb:disabled { opacity: 0.7; cursor: progress; }
   .view { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; background: #000; padding: 16px; outline: none; }
   .game {
     width: min(100%, 720px);

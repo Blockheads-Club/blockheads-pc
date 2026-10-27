@@ -130,6 +130,18 @@ describe('LoadingView', () => {
     expect(screen.queryAllByRole('button', { name: 'Cancel' })).toHaveLength(0);
   });
 
+  it('shows the pressed button working and holds both until the backend answers', async () => {
+    const { rerender } = render(LoadingView, { progress: prog(), version: '', failed: true, busy: 'play', ...handlers() });
+    const retry = screen.getByRole('button', { name: 'Try again' });
+    expect(retry).toBeDisabled();
+    expect(retry).toHaveAttribute('aria-busy', 'true');
+    await rerender({ progress: prog(), version: '', failed: false, fullscreen: true, busy: 'stop', ...handlers() });
+    for (const b of screen.getAllByRole('button', { name: 'Cancel' })) {
+      expect(b).toBeDisabled();
+      expect(b).toHaveAttribute('aria-busy', 'true');
+    }
+  });
+
   it('speaks Turkish', () => {
     setLang('tr');
     render(LoadingView, { progress: prog({ eta_secs: 30 }), version: '', ...handlers() });
