@@ -453,12 +453,18 @@ mod unix {
         s.stop();
         let snap = s.poll(0, true);
         assert_eq!((snap.state, snap.exit_code, snap.signal), (GameState::Stopped, Some(0), None));
-        // One that does not end in time is killed.
+        // One that does not end in time is killed (once running: a game still starting is killed at once).
         s.set_quit_grace(Duration::from_millis(100));
-        let (prog, mut args) = sh("trap '' TERM; exec sleep 30");
+        let (prog, mut args) = sh("echo @ready; trap '' TERM; exec sleep 30");
         args.push("--embed".into());
         s.start(&prog, &args, &[]).unwrap();
+        let t0 = std::time::Instant::now();
+        while s.poll(0, true).state != GameState::Running && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let t0 = std::time::Instant::now();
         s.stop();
+        assert!(t0.elapsed() >= Duration::from_millis(100), "the quit grace was waited out: {:?}", t0.elapsed());
         let snap = s.poll(0, true);
         assert_eq!((snap.state, snap.signal), (GameState::Stopped, Some(9)));
     }
