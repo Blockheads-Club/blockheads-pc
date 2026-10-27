@@ -38,6 +38,7 @@ use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWi
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub const SUPPORTED: bool = true;
+pub const OPT_IN: bool = false;
 
 /// If the page never says it is ready to hand over (`reveal`), the game shows this long after its first frame.
 const REVEAL_FALLBACK: Duration = Duration::from_secs(3);

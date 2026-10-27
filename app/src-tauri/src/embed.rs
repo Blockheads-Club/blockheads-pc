@@ -7,12 +7,15 @@
 //! (`bhpc_launcher::embed::Cmd`). The webview keeps the whole window with the title bar and the control strip; the
 //! widget is an overlay over the part below them, at the height the page reports (`layout`). All GTK work happens on the main thread.
 //!
-//! Windows has its own view (`embed_win.rs`, a child window painted with GDI). Other platforms have none yet:
+//! Windows has its own view (`embed_win.rs`, a child window presenting through D3D11), macOS too (`embed_mac.rs`, an
+//! `NSView` over the webview; opt-in with `BHPC_EMBED=1` until it has been tried on a Mac). Other platforms have none:
 //! `supported()` is false and the launcher starts the game in a window of its own.
 
-/// True when this build can show the game inside the window.
+/// True when this build shows the game inside the window: `BHPC_EMBED=0` turns it off, and a view that is still
+/// opt-in (`imp::OPT_IN`) needs `BHPC_EMBED=1`.
 pub fn supported() -> bool {
-    imp::SUPPORTED && std::env::var("BHPC_EMBED").map_or(true, |v| v != "0")
+    let flag = std::env::var("BHPC_EMBED").ok();
+    imp::SUPPORTED && if imp::OPT_IN { flag.as_deref() == Some("1") } else { flag.as_deref() != Some("0") }
 }
 
 pub use imp::{close, copy_text, focus, layout, open, prepare, reveal, set_fullscreen, Opts};
@@ -92,6 +95,7 @@ mod imp {
     use tauri::{AppHandle, Emitter, WebviewWindow};
 
     pub const SUPPORTED: bool = true;
+    pub const OPT_IN: bool = false;
 
     /// How long the game fades in over the loading screen.
     const FADE: Duration = Duration::from_millis(150);
@@ -759,7 +763,11 @@ mod imp {
 #[path = "embed_win.rs"]
 mod imp;
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+#[path = "embed_mac.rs"]
+mod imp;
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 mod imp {
     use bhpc_input::Trigger;
     use bhpc_launcher::embed::FrameReader;
@@ -767,6 +775,7 @@ mod imp {
     use tauri::{AppHandle, WebviewWindow};
 
     pub const SUPPORTED: bool = false;
+    pub const OPT_IN: bool = false;
 
     pub struct Opts {
         pub frame: FrameReader,

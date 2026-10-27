@@ -124,8 +124,7 @@ AMD driver the compositor and GDK use refuses that modifier, and NVIDIA GL canno
 AMD-allocated or NVIDIA-GBM-allocated `LINEAR` buffer imports as an `EGLImage`, but the framebuffer is incomplete,
 `GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT`, as a texture and as a renderbuffer). So with the game on one GPU and the
 desktop on another, a GPU-to-GPU copy into system memory is needed anyway, which is what the pixel buffer read-back
-is. A dmabuf hand-over would only pay off when both run on the same GPU; it is not implemented. macOS (IOSurface
-into an NSView) is still to do and falls back to a separate window.
+is. A dmabuf hand-over would only pay off when both run on the same GPU; it is not implemented.
 
 How it works on Windows (`app/src-tauri/src/embed_win.rs`):
 
@@ -165,6 +164,23 @@ How it works on Windows (`app/src-tauri/src/embed_win.rs`):
   frame is stretched over the new size), a press on the side or bottom edge resizes the frameless window
   (`WM_NCLBUTTONDOWN`), Ctrl+V / Shift+Insert paste, Alt+F4 closes the launcher. Fullscreen from a maximized window
   restores it first (tao would leave it in the work area, the taskbar showing) and maximizes it again on the way out.
+
+How it works on macOS (`app/src-tauri/src/embed_mac.rs`), **opt-in with `BHPC_EMBED=1`**: written and
+type-checked (`cargo clippy --target aarch64-apple-darwin`), never run on a Mac yet, so without the flag the game
+still opens in a window of its own.
+
+* The runner is the same as on Windows (hidden SDL window, CGL context). macOS GL 4.1 has no `glBufferStorage`, so the
+  read-back is probably the synchronous one; the launcher asks for BGRA, top row first (`layout 0`).
+* The view is an `NSView` subclass (`BlockheadsPcGameView`, flipped, layer-backed) added to the window's content view
+  above the webview, with an autoresizing mask so it follows the window at once.
+* A thread of the launcher reads the newest frame from the mapping, copies it once into a `CGImage` (BGRX,
+  `kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst`) and posts it to the main thread, which sets it as the
+  layer's contents (one post in flight at a time). The same thread posts the 50 ms layout tick (placement, reveal, the
+  size sent 60 ms after it settles, in backing pixels).
+* Input from the view's responder methods: virtual key codes through `bhpc_launcher::embed::hid_from_mac_keycode`,
+  modifiers through `flagsChanged:`, text from `-[NSEvent characters]` (no input method yet), Command shortcuts left to
+  the menu except Command+V (paste). Pointer positions are scaled to the size the runner was last told.
+* Not done: input methods (`NSTextInputClient`), an IOSurface hand-over instead of the copy.
 
 **Resizing the game (all hosts).** A new window size gives the game a new screen mode (`ScreenModeCalls::apply` in
 `play.rs`); the game re-lays its views out, but its key `UIWindow` kept the first screen's frame, and its hit test
@@ -224,7 +240,7 @@ fade when GTK animations are off), takes the mouse and the keyboard focus.
 ## Deviations from the design
 
 - **Playing, "game inside the launcher".** One window on Linux and Windows (see "Playing in the launcher window").
-  On macOS the game still opens in a window of its own (title "Blockheads PC · Playing The Blockheads 1.7.x" and the
+  On macOS (unless `BHPC_EMBED=1`, see there) the game still opens in a window of its own (title "Blockheads PC · Playing The Blockheads 1.7.x" and the
   PC icon) while the launcher shows the Playing screen. The design's tip pill over the stage is not drawn (the stage
   is a native view). The window is square (no rounded corners) while the game view is up.
 - **Fullscreen, vsync, key bindings, window size, sound.** Applied by `bhpc-run` (`--fullscreen`, `--no-vsync`,
