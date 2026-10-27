@@ -172,17 +172,17 @@ pub struct FrameReader {
     cap: u64,
     seen: u64,
     /// The whole file mapped into memory ([`FrameReader::read_with`]), made on first use.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     map: Option<Map>,
     /// Where [`FrameReader::read_with`] copies frames without a mapping.
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     scratch: Vec<u8>,
 }
 
 /// A read-only shared mapping of a frame file.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) struct Map {
-    ptr: *mut libc::c_void,
+    ptr: *mut std::ffi::c_void,
     len: usize,
 }
 
@@ -199,7 +199,60 @@ impl Map {
         }
         Ok(Map { ptr, len })
     }
+}
 
+#[cfg(windows)]
+impl Map {
+    pub(crate) fn new(file: &File, len: u64) -> io::Result<Map> {
+        Map::open(file, len, false)
+    }
+
+    /// A shared mapping the writer copies frames into (`WriteFile` of a whole frame into the temp file took 5 to 11 ms
+    /// per 1080p frame, a `memcpy` about one).
+    pub(crate) fn new_rw(file: &File, len: u64) -> io::Result<Map> {
+        Map::open(file, len, true)
+    }
+
+    fn open(file: &File, len: u64, write: bool) -> io::Result<Map> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, MapViewOfFile, FILE_MAP_READ, FILE_MAP_WRITE, PAGE_READONLY, PAGE_READWRITE,
+        };
+        // SAFETY: a read-only section over an open file and one view of it; the section handle can be closed at once
+        // (the view keeps it alive).
+        unsafe {
+            let section = CreateFileMappingW(
+                file.as_raw_handle(),
+                std::ptr::null(),
+                if write { PAGE_READWRITE } else { PAGE_READONLY },
+                (len >> 32) as u32,
+                len as u32,
+                std::ptr::null(),
+            );
+            if section.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let view = MapViewOfFile(section, if write { FILE_MAP_WRITE } else { FILE_MAP_READ }, 0, 0, len as usize);
+            let err = io::Error::last_os_error();
+            CloseHandle(section);
+            if view.Value.is_null() {
+                return Err(err);
+            }
+            Ok(Map { ptr: view.Value, len: len as usize })
+        }
+    }
+
+    /// Copies `px` to `at` of a writable mapping; the caller checked the range against the file size.
+    fn write(&mut self, at: u64, px: &[u8]) {
+        assert!(at as usize + px.len() <= self.len, "range outside the mapping");
+        // SAFETY: inside a writable mapping owned by `self` (checked above); the reader only reads it.
+        unsafe { std::ptr::copy_nonoverlapping(px.as_ptr(), self.ptr.cast::<u8>().add(at as usize), px.len()) };
+    }
+}
+
+#[cfg(any(unix, windows))]
+impl Map {
     /// `len` bytes at `at`; the caller checked the range against the file size.
     fn bytes(&self, at: u64, len: u64) -> &[u8] {
         let (at, len) = (at as usize, len as usize);
@@ -211,7 +264,7 @@ impl Map {
 }
 
 // SAFETY: the mapping is read-only and owned by one `FrameReader`; any thread may read it.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 unsafe impl Send for Map {}
 
 #[cfg(unix)]
@@ -222,10 +275,24 @@ impl Drop for Map {
     }
 }
 
+#[cfg(windows)]
+impl Drop for Map {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS};
+        // SAFETY: unmaps exactly the view `new` mapped.
+        unsafe { UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: self.ptr }) };
+    }
+}
+
 impl FrameReader {
     /// Creates (or truncates) the frame file at `path`.
     pub fn create(path: &Path) -> io::Result<FrameReader> {
-        let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(path)?;
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true).create(true).truncate(true);
+        // Windows: keep the frames in memory instead of writing them to the disk (FILE_ATTRIBUTE_TEMPORARY).
+        #[cfg(windows)]
+        std::os::windows::fs::OpenOptionsExt::attributes(&mut opts, 0x100);
+        let file = opts.open(path)?;
         file.set_len(HEADER + SLOTS * MAX_FRAME_BYTES)?;
         let mut h = [0u8; HEADER as usize];
         h[0..4].copy_from_slice(&MAGIC.to_le_bytes());
@@ -237,9 +304,9 @@ impl FrameReader {
             path: path.to_path_buf(),
             cap: MAX_FRAME_BYTES,
             seen: 0,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             map: None,
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             scratch: Vec::new(),
         })
     }
@@ -269,14 +336,14 @@ impl FrameReader {
 
     fn read_with_dyn(&mut self, use_pixels: &mut dyn FnMut(FrameInfo, &[u8])) -> io::Result<Option<FrameInfo>> {
         let Some((info, at, len)) = self.newest()? else { return Ok(None) };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             if self.map.is_none() {
                 self.map = Some(Map::new(&self.file, HEADER + SLOTS * self.cap)?);
             }
             use_pixels(info, self.map.as_ref().expect("mapped above").bytes(at, len));
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let mut buf = std::mem::take(&mut self.scratch);
             buf.resize(len as usize, 0);
@@ -322,6 +389,10 @@ pub struct FrameWriter {
     file: File,
     cap: u64,
     seq: u64,
+    /// Windows: the pixels go through a mapping of the file (the header still through `WriteFile`, after them: both
+    /// see the same cached pages).
+    #[cfg(windows)]
+    map: Option<Map>,
 }
 
 impl FrameWriter {
@@ -329,7 +400,15 @@ impl FrameWriter {
     pub fn open(path: &Path) -> io::Result<FrameWriter> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let h = read_header(&file)?;
-        Ok(FrameWriter { file, cap: h.cap, seq: h.seq })
+        #[cfg(windows)]
+        let map = Map::new_rw(&file, HEADER + SLOTS * h.cap).ok();
+        Ok(FrameWriter {
+            file,
+            cap: h.cap,
+            seq: h.seq,
+            #[cfg(windows)]
+            map,
+        })
     }
 
     /// Publishes a `width` x `height` frame of BGRA pixels. `Ok(false)` when it does not fit the file.
@@ -345,6 +424,12 @@ impl FrameWriter {
         }
         let next = self.seq + 1;
         let slot = next % SLOTS;
+        #[cfg(windows)]
+        match self.map.as_mut() {
+            Some(m) => m.write(slot_offset(slot, self.cap), pixels),
+            None => write_at(&self.file, pixels, slot_offset(slot, self.cap))?,
+        }
+        #[cfg(not(windows))]
         write_at(&self.file, pixels, slot_offset(slot, self.cap))?;
         let mut h = [0u8; 16];
         h[0..4].copy_from_slice(&width.to_le_bytes());

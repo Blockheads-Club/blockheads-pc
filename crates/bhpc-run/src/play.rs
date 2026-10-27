@@ -48,6 +48,9 @@ pub struct PlayConfig {
     /// Size of the window's drawable in pixels (differs from `window` on high-DPI displays); `(0, 0)` until `play`
     /// has asked the window.
     pub drawable: (u32, u32),
+    /// Refresh rate (Hz) of the window's display, set by `play` when SDL knows it: the in-window mode sends about one
+    /// frame per refresh.
+    pub refresh: Option<u32>,
     /// Write the frame (PNG) here when swap number `shot_at` happens; the first frame goes to `<stem>-first.png`.
     pub shot: Option<PathBuf>,
     pub shot_at: u64,
@@ -123,6 +126,7 @@ impl PlayConfig {
             init,
             window: (1024, 768),
             drawable: (0, 0),
+            refresh: None,
             shot: None,
             shot_at: 120,
             exit_after_shot: false,
@@ -296,11 +300,13 @@ struct Hooks {
 struct EmbedOut {
     /// Shared with the read-back thread.
     out: Arc<Mutex<FrameOut>>,
-    last: Option<Instant>,
+    /// About one frame per display refresh goes to the launcher.
+    pacer: crate::embed::FramePacer,
+    /// Frames of the old layout right after a size change stay back.
+    gate: crate::embed::TransitionGate,
     /// Read-back buffer of the synchronous path, reused.
     rgba: Vec<u8>,
     /// The asynchronous read-back (`None`: off, or the driver cannot), and where its frames go.
-    #[cfg(unix)]
     readback: Option<(bhpc_app::readback::Readback, bhpc_app::readback::Sink)>,
 }
 
@@ -349,9 +355,6 @@ const MIN_FIRST_EDGE: u32 = 64;
 /// How long the runner waits for the launcher to say how big its view is.
 const FIRST_SIZE_WAIT: Duration = Duration::from_secs(5);
 
-/// At most this many frames per second go to the launcher.
-const EMBED_FRAME_GAP: Duration = Duration::from_millis(15);
-
 type ReadPixels = unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void);
 type GetIntegerv = unsafe extern "C" fn(u32, *mut i32);
 
@@ -399,18 +402,17 @@ impl Hooks {
     fn publish_frame(&self) {
         let Some(embed) = &self.embed else { return };
         let mut e = embed.lock().unwrap_or_else(PoisonError::into_inner);
-        if e.last.is_some_and(|t| t.elapsed() < EMBED_FRAME_GAP) {
+        let now = Instant::now();
+        if e.gate.hold(self.window.drawable_size(), self.window.surface_size(), now) || !e.pacer.take(now) {
             return;
         }
         let began = Instant::now();
         let layout = if self.flags.gl_layout.load(Ordering::SeqCst) { Layout::GlRgba } else { Layout::Bgra };
         let e = &mut *e;
-        #[cfg(unix)]
         if let Some((rb, sink)) = e.readback.as_mut() {
             use bhpc_app::readback::Started;
             match self.sdl.compose_read_async(rb, sink) {
                 Some(Started::Queued) => {
-                    e.last = Some(Instant::now());
                     *RENDER_TIME.lock().unwrap_or_else(PoisonError::into_inner) += began.elapsed();
                     return;
                 }
@@ -419,7 +421,6 @@ impl Hooks {
             }
         }
         let Some((w, h)) = self.sdl.compose_read(&mut e.rgba) else { return };
-        e.last = Some(Instant::now());
         *RENDER_TIME.lock().unwrap_or_else(PoisonError::into_inner) += began.elapsed();
         let mut out = e.out.lock().unwrap_or_else(PoisonError::into_inner);
         out.publish(w, h, &e.rgba, layout, "synchronous read-back", &RENDER_TIME);
@@ -655,6 +656,12 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
     // What the window system really gave us is what the game sees (a compositor may ignore the requested size).
     let mut cfg = cfg.clone();
     (cfg.window, cfg.drawable) = (m0.logical, m0.drawable);
+    cfg.refresh = backend.refresh_rate();
+    if cfg.embed.is_some() {
+        let cap = crate::embed::embedded_fps_limit(cfg.fps_limit, cfg.refresh);
+        eprintln!("[play] in the launcher window: at most {cap} frames per second (the display's rate)");
+        cfg.fps_limit = Some(cap);
+    }
     // The game takes its UI scale from the first screen size: starting fullscreen, that is the desktop's size (the
     // window only becomes fullscreen once the event loop runs).
     if cfg.fullscreen && cfg.embed.is_none() {
@@ -929,7 +936,6 @@ fn boot(
             let out =
                 Arc::new(Mutex::new(FrameOut { writer, bgra: Vec::new(), stats: (0, Duration::ZERO, Instant::now()) }));
             Some(EmbedOut {
-                #[cfg(unix)]
                 readback: crate::embed::async_readback(std::env::var("BHPC_EMBED_ASYNC").ok().as_deref()).then(|| {
                     let (out, flags) = (out.clone(), flags.clone());
                     let sink: bhpc_app::readback::Sink = Arc::new(move |w, h, px: &[u8]| {
@@ -940,7 +946,8 @@ fn boot(
                     (bhpc_app::readback::Readback::new(), sink)
                 }),
                 out,
-                last: None,
+                pacer: crate::embed::FramePacer::new(cfg.refresh),
+                gate: crate::embed::TransitionGate::default(),
                 rgba: Vec::new(),
             })
         }

@@ -338,7 +338,6 @@ impl VirtualSurface {
         })
     }
 
-    #[cfg(unix)]
     /// Like [`VirtualSurface::compose_read`], but the pixels go through the asynchronous read-back of
     /// [`crate::readback`]: they reach `sink` on a thread of its own once the GPU has copied them, and the caller
     /// does not wait for that. `None` when there is nothing to compose yet; otherwise what `readback` said.

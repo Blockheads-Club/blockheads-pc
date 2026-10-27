@@ -294,6 +294,12 @@ impl SdlBackend {
         (mode.w > 0 && mode.h > 0).then_some((mode.w as u32, mode.h as u32))
     }
 
+    /// Refresh rate (Hz) of the window's display, when SDL knows it.
+    pub fn refresh_rate(&self) -> Option<u32> {
+        let mode = self.video.desktop_display_mode(self.window.display_index().ok()?).ok()?;
+        u32::try_from(mode.refresh_rate).ok().filter(|&r| r > 0)
+    }
+
     /// Name of the active video driver (for logs).
     pub fn driver(&self) -> &'static str {
         self.video.current_video_driver()
@@ -388,7 +394,6 @@ impl SdlGl {
 
     /// Like [`SdlGl::compose_read`], but asynchronous (see [`crate::readback`]): the frame reaches `sink` later, on
     /// the read-back thread. `None` when there is nothing to compose (or no context current).
-    #[cfg(unix)]
     pub fn compose_read_async(
         &self,
         readback: &mut crate::readback::Readback,

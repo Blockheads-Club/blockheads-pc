@@ -196,6 +196,85 @@ pub fn frame_pixels<'a>(layout: Layout, width: u32, height: u32, rgba: &'a [u8],
     }
 }
 
+/// The frame-rate cap of the in-window game: the display's refresh rate (60 Hz when unknown), or the player's own cap
+/// when it is lower. The launcher shows at most one frame per refresh; the game drawing 200 frames a second in its
+/// hidden window (vsync does not hold it back there) only took the GPU from the launcher's own page.
+pub fn embedded_fps_limit(player: Option<u32>, refresh: Option<u32>) -> u32 {
+    let display = refresh.filter(|r| (24..=500).contains(r)).unwrap_or(60);
+    player.filter(|&l| l > 0).map_or(display, |l| l.min(display))
+}
+
+/// Holds back the frames the game draws right after the window changed size while it still lays out for the old
+/// one: its surface keeps the old aspect for a few frames (letterboxed, black bars, the picture jumping). The launcher
+/// shows its last frame stretched meanwhile. Never longer than [`TRANSITION_HOLD`] (some screens only lay out again
+/// on the next touch).
+#[derive(Debug, Clone, Default)]
+pub struct TransitionGate {
+    drawable: (u32, u32),
+    since: Option<std::time::Instant>,
+}
+
+/// The longest a frame of the old layout is held back after a size change.
+pub const TRANSITION_HOLD: std::time::Duration = std::time::Duration::from_millis(500);
+
+impl TransitionGate {
+    /// Whether the frame with the game's `surface` in a window of `drawable` pixels, finished at `now`, is held back.
+    pub fn hold(&mut self, drawable: (u32, u32), surface: (u32, u32), now: std::time::Instant) -> bool {
+        if drawable != self.drawable {
+            // The first size is not a change.
+            self.since = (self.drawable != (0, 0)).then_some(now);
+            self.drawable = drawable;
+        }
+        let Some(since) = self.since else { return false };
+        if now.duration_since(since) >= TRANSITION_HOLD {
+            self.since = None;
+            return false;
+        }
+        let aspect = |(w, h): (u32, u32)| f64::from(w.max(1)) / f64::from(h.max(1));
+        let off = (aspect(surface) / aspect(drawable) - 1.0).abs() > 0.02;
+        if !off {
+            self.since = None;
+        }
+        off
+    }
+}
+
+/// Which of the game's frames go to the launcher: about one per refresh of the display. A fixed minimum gap did not
+/// do: a game drawing 80 frames a second (12.5 ms apart) with a 15 ms gap sent every other one, 40 a second, unevenly.
+/// This keeps a due time that advances by one display period per frame sent, so 80 frames become about 60.
+#[derive(Debug, Clone)]
+pub struct FramePacer {
+    period: std::time::Duration,
+    due: Option<std::time::Instant>,
+}
+
+/// How early a frame may come and still count for its display period (frame times jitter).
+const PACE_SLACK: std::time::Duration = std::time::Duration::from_millis(2);
+
+impl FramePacer {
+    /// For a display refreshing `hz` times a second (60 when unknown or implausible).
+    pub fn new(hz: Option<u32>) -> FramePacer {
+        let hz = hz.filter(|h| (24..=500).contains(h)).unwrap_or(60);
+        FramePacer { period: std::time::Duration::from_secs(1) / hz, due: None }
+    }
+
+    /// Whether the frame finished at `now` goes to the launcher.
+    pub fn take(&mut self, now: std::time::Instant) -> bool {
+        match self.due {
+            Some(due) if now + PACE_SLACK < due => false,
+            Some(due) => {
+                // A game that stalled does not get a burst of frames to catch up.
+                self.due = Some(if due + self.period < now { now + self.period } else { due + self.period });
+                true
+            }
+            None => {
+                self.due = Some(now + self.period);
+                true
+            }
+        }
+    }
+}
+
 /// Whether frames go through the asynchronous read-back (`BHPC_EMBED_ASYNC`, on unless `0`).
 pub fn async_readback(env: Option<&str>) -> bool {
     env != Some("0")

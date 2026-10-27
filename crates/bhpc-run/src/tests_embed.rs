@@ -192,3 +192,67 @@ fn the_asynchronous_read_back_has_an_off_switch() {
     assert!(async_readback(Some("1")));
     assert!(!async_readback(Some("0")));
 }
+
+#[test]
+fn frame_pacer_sends_about_one_frame_per_display_period() {
+    use crate::embed::FramePacer;
+    use std::time::{Duration, Instant};
+    let t0 = Instant::now();
+    let ms = |m: f64| t0 + Duration::from_secs_f64(m / 1000.0);
+    // 80 frames a second on a 60 Hz display: about 60 go out, not every other one.
+    let mut p = FramePacer::new(Some(60));
+    let sent = (0..80).filter(|&i| p.take(ms(f64::from(i) * 12.5))).count();
+    assert!((58..=62).contains(&sent), "{sent} of 80");
+    // A slower game sends all of its frames.
+    let mut p = FramePacer::new(Some(60));
+    assert_eq!((0..30).filter(|&i| p.take(ms(f64::from(i) * 33.3))).count(), 30);
+    // After a stall the next frame goes, then the pace is back (no burst).
+    let mut p = FramePacer::new(Some(60));
+    assert!(p.take(ms(0.0)));
+    assert!(p.take(ms(500.0)));
+    assert!(!p.take(ms(505.0)));
+    assert!(p.take(ms(517.0)));
+    // Unknown or implausible rates mean 60 Hz.
+    for hz in [None, Some(0), Some(10_000)] {
+        let mut p = FramePacer::new(hz);
+        assert!(p.take(ms(0.0)));
+        assert!(!p.take(ms(10.0)), "{hz:?}");
+        assert!(p.take(ms(15.0)), "{hz:?}");
+    }
+    // A 144 Hz display takes frames 7 ms apart.
+    let mut p = FramePacer::new(Some(144));
+    assert!(p.take(ms(0.0)));
+    assert!(p.take(ms(7.0)));
+}
+
+#[test]
+fn transition_gate_holds_frames_of_the_old_layout_for_a_while() {
+    use crate::embed::{TransitionGate, TRANSITION_HOLD};
+    use std::time::{Duration, Instant};
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let mut g = TransitionGate::default();
+    // The first size is not a change, whatever the surface.
+    assert!(!g.hold((1100, 676), (1100, 676), at(0)));
+    assert!(!g.hold((1100, 676), (800, 676), at(5)));
+    // Wider window, the game still on the old aspect: held; once it matches, frames flow and stay flowing.
+    assert!(g.hold((1920, 948), (1100, 676), at(10)));
+    assert!(g.hold((1920, 948), (1100, 676), at(100)));
+    assert!(!g.hold((1920, 948), (1369, 676), at(150)));
+    assert!(!g.hold((1920, 948), (1100, 676), at(160)));
+    // A screen that keeps the old aspect is shown again after the hold.
+    assert!(g.hold((1200, 676), (1369, 676), at(200)));
+    assert!(!g.hold((1200, 676), (1369, 676), at(200) + TRANSITION_HOLD));
+    assert!(!g.hold((1200, 676), (1369, 676), at(900)));
+}
+
+#[test]
+fn the_in_window_game_is_capped_at_the_display_rate() {
+    use crate::embed::embedded_fps_limit;
+    assert_eq!(embedded_fps_limit(None, Some(144)), 144);
+    assert_eq!(embedded_fps_limit(Some(0), Some(120)), 120);
+    assert_eq!(embedded_fps_limit(Some(30), Some(120)), 30);
+    assert_eq!(embedded_fps_limit(Some(240), Some(120)), 120);
+    assert_eq!(embedded_fps_limit(None, None), 60);
+    assert_eq!(embedded_fps_limit(None, Some(1)), 60);
+}
