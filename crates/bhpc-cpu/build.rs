@@ -111,6 +111,10 @@ fn cmake_build(dynarmic: &Path, shim: &Path, manifest: &Path, defines: &[(String
     let mut cfg = cmake::Config::new(manifest.join("cmake"));
     cfg.define("BHPC_DYNARMIC_DIR", dynarmic)
         .define("BHPC_SHIM_DIR", shim)
+        // `profile` too, not only CMAKE_BUILD_TYPE: multi-config generators (Visual Studio) take the configuration
+        // from `--config`, which the cmake crate otherwise derives from the cargo environment (a Debug dynarmic made
+        // the game start four times slower on Windows).
+        .profile("Release")
         .define("CMAKE_BUILD_TYPE", "Release")
         .build_target("bhpc_shim");
     for (k, v) in defines {

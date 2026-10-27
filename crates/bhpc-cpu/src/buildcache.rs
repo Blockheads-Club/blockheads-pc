@@ -15,7 +15,7 @@ use std::process::Command;
 use crate::buildcfg::is_static_lib;
 
 /// Bumped when the layout of an entry or the meaning of the key changes.
-pub const SCHEMA: &str = "bhpc-dynarmic-cache-v1";
+pub const SCHEMA: &str = "bhpc-dynarmic-cache-v2";
 
 /// Written last into an entry: only entries that have it are used.
 pub const COMPLETE: &str = ".complete";
@@ -53,15 +53,23 @@ pub fn hash_tree(h: &mut Fnv, root: &Path) -> io::Result<()> {
     files.sort();
     for rel in files {
         h.field(rel.as_bytes());
-        h.field(&std::fs::read(root.join(&rel))?);
+        let p = root.join(&rel);
+        // A symlink counts by its target, like git stores it: never followed (Git for Windows can check a directory
+        // link out as a file symlink, and reading that fails with "Access is denied").
+        if std::fs::symlink_metadata(&p)?.file_type().is_symlink() {
+            h.field(std::fs::read_link(&p)?.to_string_lossy().replace('\\', "/").as_bytes());
+        } else {
+            h.field(&std::fs::read(&p)?);
+        }
     }
     Ok(())
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> io::Result<()> {
     for e in std::fs::read_dir(dir)? {
-        let p = e?.path();
-        if p.is_dir() {
+        let e = e?;
+        let p = e.path();
+        if e.file_type()?.is_dir() {
             collect_files(root, &p, out)?;
         } else {
             out.push(p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/"));
@@ -185,6 +193,29 @@ mod tests {
         std::fs::rename(d.join("sub/b.txt"), d.join("sub/c.txt")).unwrap();
         assert_ne!(hash(), changed);
         assert!(hash_tree(&mut Fnv::new(), &d.join("missing")).is_err());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tree_hash_takes_symlinks_by_target() {
+        let d = scratch("links");
+        std::fs::create_dir_all(d.join("deps")).unwrap();
+        std::fs::write(d.join("deps/x.txt"), "x").unwrap();
+        std::os::unix::fs::symlink("deps", d.join("sub")).unwrap();
+        let hash = || {
+            let mut h = Fnv::new();
+            hash_tree(&mut h, &d).unwrap();
+            h
+        };
+        let first = hash();
+        // The link is not followed: changing what it points into only counts once (under deps/).
+        std::fs::write(d.join("deps/x.txt"), "y").unwrap();
+        let changed = hash();
+        assert_ne!(changed, first);
+        std::fs::remove_file(d.join("sub")).unwrap();
+        std::os::unix::fs::symlink("elsewhere", d.join("sub")).unwrap();
+        assert_ne!(hash(), changed);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

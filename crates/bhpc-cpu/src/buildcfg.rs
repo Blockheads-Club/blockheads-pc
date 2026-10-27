@@ -64,6 +64,12 @@ pub fn cmake_defines(t: &Target, boost_root: Option<&str>) -> Vec<(String, Strin
     if t.is_msvc() {
         // Rust always links the dynamic CRT (/MD), even in debug builds; mixing /MT or /MDd breaks linking.
         d.push(("CMAKE_MSVC_RUNTIME_LIBRARY".into(), "MultiThreadedDLL".into()));
+        // With the Visual Studio generator the cmake crate replaces the Release flags by its own, which carry no
+        // optimisation: dynarmic was built with MSVC's default /Od and the game started four times slower. Give the
+        // flags CMake's Release would (plus what the crate passes: /MD for the CRT, quiet, reproducible).
+        for lang in ["C", "CXX"] {
+            d.push((format!("CMAKE_{lang}_FLAGS_RELEASE"), "-nologo -MD -Brepro -W0 /O2 /Ob2 /DNDEBUG".into()));
+        }
     }
     if t.is_apple() {
         let min = if t.arch == "aarch64" { "11.0" } else { "10.15" };
@@ -123,6 +129,8 @@ mod tests {
         assert!(cmake_defines(&LINUX, None).is_empty());
         let w = cmake_defines(&WIN, Some("C:/boost"));
         assert!(w.contains(&("CMAKE_MSVC_RUNTIME_LIBRARY".into(), "MultiThreadedDLL".into())));
+        assert!(w.iter().any(|(k, v)| k == "CMAKE_CXX_FLAGS_RELEASE" && v.contains("/O2") && v.contains("-MD")));
+        assert!(w.iter().any(|(k, v)| k == "CMAKE_C_FLAGS_RELEASE" && v.contains("/O2")));
         assert!(w.contains(&("BOOST_ROOT".into(), "C:/boost".into())));
         assert!(w.contains(&("Boost_INCLUDE_DIR".into(), "C:/boost/include".into())));
         let a = cmake_defines(&MAC_ARM, None);
