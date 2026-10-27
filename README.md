@@ -18,7 +18,7 @@
 ---
 
 ## 🚀 Project Status
-**Current Status:** Alpha (v0.3.0 pre-release). The game starts, you can create and load worlds, play with mouse,
+**Current Status:** Alpha (v0.4.0 pre-release). The game starts, you can create and load worlds, play with mouse,
 keyboard or a controller, hear the sound and join online servers. Expect rough edges and
 [report what you find](https://github.com/Blockheads-Club/blockheads-pc/issues).
 

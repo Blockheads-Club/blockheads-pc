@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bhpc-cpu",
  "bhpc-gles",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-audio"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bhpc-cpu",
  "bhpc-mem",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-bionic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bhpc-cpu",
  "bhpc-loader",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-cpu"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bhpc-mem",
  "cmake",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-gles"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bhpc-cpu",
  "bhpc-loader",
@@ -199,11 +199,11 @@ dependencies = [
 
 [[package]]
 name = "bhpc-input"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "bhpc-jni"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ab_glyph",
  "bhpc-bionic",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-launcher"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bhmod-manifest",
  "bhpc-input",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-loader"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bhpc-mem",
  "miniz_oxide 0.8.9",
@@ -246,14 +246,14 @@ dependencies = [
 
 [[package]]
 name = "bhpc-mem"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bhpc-mods"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ab_glyph",
  "bhmod-client",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-run"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bhmod-client",
  "bhmod-content",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-vfs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dirs",
  "getrandom 0.3.4",
