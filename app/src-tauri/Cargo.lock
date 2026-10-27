@@ -270,6 +270,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.8.2",
+ "windows-sys 0.61.2",
  "zip 2.6.1",
 ]
 
@@ -363,6 +364,8 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-updater",
  "ureq",
+ "windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

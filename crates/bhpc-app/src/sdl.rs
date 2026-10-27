@@ -187,6 +187,9 @@ impl SdlBackend {
             if cfg.high_dpi {
                 b.allow_highdpi();
             }
+            if cfg.hidden {
+                b.hidden();
+            }
             let window = match b.build() {
                 Ok(w) => w,
                 Err(e) => {

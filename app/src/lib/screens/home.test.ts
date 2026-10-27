@@ -233,6 +233,9 @@ describe('Playing inside the window', () => {
     store.fullscreen = true;
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop game' })).toBeNull());
     store.fullscreen = false;
+    // Focus on the stage goes to the native view (it is the game's keyboard).
+    screen.getByRole('main').focus();
+    await waitFor(() => expect(mock.api.embedFocus).toHaveBeenCalled());
     unmount();
     expect(top().at(-1)).toBe(-1);
   });
@@ -250,6 +253,11 @@ describe('Playing inside the window', () => {
     const { unmount } = render(Playing);
     await waitFor(() => expect(mock.api.embedLayout).toHaveBeenCalled());
     await waitFor(() => expect(mock.api.embedReveal).toHaveBeenCalled());
+    mock.api.embedFocus = vi.fn(async () => {
+      throw new Error('no view');
+    });
+    screen.getByRole('main').focus();
+    await waitFor(() => expect(mock.api.embedFocus).toHaveBeenCalled());
     unmount();
     expect(mock.api.embedLayout).toHaveBeenCalledTimes(2);
   });

@@ -576,6 +576,35 @@ fn unescape(s: &str) -> Option<String> {
     Some(out)
 }
 
+/// USB HID usage id of a PC keyboard scan code (set 1) as Windows reports it (`WM_KEYDOWN` lParam bits 16-23, with the
+/// extended-key flag, bit 24, for the `E0`-prefixed keys). Linux evdev codes are set 1 for the main block, so this
+/// only moves the extended keys to their evdev codes. `None` for keys the game has no use for.
+pub fn hid_from_scancode(code: u32, extended: bool) -> Option<u32> {
+    const EXTENDED: [(u32, u32); 17] = [
+        (0x1c, 96),
+        (0x1d, 97),
+        (0x35, 98),
+        (0x38, 100),
+        (0x47, 102),
+        (0x48, 103),
+        (0x49, 104),
+        (0x4b, 105),
+        (0x4d, 106),
+        (0x4f, 107),
+        (0x50, 108),
+        (0x51, 109),
+        (0x52, 110),
+        (0x53, 111),
+        (0x5b, 125),
+        (0x5c, 126),
+        (0x5d, 127),
+    ];
+    if !extended {
+        return hid_from_evdev(code);
+    }
+    EXTENDED.iter().find(|&&(sc, _)| sc == code).and_then(|&(_, evdev)| hid_from_evdev(evdev))
+}
+
 /// USB HID usage id of a Linux evdev key code (GDK's hardware keycode minus 8 on X11 and Wayland); the physical
 /// key, like an SDL scancode. `None` for keys the game has no use for.
 pub fn hid_from_evdev(code: u32) -> Option<u32> {

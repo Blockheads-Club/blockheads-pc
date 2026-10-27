@@ -99,7 +99,8 @@
     {/if}
   </nav>
   {/if}
-  <main class="view" id="main" tabindex="-1" aria-label={t('play.view')} bind:this={view}>
+  <!-- The native game view covers the stage: the keyboard focus the stage gets (after the loading screen) is the game's. -->
+  <main class="view" id="main" tabindex="-1" aria-label={t('play.view')} bind:this={view} onfocus={() => embedded && api.embedFocus().catch(() => {})}>
     {#if !embedded}
     <div class="game">
       <p class="t">{t('play.title')}</p>

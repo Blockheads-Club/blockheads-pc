@@ -42,6 +42,9 @@ pub struct WindowConfig {
     pub high_dpi: bool,
     /// Open game controllers and report their input.
     pub controllers: bool,
+    /// Keep the window hidden: it only provides the GL context (the launcher shows the frames, `--embed`, on hosts
+    /// where SDL's offscreen driver has no GL).
+    pub hidden: bool,
 }
 
 impl Default for WindowConfig {
@@ -52,6 +55,7 @@ impl Default for WindowConfig {
             resizable: true,
             high_dpi: true,
             controllers: true,
+            hidden: false,
         }
     }
 }

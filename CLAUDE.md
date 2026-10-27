@@ -186,6 +186,17 @@ Umbrella rules: `../AGENTS.md`.
 - No OpenGL ES on the host (macOS, some Windows drivers): `bhpc-app/src/sdl.rs` falls back to a desktop
   compatibility context and `bhpc_gles::glsl::to_desktop` translates the shaders. `BHPC_GL=desktop` forces that path
   on Linux too (the headless smoke run passes with it).
+- dynarmic on MSVC: the cmake crate replaces `CMAKE_<LANG>_FLAGS_RELEASE` (Visual Studio generator) with flags that
+  have no `/O2`, so `buildcfg::cmake_defines` sets them itself; without that the JIT translator ran at /Od and the game
+  started ~5x slower. Check `CMakeCache.txt` (`CMAKE_CXX_FLAGS_RELEASE`) or look for `fmtd.lib` in the dynarmic cache.
+- In-window game on Windows (`app/src-tauri/src/embed_win.rs`, details in `docs/launcher.md`): the runner renders into
+  a hidden SDL window (the offscreen driver needs EGL); the launcher's child window presents through D3D11/DXGI from a
+  render thread of its own. GDI paints under WebView2's DirectComposition content (black stage), layered child windows
+  fail to create, and a `WM_TIMER` frame pump stalls while the mouse moves. Tauri hands the keyboard to the webview on
+  every activation, and tao's fullscreen of a maximized window keeps the work area: both are handled there.
+- Game windows that grow: the key `UIWindow` must be resized with the screen mode (`ScreenModeCalls::apply`), or its hit
+  test drops touches in the new part. Selectors for `objc_msgSend` come from `sel_registerName` (`objchook::Runtime`),
+  not from method lists (`unrecognized selector`).
 - Tests must not assume Linux paths or layouts: `/proc`, `/bin/sh` (Git's `sh` is on the Windows runners' PATH),
   `file:///C:/...` URLs, host pointers above the guest window, `\` separators in displayed paths.
 

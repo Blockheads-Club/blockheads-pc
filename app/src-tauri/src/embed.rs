@@ -1,4 +1,4 @@
-//! The game inside the launcher window (Linux): a GTK drawing area laid over the webview (a `GtkOverlay` in the window's box).
+//! The game inside the launcher window (Linux; Windows in `embed_win.rs`): a GTK drawing area laid over the webview (a `GtkOverlay` in the window's box).
 //!
 //! The game runs as `bhpc-run --embed FILE` (crash isolation, see `docs/launcher.md`, "Playing in the launcher
 //! window"). It renders offscreen and publishes frames into a frame file; the newest one is shown once per display
@@ -7,14 +7,15 @@
 //! (`bhpc_launcher::embed::Cmd`). The webview keeps the whole window with the title bar and the control strip; the
 //! widget is an overlay over the part below them, at the height the page reports (`layout`). All GTK work happens on the main thread.
 //!
-//! Other platforms have no view yet: `supported()` is false and the launcher starts the game in a window of its own.
+//! Windows has its own view (`embed_win.rs`, a child window painted with GDI). Other platforms have none yet:
+//! `supported()` is false and the launcher starts the game in a window of its own.
 
 /// True when this build can show the game inside the window.
 pub fn supported() -> bool {
     imp::SUPPORTED && std::env::var("BHPC_EMBED").map_or(true, |v| v != "0")
 }
 
-pub use imp::{close, copy_text, layout, open, prepare, reveal, set_fullscreen, Opts};
+pub use imp::{close, copy_text, focus, layout, open, prepare, reveal, set_fullscreen, Opts};
 
 /// How close (logical pixels) to the window's side or bottom edge a press on the game view resizes the window.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -680,6 +681,17 @@ mod imp {
         })
     }
 
+    /// The page's stage took the keyboard focus: give it to the game view once the game shows.
+    pub fn focus(win: &WebviewWindow) -> Result<(), String> {
+        on_main(win, move |_| {
+            VIEW.with(|v| {
+                if let Some(v) = v.borrow().as_ref().filter(|v| v.paint.borrow().first.is_some()) {
+                    v.area.grab_focus();
+                }
+            });
+        })
+    }
+
     /// The page's loading screen has shown 100 %: the game may fade in over it.
     pub fn reveal(win: &WebviewWindow) -> Result<(), String> {
         on_main(win, move |_| {
@@ -743,7 +755,11 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+#[path = "embed_win.rs"]
+mod imp;
+
+#[cfg(not(any(target_os = "linux", windows)))]
 mod imp {
     use bhpc_input::Trigger;
     use bhpc_launcher::embed::FrameReader;
@@ -769,6 +785,9 @@ mod imp {
         Ok(())
     }
     pub fn reveal(_: &WebviewWindow) -> Result<(), String> {
+        Ok(())
+    }
+    pub fn focus(_: &WebviewWindow) -> Result<(), String> {
         Ok(())
     }
     pub fn prepare(_: &WebviewWindow) -> Result<(), String> {

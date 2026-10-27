@@ -62,8 +62,8 @@ the sidecar and icons only: no APK, game libraries or assets. Product name "Bloc
 `app/static/third-party-notices.txt` (shown under Settings > Updates & about).
 
 macOS: the sidecar needs the JIT entitlements (`app/src-tauri/entitlements.plist`); signing and notarisation are not
-configured. Windows: the game always runs in a window of its own (the in-window view is GTK, Linux only); the
-Playing screen says so ("The game runs in its own window").
+configured, and the game still runs in a window of its own there (no in-window view on macOS yet); the Playing
+screen says so ("The game runs in its own window").
 
 ## Playing in the launcher window
 
@@ -124,9 +124,53 @@ AMD driver the compositor and GDK use refuses that modifier, and NVIDIA GL canno
 AMD-allocated or NVIDIA-GBM-allocated `LINEAR` buffer imports as an `EGLImage`, but the framebuffer is incomplete,
 `GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT`, as a texture and as a renderbuffer). So with the game on one GPU and the
 desktop on another, a GPU-to-GPU copy into system memory is needed anyway, which is what the pixel buffer read-back
-is. A dmabuf hand-over would only pay off when both run on the same GPU; it is not implemented. Windows (shared
-D3D/GL handle into a child HWND) and macOS (IOSurface into an NSView) are still to do; both fall back to a separate
-window now.
+is. A dmabuf hand-over would only pay off when both run on the same GPU; it is not implemented. macOS (IOSurface
+into an NSView) is still to do and falls back to a separate window.
+
+How it works on Windows (`app/src-tauri/src/embed_win.rs`):
+
+* SDL's offscreen driver needs EGL, which Windows and macOS lack: there the runner renders into a **hidden** SDL window
+  (WGL / CGL context, `WindowConfig::hidden`) and publishes frames into the same frame file.
+* The asynchronous read-back works there too: where EGL has no native fence the fence is a GL sync object
+  (`glFenceSync`), which the render thread checks without waiting (`glClientWaitSync`, timeout 0) each time it starts a
+  frame, passing finished copies to the `gl-readback` thread. The launcher asks for the read-back layout (`layout 1`),
+  so the runner converts nothing.
+* The frame file is created with `FILE_ATTRIBUTE_TEMPORARY` and both ends map it (`MapViewOfFile`): the runner copies
+  each frame into the mapping (a `WriteFile` of a 1080p frame took 5 to 11 ms, the copy about 1), the launcher uploads
+  straight from its mapping.
+* Which frames go out is `bhpc_run::embed::FramePacer`: about one per refresh of the display (SDL's refresh rate,
+  60 Hz when unknown). The old fixed 15 ms gap sent every other frame of an 80 fps game (40 a second, uneven).
+* The launcher lays a child window over the webview's stage. A render thread of its own waits for each new frame
+  (a 1 ms high-resolution waitable timer), uploads it into a texture and draws it through a **D3D11 flip-model swap
+  chain** of the window's size (a shader flips the rows; the texture format does the channel order). Not GDI: WebView2
+  draws through DirectComposition, which covers whatever GDI paints into a sibling child window whatever the z-order
+  (the game showed black); layered child windows fail to create without a Windows 8 manifest entry. Not a `WM_TIMER`
+  on the UI thread either: it only comes when no input is queued, so the picture stalled while the mouse moved.
+* While the game shows the window is opaque (blur-behind off, the chrome's colour behind the webview; back to
+  see-through for the rounded corners when it ends). WebView2 leaves a frame or two empty on maximize / restore (and
+  once, about a second after the first maximize, one more), and the see-through window showed the desktop there.
+  Recorded with Windows.Graphics.Capture (every composed frame): the empty frames remain, dark instead of the
+  desktop; they are WebView2's own (not the game view's, not the runner's resize, not occlusion tracking).
+* While the game shows, the window's maximize / restore animations are off (`DWMWA_TRANSITIONS_FORCEDISABLED`): DWM
+  animated the webview's DirectComposition content and the swap chain apart, so the title bar and the strip vanished
+  and came back over the game's picture.
+* While the user drags the window's edge (`WM_ENTERSIZEMOVE` .. `WM_EXITSIZEMOVE`) the swap chain keeps its size
+  (DXGI stretches it), pictures come at most 33 ms apart and the runner hears the size when the drag ends: resizing
+  the swap chain and presenting 120 times a second meanwhile made the title bar lag the edge (buttons cut, flashing).
+* The child follows the launcher window at once (a subclass of its window procedure sees `WM_SIZE`); a layout timer
+  (50 ms) shows it once the page revealed it (no fade) and gives it the keyboard back after the window was activated
+  again (Tauri focuses the webview then). The page's stage hands its focus over too (`embed_focus`).
+* Input comes from the child's window procedure: scan codes go through `bhpc_launcher::embed::hid_from_scancode`, text
+  through `WM_CHAR`, pointer positions are scaled to the size the runner was last told (right after a resize the old
+  frame is stretched over the new size), a press on the side or bottom edge resizes the frameless window
+  (`WM_NCLBUTTONDOWN`), Ctrl+V / Shift+Insert paste, Alt+F4 closes the launcher. Fullscreen from a maximized window
+  restores it first (tao would leave it in the work area, the taskbar showing) and maximizes it again on the way out.
+
+**Resizing the game (all hosts).** A new window size gives the game a new screen mode (`ScreenModeCalls::apply` in
+`play.rs`); the game re-lays its views out, but its key `UIWindow` kept the first screen's frame, and its hit test
+dropped every touch in the part a bigger window added. `apply` now also sets the key window's frame to the new
+screen (in landscape; `-[UIScreen bounds]` is portrait). Checked headlessly: after 1100x676 -> 1920x948, a tap on an
+inventory slot that moved into the new part selects it; without the frame change it did nothing.
 
 ## Start-up progress and the loading screen
 
@@ -179,8 +223,8 @@ fade when GTK animations are off), takes the mouse and the keyboard focus.
 
 ## Deviations from the design
 
-- **Playing, "game inside the launcher".** One window on Linux (see "Playing in the launcher window"). On Windows
-  and macOS the game still opens in a window of its own (title "Blockheads PC · Playing The Blockheads 1.7.x" and the
+- **Playing, "game inside the launcher".** One window on Linux and Windows (see "Playing in the launcher window").
+  On macOS the game still opens in a window of its own (title "Blockheads PC · Playing The Blockheads 1.7.x" and the
   PC icon) while the launcher shows the Playing screen. The design's tip pill over the stage is not drawn (the stage
   is a native view). The window is square (no rounded corners) while the game view is up.
 - **Fullscreen, vsync, key bindings, window size, sound.** Applied by `bhpc-run` (`--fullscreen`, `--no-vsync`,

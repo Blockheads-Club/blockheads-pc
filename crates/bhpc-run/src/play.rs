@@ -619,8 +619,13 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
     let (tx, rx) = channel();
     let mut cfg = cfg.clone();
     if cfg.embed.is_some() {
-        // No window of our own: SDL's offscreen driver gives the GL context, the launcher shows the frames.
-        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        // No window of our own: SDL's offscreen driver gives the GL context, the launcher shows the frames. It needs
+        // EGL, which Windows and macOS do not have: there a hidden window gives the context (WGL / CGL) instead.
+        if cfg!(target_os = "linux") {
+            std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        }
+        // macOS: no Dock icon or menu bar for the hidden window's process.
+        std::env::set_var("SDL_MAC_BACKGROUND_APP", "1");
         // An offscreen window never has the focus, and SDL drops controller input of unfocused applications; the
         // launcher's focus commands decide instead (`bhpc_input::pad`).
         std::env::set_var("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
@@ -638,6 +643,7 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
         title: cfg.title.clone(),
         size: cfg.window,
         controllers: cfg.controller,
+        hidden: cfg.embed.is_some(),
         ..WindowConfig::default()
     })
     .map_err(|e| no_window(cfg, e))?;

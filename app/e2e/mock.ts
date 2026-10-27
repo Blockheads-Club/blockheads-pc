@@ -232,6 +232,7 @@ export async function mockTauri(page: Page) {
       },
       embed_layout: () => undefined,
       embed_reveal: () => undefined,
+      embed_focus: () => undefined,
       embed_fullscreen: () => undefined,
       game_stop: () => {
         s.game = 'stopped';

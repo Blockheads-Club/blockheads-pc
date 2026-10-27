@@ -940,6 +940,22 @@ mod embed_tests {
     }
 
     #[test]
+    fn windows_scan_codes_map_to_hid_usages() {
+        // Main block: same as evdev (Q, Enter, left Ctrl, Space, F1, F12).
+        for (sc, hid) in [(0x10, 20), (0x1c, 40), (0x1d, 224), (0x39, 44), (0x3b, 58), (0x58, 69)] {
+            assert_eq!(hid_from_scancode(sc, false), Some(hid), "scan code {sc:#x}");
+        }
+        // E0 keys: right Ctrl/Alt, arrows, editing block.
+        for (sc, hid) in [(0x1d, 228), (0x38, 230), (0x48, 82), (0x4b, 80), (0x4d, 79), (0x50, 81), (0x53, 76)] {
+            assert_eq!(hid_from_scancode(sc, true), Some(hid), "E0 {sc:#x}");
+        }
+        // Keypad Enter and the Windows keys have no use in the game; unknown E0 codes neither.
+        assert_eq!(hid_from_scancode(0x1c, true), None);
+        assert_eq!(hid_from_scancode(0x5b, true), None);
+        assert_eq!(hid_from_scancode(0x10, true), None);
+    }
+
+    #[test]
     fn evdev_codes_map_to_hid_usages() {
         // Physical positions: letters, digits, editing keys, function keys and modifiers.
         let table = [

@@ -57,6 +57,7 @@ describe('api', () => {
     await api.gamePoll(4);
     await api.embedLayout(84);
     await api.embedReveal();
+    await api.embedFocus();
     await api.embedFullscreen(true);
     await api.saveLog('/x.log');
     await api.updateCheck();
@@ -66,7 +67,7 @@ describe('api', () => {
     expect(invoke.mock.calls.map((x: unknown[]) => x[0])).toEqual([
       'app_info', 'splash_set', 'splash_get', 'splash_retry', 'app_quit', 'tray_labels', 'main_ready', 'boot', 'save_config', 'save_prefs', 'finish_setup', 'check_apk', 'use_apk', 'normalize_binding',
       'display_info', 'window_resize', 'import_saves', 'data_size', 'move_data_dir', 'open_path', 'game_start', 'game_stop', 'game_poll',
-      'embed_layout', 'embed_reveal', 'embed_fullscreen', 'save_log', 'update_check', 'update_install', 'update_progress', 'update_restart'
+      'embed_layout', 'embed_reveal', 'embed_focus', 'embed_fullscreen', 'save_log', 'update_check', 'update_install', 'update_progress', 'update_restart'
     ]);
     expect(invoke).toHaveBeenCalledWith('use_apk', { path: '/a.apk', force: false, keepCopy: true });
     expect(invoke).toHaveBeenCalledWith('import_saves', { source: '/src', overwrite: true, dataDir: '/data' });

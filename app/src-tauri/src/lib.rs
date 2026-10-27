@@ -454,6 +454,12 @@ fn embed_reveal(window: WebviewWindow) -> Res<()> {
     embed::reveal(&window)
 }
 
+/// The page's stage got the keyboard focus: the native game view takes it (see `embed::focus`).
+#[tauri::command]
+fn embed_focus(window: WebviewWindow) -> Res<()> {
+    embed::focus(&window)
+}
+
 #[tauri::command]
 fn embed_fullscreen(window: WebviewWindow, handle: AppHandle, on: bool) -> Res<()> {
     embed::set_fullscreen(&window, &handle, on)
@@ -547,6 +553,7 @@ pub fn run() {
             game_poll,
             embed_layout,
             embed_reveal,
+            embed_focus,
             embed_fullscreen,
             save_log,
             updater::update_check,
