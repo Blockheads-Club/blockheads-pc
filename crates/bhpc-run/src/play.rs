@@ -1931,8 +1931,9 @@ impl UiThread {
                         eprintln!("[zoom] host wheel dx {dx} dy {dy} at {now} ms");
                     }
                 }
-                // A click on a blockhead picks its player for the mods (`<mod>:ui-pick`); the game still gets it.
-                if let (Event::MouseButton { button: bhpc_app::MouseButton::Left, pressed: true, x, y }, Some(g)) =
+                // A middle click on a blockhead picks its player for the mods (`<mod>:ui-pick`). Left is the game's
+                // touch (portals, chests, walking) and right drags pan, so neither picks.
+                if let (Event::MouseButton { button: bhpc_app::MouseButton::Middle, pressed: true, x, y }, Some(g)) =
                     (&ev, grid)
                 {
                     let mods = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).clone();

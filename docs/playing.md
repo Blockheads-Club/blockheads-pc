@@ -11,6 +11,7 @@ The game is a touch game and the mouse is the finger (`bhpc-input`):
 |---|---|
 | left button press, drag, release | one-finger touch (tap, drag, long press = hold) |
 | right button drag | two-finger pan |
+| middle click on a blockhead | mods: pick that player (the voice chat opens its volume for them) |
 | mouse wheel | two-finger pinch (zoom) around the cursor |
 | Ctrl + left drag | pinch around the press point (right/up = spread) |
 | Esc | Android Back |
