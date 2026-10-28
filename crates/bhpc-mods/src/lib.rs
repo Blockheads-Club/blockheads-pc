@@ -12,6 +12,7 @@
 pub mod binds;
 pub mod form;
 pub mod host;
+pub mod hud;
 pub mod join;
 pub mod overhead;
 pub mod session;
@@ -35,6 +36,8 @@ pub fn platform() -> String {
 mod tests_form;
 #[cfg(test)]
 mod tests_host;
+#[cfg(test)]
+mod tests_hud;
 #[cfg(test)]
 mod tests_join;
 #[cfg(all(test, feature = "jvm"))]

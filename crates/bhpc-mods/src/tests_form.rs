@@ -195,11 +195,34 @@ fn a_screen_from_its_sources() {
             client: Some((json!({ "fields": [{ "key": "a", "type": "bool" }] }), json!({ "a": true }))),
             binds: &binds,
             server: Some(&server),
+            players: vec![PlayerVolume { id: "id-a".into(), alias: "Ann".into(), volume: 150, muted: true }],
+            widgets: Some(false),
         },
         Some((true, "Saved".into())),
     );
     let sections: Vec<Section> = v.rows.iter().map(|r| r.section).collect();
-    assert_eq!(&sections[..5], &[Section::Voice, Section::Voice, Section::Client, Section::Keys, Section::Server]);
+    assert_eq!(
+        &sections[..8],
+        &[
+            Section::Voice,
+            Section::Voice,
+            Section::Players,
+            Section::Players,
+            Section::Client,
+            Section::Hud,
+            Section::Keys,
+            Section::Server
+        ]
+    );
+    assert_eq!(
+        (v.rows[2].key.as_str(), v.rows[2].label.as_str(), v.rows[2].value.text()),
+        ("@vol:id-a", "Ann", "150".into())
+    );
+    assert_eq!((v.rows[3].key.as_str(), v.rows[3].value.clone()), ("@mute:id-a", RowValue::Bool(true)));
+    assert_eq!((v.rows[5].key.as_str(), v.rows[5].value.clone()), (WIDGETS, RowValue::Bool(false)));
+    for s in [Section::Players, Section::Hud] {
+        assert!(!s.title().is_empty());
+    }
     assert_eq!((v.mod_id.as_str(), v.title.as_str(), v.status.unwrap().1.as_str()), ("vm", "Voice", "Saved"));
     assert!(SettingsView::build("x", "X", Sources::default(), None).rows.is_empty());
 }

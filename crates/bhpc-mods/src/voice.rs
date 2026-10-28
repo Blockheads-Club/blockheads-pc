@@ -97,6 +97,8 @@ pub trait VoiceDriver {
     fn players(&self) -> Vec<(String, String)>;
     /// A listed player's alias.
     fn alias(&self, player: &str) -> Option<String>;
+    /// The players with a voice session (the per-player volume list).
+    fn speakers(&self) -> Vec<String>;
     /// Master volume, per-player volumes and local mutes as text (kept on the device).
     fn prefs(&self) -> String;
     /// Restores [`VoiceDriver::prefs`].
@@ -177,6 +179,20 @@ impl VoicePrefs {
         }
         std::fs::write(path, toml::to_string(self).expect("voice prefs serialise"))
     }
+}
+
+/// The per-player volume list of a voice client: every speaker with alias, volume and local mute.
+pub fn player_volumes(d: &dyn VoiceDriver) -> Vec<crate::form::PlayerVolume> {
+    let h = d.as_host();
+    d.speakers()
+        .into_iter()
+        .map(|id| crate::form::PlayerVolume {
+            alias: d.alias(&id).unwrap_or_else(|| id.clone()),
+            volume: h.player_volume(&id).unwrap_or(100),
+            muted: h.player_muted(&id).unwrap_or(false),
+            id,
+        })
+        .collect()
 }
 
 /// What a frame of the pump asks the glue to do.
@@ -431,6 +447,9 @@ impl VoiceDriver for bhmod_voice::client::SharedVoiceClient {
     }
     fn alias(&self, player: &str) -> Option<String> {
         self.lock().alias(player)
+    }
+    fn speakers(&self) -> Vec<String> {
+        self.lock().speakers()
     }
     fn prefs(&self) -> String {
         self.lock().prefs()

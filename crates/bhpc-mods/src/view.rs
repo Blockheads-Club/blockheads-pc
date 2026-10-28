@@ -248,6 +248,12 @@ pub struct View {
     pub settings: Option<crate::form::SettingsView>,
     /// A mod turned the microphone on and the player was never asked: the opt-in dialog shows.
     pub mic_ask: bool,
+    /// The mods' widgets (hidden mods left out), notices and the dialog that shows.
+    pub widgets: Vec<crate::hud::ModWidget>,
+    pub notices: Vec<crate::hud::Notice>,
+    pub dialog: Option<crate::hud::ModDialog>,
+    /// The mods' toasts (shown with the loader's own).
+    pub mod_toasts: Vec<(Instant, String)>,
 }
 
 /// What the player did in the mod UI.
@@ -282,6 +288,8 @@ pub enum UiCmd {
     MicConsent(bool),
     /// The settings screen was closed.
     CloseSettings,
+    /// The answer to a mod's dialog (`button` from 0, `CLOSED` when dismissed; the field's text).
+    DialogAnswer { id: u32, button: u32, text: Option<String> },
 }
 
 #[derive(serde::Serialize)]

@@ -51,6 +51,7 @@ fn setup(dir: &Path, online: bool, plan: Plan) -> (ClientHost, Vec<Placed>, Vec<
         voice: None,
         binds: None,
         client_settings: None,
+        hud: None,
     });
     (h, placed, problems)
 }

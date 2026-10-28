@@ -22,6 +22,10 @@ pub enum Section {
     Keys,
     /// `scope = "server"`, for admins.
     Server,
+    /// Voice chat: each player's volume and local mute (`@vol:<id>`, `@mute:<id>`).
+    Players,
+    /// The mod's widgets on the HUD (`@widgets`).
+    Hud,
 }
 
 impl Section {
@@ -31,6 +35,8 @@ impl Section {
             Section::Client => "This device",
             Section::Keys => "Keys",
             Section::Server => "Server (admin)",
+            Section::Players => "Players' voices",
+            Section::Hud => "On screen",
         }
     }
 }
@@ -39,6 +45,55 @@ impl Section {
 pub const MASTER: &str = "@master";
 /// The row key of the microphone permission.
 pub const MIC: &str = "@mic";
+/// The row key prefix of a player's volume.
+pub const VOLUME: &str = "@vol:";
+/// The row key prefix of a player's local mute.
+pub const MUTE: &str = "@mute:";
+/// The row key of "show the mod's widgets".
+pub const WIDGETS: &str = "@widgets";
+
+/// A player in the per-player volume list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerVolume {
+    pub id: String,
+    pub alias: String,
+    /// 0..=200 %.
+    pub volume: u16,
+    pub muted: bool,
+}
+
+/// The rows of the per-player volumes: a volume and a mute switch per player.
+pub fn player_rows(players: &[PlayerVolume]) -> Vec<Row> {
+    players
+        .iter()
+        .flat_map(|p| {
+            [
+                Row {
+                    section: Section::Players,
+                    key: format!("{VOLUME}{}", p.id),
+                    label: p.alias.clone(),
+                    help: Some("Volume of this player, 0 to 200 %".into()),
+                    value: RowValue::Number {
+                        value: f64::from(p.volume),
+                        min: Some(0.0),
+                        max: Some(200.0),
+                        step: 10.0,
+                        int: true,
+                    },
+                    restart: false,
+                },
+                Row {
+                    section: Section::Players,
+                    key: format!("{MUTE}{}", p.id),
+                    label: format!("Mute {}", p.alias),
+                    help: Some("Only for you; the server does not know".into()),
+                    value: RowValue::Bool(p.muted),
+                    restart: false,
+                },
+            ]
+        })
+        .collect()
+}
 
 /// A row's value and how it can change.
 #[derive(Debug, Clone, PartialEq)]
@@ -243,6 +298,10 @@ pub struct Sources<'a> {
     pub binds: &'a [BindRow],
     /// The server settings the server sent (admins only).
     pub server: Option<&'a (Json, Json)>,
+    /// Voice chat's players (volumes, mutes).
+    pub players: Vec<PlayerVolume>,
+    /// The mod has widgets: whether they show.
+    pub widgets: Option<bool>,
 }
 
 impl SettingsView {
@@ -252,8 +311,19 @@ impl SettingsView {
         if let Some((master, mic)) = src.voice {
             rows.extend(voice_rows(master, mic));
         }
+        rows.extend(player_rows(&src.players));
         if let Some((form, values)) = &src.client {
             rows.extend(rows_of(Section::Client, form, values));
+        }
+        if let Some(shown) = src.widgets {
+            rows.push(Row {
+                section: Section::Hud,
+                key: WIDGETS.into(),
+                label: "Show this mod's widgets".into(),
+                help: Some("Its boxes in the corners of the game".into()),
+                value: RowValue::Bool(shown),
+                restart: false,
+            });
         }
         rows.extend(key_rows(src.binds));
         if let Some((form, values)) = src.server {

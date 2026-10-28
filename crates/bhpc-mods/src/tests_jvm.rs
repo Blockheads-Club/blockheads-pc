@@ -106,6 +106,7 @@ fn a_java_client_mod_runs_like_a_lua_one() {
         voice: None,
         binds: None,
         client_settings: None,
+        hud: None,
     });
     h.enable("World", "w1");
     let logs = h.take_new_logs();

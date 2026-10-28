@@ -20,6 +20,7 @@ use crate::tests_voice::FakeDriver;
 
 const MAIN: &str = r#"
 bh.events.on_custom("vm:input", function(ev) bh.log.info("input") end)
+bh.events.on("chat", function(ev) bh.log.info("chat") end)
 bh.events.on_custom("vm:ui-pick", function(ev) bh.log.info("picked") end)
 bh.events.on_custom("voice:talk-start", function(ev) bh.log.info("talk-start") end)
 bh.commands.register({ name = "ov" }, function()
@@ -80,6 +81,7 @@ fn host(dir: &Path, voice: Option<Rc<FakeDriver>>) -> ClientHost {
         voice: voice.map(|v| v as Rc<dyn crate::voice::VoiceDriver>),
         binds: Some(Binds::path(dir)),
         client_settings: Some(client_settings_path(dir)),
+        hud: None,
     })
 }
 
@@ -143,7 +145,7 @@ fn bridge_commands_without_voice() {
     let h = host(d.path(), None);
     let b = h.bridge_for_tests();
     assert!(b.voice().is_none());
-    assert_eq!(b.ui("vm", &UiCommand::RemoveWidget { id: "w".into() }), Err(ApiError::Unsupported));
+    assert_eq!(b.ui("vm", &UiCommand::RemoveButton { id: "w".into() }), Err(ApiError::Unsupported));
     b.input("vm", &InputCommand::Bind { action: "a".into(), default_key: "q".into() }).unwrap();
     assert_eq!(b.input_key("vm", "a", "q"), Some("q".into()));
     b.input("vm", &InputCommand::Unbind { action: "a".into() }).unwrap();
@@ -253,4 +255,36 @@ fn picking_a_blockhead() {
     assert_eq!(pick(&heads, (10.0, 8.0)), None, "above the head");
     assert_eq!(pick(&heads, (12.0, 6.0)), None);
     assert_eq!(pick(&[], (0.0, 0.0)), None);
+}
+
+#[test]
+fn players_are_named_by_vanilla_id_once_known() {
+    let d = tempfile::tempdir().unwrap();
+    let drv = Rc::new(FakeDriver::default());
+    let mut h = host(d.path(), Some(drv.clone()));
+    let b = h.bridge_for_tests();
+    h.enable("World", "w");
+    // Before the ids are known: aliases, as before.
+    h.players(vec!["Ann".into()]);
+    assert_eq!(b.online_players(), vec!["ME".to_string(), "Ann".to_string()]);
+    // The server's list gives ids; VOICE_STATE knows Bob; the local player has localPlayerID.
+    h.set_ids(vec![("id-ann".into(), "Ann".into()), (String::new(), "x".into())]);
+    *drv.names.borrow_mut() = vec![("id-bob".into(), "Bob".into())];
+    h.set_local_id(Some("id-me".into()));
+    assert_eq!(b.online_players(), vec!["id-me".to_string(), "id-ann".to_string(), "id-bob".to_string()]);
+    assert_eq!(b.player_alias("id-ann"), Some("Ann".into()));
+    h.players(vec!["Ann".into(), "Bob".into()]);
+    assert_eq!(b.online_players(), vec!["id-me".to_string(), "id-ann".to_string(), "id-bob".to_string()]);
+    // World events and positions use ids too.
+    h.moved("Ann", (1, 2));
+    assert_eq!(b.player_pos("id-ann"), Some(bhmod_core::types::Pos { x: 1, y: 2 }));
+    h.moved("ME", (3, 4));
+    assert_eq!(b.player_pos("id-me"), Some(bhmod_core::types::Pos { x: 3, y: 4 }));
+    h.block_placed("Ann", (5, 5), 1, (0, 0));
+    h.block_broken("Ann", (5, 5), false);
+    h.object_placed("Ann", (5, 5), true, 3);
+    h.damaged(Some("Ann"), 1, 1.0);
+    h.died(Some("Ann"), 1);
+    assert_eq!(h.chat_received("Ann", "hi"), Some("hi".into()));
+    assert_eq!(h.chat_received("", "server"), Some("server".into()));
 }

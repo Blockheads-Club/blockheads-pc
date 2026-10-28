@@ -66,6 +66,7 @@ pub(crate) struct FakeDriver {
     pub events: RefCell<Vec<VoiceEvent>>,
     pub no_key: Cell<bool>,
     pub names: RefCell<Vec<(String, String)>>,
+    pub extra_speakers: RefCell<Vec<String>>,
 }
 
 impl VoiceHost for FakeDriver {
@@ -118,6 +119,9 @@ impl VoiceDriver for FakeDriver {
     }
     fn players(&self) -> Vec<(String, String)> {
         self.names.borrow().clone()
+    }
+    fn speakers(&self) -> Vec<String> {
+        self.names.borrow().iter().map(|n| n.0.clone()).chain(self.extra_speakers.borrow().iter().cloned()).collect()
     }
     fn alias(&self, player: &str) -> Option<String> {
         self.names.borrow().iter().find(|(p, _)| p == player).map(|(_, a)| a.clone())
@@ -236,6 +240,8 @@ fn the_opus_voice_client_behind_the_driver_seam() {
     assert_eq!(d.transmitting(), None);
     assert_eq!(d.udp_port(), None);
     assert!(d.players().is_empty());
+    assert!(d.speakers().is_empty());
+    assert!(player_volumes(&*d).is_empty());
     assert_eq!(d.alias("p"), None);
     d.load_prefs("master 150\n");
     assert!(d.prefs().starts_with("master 150"));
@@ -288,6 +294,21 @@ fn microphone_opt_in_and_states() {
     io.device = Some(MicDevice::Closed);
     p.frame(&d, &mut io, 11);
     assert_eq!(&d.mic.borrow()[3..], &[MicState::On, MicState::Off]);
+}
+
+#[test]
+fn the_per_player_volume_list() {
+    let d = FakeDriver::default();
+    *d.names.borrow_mut() = vec![("id-a".into(), "Ann".into())];
+    let v = player_volumes(&d);
+    assert_eq!(
+        v,
+        vec![crate::form::PlayerVolume { id: "id-a".into(), alias: "Ann".into(), volume: 100, muted: false }]
+    );
+    // A speaker the client has no alias for shows by id.
+    *d.names.borrow_mut() = vec![];
+    d.extra_speakers.borrow_mut().push("id-b".into());
+    assert_eq!(player_volumes(&d)[0].alias, "id-b");
 }
 
 #[test]
