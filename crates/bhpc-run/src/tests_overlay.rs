@@ -79,8 +79,14 @@ fn the_cursor_and_messages_become_sprites_rebuilt_only_on_change() {
     use std::time::{Duration, Instant};
     let now = Instant::now();
     let mut cache = SpriteCache::default();
-    let mut v =
-        PadView { cursor: Some((250.0, 200.0)), tile: None, content: (1000.0, 800.0), message: None, mic: false };
+    let mut v = PadView {
+        cursor: Some((250.0, 200.0)),
+        tile: None,
+        content: (1000.0, 800.0),
+        message: None,
+        mic: false,
+        overheads: vec![],
+    };
     // A 2000x1600 picture: twice the content, the default cursor is 64 px.
     let s = cache.sprites(&v, (2000, 1600), now);
     assert_eq!(s.len(), 1);
@@ -123,6 +129,7 @@ fn messages_are_drawn_in_the_launcher_language() {
         content: (1000.0, 800.0),
         message: Some(("GAME BUTTONS SHOWN".into(), now)),
         mic: false,
+        overheads: vec![],
     };
     let s = SpriteCache::new(Lang::Ru).sprites(&v, (1000, 800), now);
     let want = render_label("КНОПКИ ИГРЫ ПОКАЗАНЫ", hud_scale(800));
@@ -165,4 +172,23 @@ fn the_mic_indicator_shows_while_the_mic_records() {
     let serial = s[0].overlay.serial;
     assert_eq!(cache.sprites(&v, (2000, 1600), now)[0].overlay.serial, serial, "kept");
     assert_ne!(cache.sprites(&v, (1000, 800), now)[0].overlay.serial, serial, "rebuilt for another scale");
+}
+
+#[test]
+fn overhead_icons_become_sprites_above_their_blockheads() {
+    use crate::overlay::{PadView, SpriteCache};
+    use bhpc_app::hud::Overhead;
+    use std::time::Instant;
+    let now = Instant::now();
+    let mut cache = SpriteCache::default();
+    let mut v = PadView { content: (1000.0, 800.0), ..PadView::default() };
+    v.overheads = vec![(Overhead::Speaking, (500.0, 200.0)), (Overhead::AdminMute, (100.0, 400.0))];
+    let s = cache.sprites(&v, (2000, 1600), now);
+    assert_eq!(s.len(), 2);
+    assert_eq!((s[0].at, s[1].at), ((0.5, 0.25), (0.1, 0.5)));
+    assert_eq!(s[0].overlay.width, 36, "9 px x the HUD scale (4)");
+    let serials = (s[0].overlay.serial, s[1].overlay.serial);
+    let again = cache.sprites(&v, (2000, 1600), now);
+    assert_eq!((again[0].overlay.serial, again[1].overlay.serial), serials, "kept");
+    assert_ne!(cache.sprites(&v, (1000, 800), now)[0].overlay.serial, serials.0, "rebuilt for another scale");
 }

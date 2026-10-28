@@ -164,6 +164,13 @@ pub struct SdlGl {
 unsafe impl Send for SdlGl {}
 unsafe impl Sync for SdlGl {}
 
+/// Names of the recording devices, without a window (`bhpc-run --list-mics`, for the launcher's voice settings).
+pub fn capture_device_names() -> Result<Vec<String>, String> {
+    let audio = sdl2::init()?.audio()?;
+    let n = audio.num_audio_capture_devices().unwrap_or(0);
+    Ok((0..n).filter_map(|i| audio.audio_capture_device_name(i).ok()).collect())
+}
+
 impl SdlBackend {
     /// Create a window with a GLES 2.0 (RGBA8, 24-bit depth, 8-bit stencil) drawable.
     pub fn new(cfg: &WindowConfig) -> Result<(SdlBackend, Arc<SdlGl>), String> {

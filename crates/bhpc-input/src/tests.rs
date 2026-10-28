@@ -471,6 +471,31 @@ fn the_host_copy_follows_a_field_that_sets_its_own_text() {
 }
 
 #[test]
+fn api_key_names() {
+    use keymap::api_key_name as n;
+    let all: Vec<_> = (0..256).filter_map(n).collect();
+    assert_eq!(all.len(), 91, "{all:?}");
+    for (hid, name) in [
+        (4, "a"),
+        (29, "z"),
+        (30, "1"),
+        (38, "9"),
+        (39, "0"),
+        (40, "enter"),
+        (88, "enter"),
+        (58, "f1"),
+        (69, "f12"),
+        (89, "keypad-1"),
+        (97, "keypad-9"),
+        (98, "keypad-0"),
+        (230, "right-alt"),
+    ] {
+        assert_eq!(n(hid), Some(name));
+    }
+    assert_eq!(n(50), None);
+}
+
+#[test]
 fn keypad_enter_is_enter() {
     assert_eq!(keymap::host_key_from_hid(88), HostKey::Enter);
     assert_eq!(keymap::host_key_from_hid(40), HostKey::Enter);

@@ -2,7 +2,9 @@
 //! so the window blends them over it when it presents the frame. Also the pictures of the controller cursor and of
 //! short host messages ([`SpriteCache`]).
 
-use bhpc_app::hud::{cursor_picture, hud_scale, localise, message_sprite, mic_picture, Lang, Sprite};
+use bhpc_app::hud::{
+    cursor_picture, hud_scale, localise, message_sprite, mic_picture, overhead_picture, Lang, Overhead, Sprite,
+};
 use bhpc_gles::{GlWindow, Overlay};
 use bhpc_jni::UiFrame;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -102,6 +104,8 @@ pub struct PadView {
     /// The microphone records (voice chat): the host's mic-on indicator shows. Set by the host only, from
     /// `bhpc_audio::capture::MicControl::live`; mods have no way to change it.
     pub mic: bool,
+    /// Voice chat icons above blockheads (mod API `ui.set-overhead`), at content pixels.
+    pub overheads: Vec<(Overhead, (f32, f32))>,
 }
 
 /// Where the mic-on indicator sits (top-right corner of the game picture).
@@ -118,6 +122,7 @@ pub struct SpriteCache {
     cursor: Option<(u32, Overlay)>,
     message: Option<(String, u32, Overlay)>,
     mic: Option<(u32, Overlay)>,
+    overheads: Vec<(Overhead, u32, Overlay)>,
     serial: u64,
     /// The messages' language.
     lang: Lang,
@@ -163,6 +168,21 @@ impl SpriteCache {
             }
             if let Some((_, _, ov)) = &self.message {
                 out.push(Sprite { overlay: ov.clone(), at: (0.5, 0.12) });
+            }
+        }
+        if !view.overheads.is_empty() {
+            let size = 9 * hud_scale(picture.1);
+            for (kind, (x, y)) in &view.overheads {
+                let at = self.overheads.iter().position(|(k, s, _)| k == kind && *s == size);
+                let at = at.unwrap_or_else(|| {
+                    let p = overhead_picture(*kind, size);
+                    let serial = self.next();
+                    let ov = Overlay { width: p.width, height: p.height, serial, rgba: Arc::new(p.rgba) };
+                    self.overheads.retain(|(_, s, _)| *s == size);
+                    self.overheads.push((*kind, size, ov));
+                    self.overheads.len() - 1
+                });
+                out.push(Sprite { overlay: self.overheads[at].2.clone(), at: (x / cw, y / ch) });
             }
         }
         if view.mic {

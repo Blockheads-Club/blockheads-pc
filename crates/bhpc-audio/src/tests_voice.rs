@@ -186,3 +186,15 @@ fn a_failed_open_is_reported_and_not_retried_every_frame() {
     assert!(drv.is_open() && ctl.live(), "off and on again retries");
     assert_eq!(ctl.last_error(), None);
 }
+
+#[test]
+fn a_finished_stereo_mix_plays_as_it_is() {
+    let mixer = Mixer::new(VOICE_RATE);
+    let out = VoiceOut::new(mixer.clone());
+    let h = out.voice_stream(0);
+    out.push_stereo(h, &[0.5, -0.5, 2.0, -2.0, 0.1]).unwrap();
+    assert_eq!(out.queued(h), Ok(2), "the odd sample is dropped");
+    let mut buf = vec![0i16; 4];
+    mixer.fill(&mut buf);
+    assert_eq!(buf, vec![16384, -16384, 32767, -32768]);
+}

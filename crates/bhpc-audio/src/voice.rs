@@ -72,6 +72,12 @@ impl VoiceOut {
         self.mixer.enqueue(h.stream, spatialise(pcm_mono, gain, pan))
     }
 
+    /// Queue interleaved stereo samples (-1..1, the voice client's finished mix) on the handle's stream; saturates.
+    pub fn push_stereo(&self, h: VoiceHandle, stereo: &[f32]) -> Result<(), MixError> {
+        let sat = |v: f32| (v * 32768.0).clamp(-32768.0, 32767.0) as i16;
+        self.mixer.enqueue(h.stream, stereo.chunks_exact(2).map(|p| [sat(p[0]), sat(p[1])]).collect())
+    }
+
     /// Source frames of `h` not played yet (for the jitter buffer's latency estimate).
     pub fn queued(&self, h: VoiceHandle) -> Result<usize, MixError> {
         self.mixer.queued_frames(h.stream)

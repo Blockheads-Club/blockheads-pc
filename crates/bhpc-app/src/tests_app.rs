@@ -386,3 +386,16 @@ fn the_fps_counter_reports_about_twice_a_second() {
     assert_eq!(z.frame(ms(0)), None);
     assert!((z.frame(ms(1)).unwrap() - 2000.0).abs() < 0.01);
 }
+
+#[test]
+fn overhead_icons() {
+    use crate::hud::{overhead_picture, Overhead};
+    let mut seen = std::collections::HashSet::new();
+    for k in Overhead::ALL {
+        let p = overhead_picture(k, 32);
+        assert_eq!((p.width, p.height, p.rgba.len()), (32, 32, 32 * 32 * 4));
+        assert_eq!(&p.rgba[..4], &[0, 0, 0, 0], "outside the disc");
+        assert!(seen.insert(p.rgba), "{k:?} looks like another icon");
+    }
+    assert_eq!(overhead_picture(Overhead::Speaking, 1).width, 12);
+}
