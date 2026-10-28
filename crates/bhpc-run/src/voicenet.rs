@@ -243,15 +243,13 @@ impl PcVoiceIo {
         std::mem::take(&mut self.reliable)
     }
 
-    fn socket(&mut self) -> Option<&std::net::UdpSocket> {
+    fn socket(&mut self, ip: std::net::IpAddr) -> Option<&std::net::UdpSocket> {
         if self.udp.is_none() {
-            let any: std::net::SocketAddr = match self.server? {
+            let any: std::net::SocketAddr = match ip {
                 std::net::IpAddr::V4(_) => (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
                 std::net::IpAddr::V6(_) => (std::net::Ipv6Addr::UNSPECIFIED, 0).into(),
             };
-            let s = std::net::UdpSocket::bind(any).ok()?;
-            s.set_nonblocking(true).ok()?;
-            self.udp = Some(s);
+            self.udp = std::net::UdpSocket::bind(any).ok().filter(|s| s.set_nonblocking(true).is_ok());
         }
         self.udp.as_ref()
     }
@@ -287,7 +285,7 @@ impl bhpc_mods::voice::VoiceIo for PcVoiceIo {
 
     fn send_udp(&mut self, port: u16, datagram: &[u8]) {
         let Some(ip) = self.server else { return };
-        if let Some(s) = self.socket() {
+        if let Some(s) = self.socket(ip) {
             // Lost datagrams are voice that arrives late anyway.
             let _ = s.send_to(datagram, (ip, port));
         }

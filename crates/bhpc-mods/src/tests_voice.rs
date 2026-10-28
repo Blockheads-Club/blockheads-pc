@@ -311,3 +311,11 @@ fn fake_driver_rest() {
     assert_eq!(d.prefs(), "x");
     assert_eq!(d.as_host().icons(), Err(ApiError::Unsupported));
 }
+
+#[test]
+fn voice_client_sends_map_one_to_one() {
+    use bhmod_voice::client::Outgoing as O;
+    assert_eq!(outgoing(O::Reliable(vec![1])), Outgoing::Reliable(vec![1]));
+    assert_eq!(outgoing(O::Unsequenced(vec![2])), Outgoing::Unsequenced(vec![2]));
+    assert_eq!(outgoing(O::Udp(vec![3])), Outgoing::Udp(vec![3]));
+}

@@ -377,6 +377,16 @@ impl TalkKeys {
     }
 }
 
+/// A send of the voice client as the loader's [`Outgoing`].
+pub(crate) fn outgoing(o: bhmod_voice::client::Outgoing) -> Outgoing {
+    use bhmod_voice::client::Outgoing as O;
+    match o {
+        O::Reliable(p) => Outgoing::Reliable(p),
+        O::Unsequenced(p) => Outgoing::Unsequenced(p),
+        O::Udp(p) => Outgoing::Udp(p),
+    }
+}
+
 /// The voice client of mod-sdk (`bhmod-voice`, libopus through `bhmod-opus-sys`) as the loader drives it.
 impl VoiceDriver for bhmod_voice::client::SharedVoiceClient {
     fn as_host(&self) -> &dyn VoiceHost {
@@ -395,15 +405,8 @@ impl VoiceDriver for bhmod_voice::client::SharedVoiceClient {
         self.lock().on_mic_frame(pcm);
     }
     fn poll_send(&self, now_ms: u64) -> Vec<Outgoing> {
-        use bhmod_voice::client::Outgoing as O;
         let out = self.lock().poll_send(now_ms);
-        out.into_iter()
-            .map(|o| match o {
-                O::Reliable(p) => Outgoing::Reliable(p),
-                O::Unsequenced(p) => Outgoing::Unsequenced(p),
-                O::Udp(p) => Outgoing::Udp(p),
-            })
-            .collect()
+        out.into_iter().map(outgoing).collect()
     }
     fn mix(&self, out: &mut [f32]) {
         self.lock().mix(out);
