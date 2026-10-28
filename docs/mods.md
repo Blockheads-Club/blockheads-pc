@@ -140,19 +140,36 @@ Tests: `tests_native.rs` runs the real fixture libraries (`fixtures/native`, own
 with `fixtures/native/build.sh`, NDK needed) on the JIT against a fake game; `scripts/e2e-native.sh` runs the example mod
 of mod-sdk (`scripts/build-native-example.sh`) and the weapon skin on the real game, with a pixel check of the skin.
 
-## Voice chat I/O seams (voice plan V5 groundwork)
+## Voice chat, overhead icons, key bindings and the settings screen (API 0.3.4)
 
-The voice core (mod-sdk `bhmod-voice`: crypto, Opus via `bhmod-opus-sys`, jitter buffer, mixing policy, VAD,
-push-to-talk state machine) plugs into `modglue::VoiceIo`, owned by `ModGlue`:
+The voice core is mod-sdk's `bhmod-voice` `VoiceClient` (key exchange, crypto, Opus via `bhmod-opus-sys`, VAD,
+push-to-talk state machine, jitter buffers, the mix). The PC side is thin and lives in covered crates; the play glue
+(`modglue.rs`, `play.rs`, `cosmetics.rs`) only connects them:
+
+| Piece | Where | Notes |
+| --- | --- | --- |
+| HELLO features | `bhpc_mods::voice::features(voice, unsequenced)` -> `JoinConfig.features` -> `session::Options.features` | `settings` always; `voice` when this build has a voice client (`modglue::voice_client`); `voice-unsequenced` when the ENet exports resolve. |
+| Voice ops | `JoinFlow` -> `Action::Voice` / `SettingsSchema` / `SettingsResult` | Only when both sides listed the feature (`Session::voice_enabled` / `settings_enabled`). |
+| Driver seam | `bhpc_mods::voice::VoiceDriver` (+ `VoiceHost` via `as_host`) | The calls the loader makes on the voice client; `VoicePump` drives it once per frame from a `VoiceIo`. |
+| Devices | `bhpc_run::voicenet::PcVoiceIo` | `MicControl` (mic), `VoiceOut` stream `MIX_STREAM` (the client's finished stereo mix, ~60 ms queued), the unsequenced `Outbox`, reliable packets for the glue (0xBC via `JoinFlow::voice_packet`), a UDP socket to `server_ip:udp_port` when the client switches to the server's voice port. |
+| Microphone opt-in | `VoicePump` + `ModUi` mic dialog, `<data>/voice.toml` (`VoicePrefs`) | Off until a mod calls `voice.set-mic(true)`; the first time the player is asked (Allow / Not now); the answer, the client's volumes/mutes and the launcher master volume last applied are kept on the device. `voice:mic` reports `on` / `off` / `denied`. |
+| Push-to-talk | `TalkKeys` (`KeyIn::Talk`) -> `VoicePump::talk` -> `voice.talk(mode)` | The loader's own V/B/G/J keys; skipped for a key a mod bound itself. |
+| Key bindings | `bhpc_mods::binds::Binds`, `<data>/mod-keys.toml` | `input.bind` / `unbind` / `key-of`; the window posts every named key (`bhpc_input::keymap::api_key_name`, not while typing) as `KeyIn::Key`; `ClientHost::key` fires `<mod>:input`. Rebinding in the settings screen. |
+| Overhead icons | `bhpc_mods::overhead::Overheads`, `cosmetics::note_position`, `overlay::PadView::overheads`, `hud::overhead_picture` | One icon per (mod, player), the most important wins, the admin's `icons` filter. The blockhead draw hook (t0) records the head (`DynamicObject.floatPos` + 2.6 tiles, owner by `Blockhead.clientName`, own blockhead = local alias); the window maps it with the game's tap matrices (`gameui::grid`) into sprites. |
+| Settings screen | `UiCommand::OpenSettings` -> `Effect::OpenSettings` -> `bhpc_mods::form::SettingsView` drawn by `ModUi` | Rows: voice (volume, microphone), the mod's `scope = "client"` settings (stored in `<data>/mod-settings.toml` through `HostOptions::client_settings`), its keys, and for admins the server settings from `SETTINGS_SCHEMA` (changes go out as `SETTINGS_SET`, the answer shows in the footer). `bool` / `int` / `float` / `enum` change here; `string`, `roles`, `matrix`, `list` are shown only. Keys: arrows, Enter, Esc; clicks. |
+| Buttons, widgets | `UiCommand::SetButton` etc. | Not drawn on PC (`unsupported`): desktop mods bind a key. |
+| Launcher | Settings > Audio > Voice chat | Voice volume (`--voice-master`, applied at the next session when it changed) and the microphone (`--mic-device`, list from `bhpc-run --list-mics`). |
+
+Lower seams from the V5 groundwork:
 
 | Seam | Where | Notes |
 | --- | --- | --- |
 | Unsequenced send | `bhpc-run/src/voicenet.rs`, `ModGlue::send_unsequenced` | Any thread queues a whole 0xBC packet (1..=1364 bytes, 32 waiting, oldest dropped); the frame hook (t0) calls the game's exported `enet_packet_create(buf, n, 2 /*UNSEQUENCED*/)` + `enet_peer_send(enetPeer, 0, p)` (`OBJC_IVAR_$_BHNetClientMatch.enetPeer`); a refused packet is freed with `enet_packet_destroy`. Only in a server's world; leaving drops the queue. Exported in 1.7.4-1.7.6. |
-| HELLO feature | `bhpc_mods::voice::FEATURE_VOICE_UNSEQUENCED` (`voice-unsequenced`) in `JoinConfig.features` | Set when the exports resolve. Sent once the pinned mod-sdk has `session::Options::features`. |
-| Microphone | `bhpc_audio::capture` (`MicControl` shared, `MicDriver` on the window thread), `SdlBackend::open_capture` | 48 kHz mono `i16`, 20 ms (960-sample) chunks, bounded non-blocking queue (50). Off by default, open only while `set_wanted(true)`; the glue forces it off outside a server's world. Device list via `request_devices`/`devices`, choice via `set_device`. |
+| Microphone | `bhpc_audio::capture` (`MicControl` shared, `MicDriver` on the window thread), `SdlBackend::open_capture` | 48 kHz mono `i16`, 20 ms (960-sample) chunks, bounded non-blocking queue (50). Off by default, open only while `set_wanted(true)`; the glue forces it off outside a server's world. |
 | Mic-on indicator | `overlay::PadView::mic` + `hud::mic_picture` | Drawn by the host top-right whenever the device is open (`MicControl::live`); mods cannot reach it. |
-| Playback | `bhpc_audio::voice::VoiceOut` (`voice_stream(speaker)`, `push(handle, pcm, gain, pan)`, `drop_speaker`) | One quiet 48 kHz stream per speaker on the game mixer, gain (0..=4) and constant-power pan baked in, 25 frames max. Cleared outside a server's world. |
-| Push-to-talk | `bhpc_input::HostAction::Voice { mode, pressed }` -> `bhpc_mods::voice::TalkKeys` | Defaults V proximity, B channel, G global, J broadcast (H is "hide game buttons"); rebindable in Settings > Controls (`voice_*` in `launcher.toml`). Repeats filtered, released on focus loss. `BHPC_VOICE_TRACE=1` logs them. |
+| Playback | `bhpc_audio::voice::VoiceOut` | Per-speaker streams (`push`, gain and pan baked in) or the finished mix (`push_stereo`). Cleared outside a server's world. |
+
+`BHPC_VOICE_TRACE=1` logs push-to-talk keys.
 
 ## Newer mod loader: "Update after this game"
 

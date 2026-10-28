@@ -55,6 +55,8 @@ pub struct ModsOptions {
     pub java_home: Option<PathBuf>,
     /// `HELLO.features` (set by [`ModGlue::new`] from what the game build allows).
     pub features: Vec<String>,
+    /// The voice chat master volume set in the launcher (`--voice-master`), 0..=200.
+    pub voice_master: Option<u16>,
 }
 
 /// The platform I/O the voice chat host plugs into (mod-sdk `bhmod-voice` does crypto, Opus, jitter, mixing policy,
@@ -74,6 +76,9 @@ pub struct VoiceIo {
 #[derive(Default)]
 pub struct Shared {
     pub view: Mutex<View>,
+    /// Overhead icons to draw and where (world tiles, the head of the blockhead); the window maps them to the
+    /// screen with the game's tap matrices.
+    pub overheads: Mutex<Vec<(bhpc_app::hud::Overhead, (f32, f32))>>,
     /// The mod UI's own state (open panel, native confirmation, clickable areas).
     pub ui: Mutex<bhpc_mods::ui::ModUi>,
     cmds: Mutex<Vec<UiCmd>>,
@@ -133,6 +138,60 @@ pub(crate) struct Main {
     menu_since: Option<Instant>,
     joined_menu: bool,
     last_publish: Option<Instant>,
+    /// Voice chat of the running session.
+    voice: Option<VoiceSession>,
+    /// The server settings the server sent (admins).
+    forms: bhpc_mods::form::ServerForms,
+    /// The settings screen shows this mod.
+    settings_open: Option<String>,
+    settings_status: Option<(bool, String)>,
+}
+
+/// Voice chat while a session runs on a server that has it.
+struct VoiceSession {
+    driver: std::rc::Rc<dyn bhpc_mods::voice::VoiceDriver>,
+    pump: bhpc_mods::voice::VoicePump,
+    io: crate::voicenet::PcVoiceIo,
+    prefs: bhpc_mods::voice::VoicePrefs,
+    prefs_path: PathBuf,
+    started: Instant,
+}
+
+impl VoiceSession {
+    fn save(&mut self) {
+        self.prefs.client = self.driver.prefs();
+        self.prefs.mic = self.pump.consent_state();
+        if let Err(e) = self.prefs.save(&self.prefs_path) {
+            log(&format!("voice settings not saved: {e}"));
+        }
+    }
+}
+
+/// The voice devices of [`VoiceIo`] for the sessions (set once by [`ModGlue::new`]).
+struct Devices {
+    mic: Arc<bhpc_audio::capture::MicControl>,
+    out: Arc<bhpc_audio::voice::VoiceOut>,
+    outbox: Option<Arc<crate::voicenet::Outbox>>,
+}
+
+static DEVICES: std::sync::OnceLock<Devices> = std::sync::OnceLock::new();
+
+thread_local! {
+    /// The settings screen must be rebuilt (a mod opened it from an effect).
+    static SETTINGS_DIRTY: Cell<bool> = const { Cell::new(false) };
+    /// Heads of the blockheads drawn this frame, by alias (world tiles).
+    static HEADS: RefCell<HashMap<String, (f32, f32)>> = RefCell::new(HashMap::new());
+    static WANT_HEADS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// True while some mod shows an overhead icon (the draw hook then records where the blockheads are).
+pub(crate) fn overheads_wanted() -> bool {
+    WANT_HEADS.with(Cell::get)
+}
+
+/// A blockhead of `alias` was drawn with its head at `at` (world tiles).
+pub(crate) fn note_head(alias: String, at: (f32, f32)) {
+    HEADS.with(|h| h.borrow_mut().insert(alias, at));
 }
 
 thread_local! {
@@ -278,7 +337,13 @@ impl ModGlue {
         let objc = Arc::new(Objc { rt, cache: Mutex::new(HashMap::new()) });
         let shared = Arc::new(Shared::default());
         shared.view.lock().unwrap_or_else(PoisonError::into_inner).dev = !opts.dev.is_empty();
-        opts.features.extend(bhpc_mods::voice::features(voice.unsequenced.is_some()));
+        let unsequenced = voice.unsequenced.is_some();
+        let _ = DEVICES.set(Devices {
+            mic: voice.mic.clone(),
+            out: voice.out.clone(),
+            outbox: voice.unsequenced.as_ref().map(|u| u.outbox.clone()),
+        });
+        opts.features.extend(bhpc_mods::voice::features(true, unsequenced));
         let opts = Arc::new(opts);
         let g = ModGlue { hooks, rt, shared, objc, opts, voice };
         g.register();
@@ -384,13 +449,7 @@ impl ModGlue {
                         UiCmd::Toggle(i) => f.toggle(*i),
                         // The download starts again on the same connection (resumes the partial files).
                         UiCmd::Retry => out.extend(f.retry(now)),
-                        UiCmd::Dismiss
-                        | UiCmd::UpdateLater
-                        | UiCmd::Reload
-                        | UiCmd::ResetTimings
-                        | UiCmd::Cancel
-                        | UiCmd::Copy(_)
-                        | UiCmd::Say(_) => {}
+                        _ => {}
                     }
                 }
             }
@@ -440,6 +499,9 @@ impl ModGlue {
                 }
                 // The switch already changed the flow; show it.
                 UiCmd::Toggle(_) => sync_join(&self.shared),
+                UiCmd::Setting { .. } | UiCmd::Rebind { .. } | UiCmd::MicConsent(_) | UiCmd::CloseSettings => {
+                    settings_cmd(&self.objc, &self.shared, c, cmd.clone());
+                }
             }
         }
         run_actions(&self.objc, &self.opts, &self.shared, c, actions);
@@ -449,6 +511,9 @@ impl ModGlue {
             }
         });
         apply_effects(&self.objc, c);
+        if SETTINGS_DIRTY.with(|d| d.replace(false)) {
+            refresh_settings(&self.shared);
+        }
         self.voice_frame(c);
         crate::cosmetics::frame(c);
         self.join_from_menu(c);
@@ -464,13 +529,65 @@ impl ModGlue {
         }
     }
 
-    /// Voice I/O once per frame (main thread): the unsequenced queue goes out, the mic is never left open outside a
-    /// server's world, push-to-talk events are handed on.
+    /// Voice once per frame (main thread): keys to the mods' bindings and push-to-talk, the voice client pumped
+    /// (microphone, sends, the mix), the unsequenced queue flushed, overhead icons published; the microphone is never
+    /// left open outside a server's world.
     fn voice_frame(&self, c: &mut Cpu) {
         let (in_world, matcher) = MAIN.with(|m| {
             let m = m.borrow();
             (m.host.is_some() && m.host_online && m.conn.is_some(), m.conn.map_or(0, |c| c.matcher))
         });
+        let keys = self.voice.talk.take();
+        let (out, reliable) = MAIN.with(|m| {
+            let mut m = m.borrow_mut();
+            let m = &mut *m;
+            for k in keys {
+                match k {
+                    bhpc_mods::voice::KeyIn::Key { name, pressed } => {
+                        let bound = m.host.as_mut().is_some_and(|h| h.key(name, pressed));
+                        if let Some(v) = m.voice.as_mut() {
+                            v.pump.key_bound(bound);
+                        }
+                    }
+                    bhpc_mods::voice::KeyIn::Talk { mode, pressed } => {
+                        if std::env::var_os("BHPC_VOICE_TRACE").is_some() {
+                            log(&format!("push-to-talk {} {}", mode.name(), if pressed { "down" } else { "up" }));
+                        }
+                        if let Some(v) = m.voice.as_mut() {
+                            v.pump.talk(&*v.driver, mode, pressed);
+                        }
+                    }
+                }
+            }
+            let Some(v) = m.voice.as_mut().filter(|_| in_world) else { return (None, Vec::new()) };
+            let now_ms =
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+            let out = v.pump.frame(&*v.driver, &mut v.io, now_ms);
+            let packets: Vec<Vec<u8>> =
+                v.io.take_reliable()
+                    .into_iter()
+                    .filter_map(|p| m.flow.as_ref().and_then(|f| f.voice_packet(p)))
+                    .collect();
+            if let (Some(h), false) = (m.host.as_mut(), out.events.is_empty()) {
+                h.voice_events(out.events.clone());
+            }
+            if v.started.elapsed() > Duration::from_secs(30) {
+                v.started = Instant::now();
+                v.save();
+            }
+            (Some(out), packets)
+        });
+        let conn = MAIN.with(|m| m.borrow().conn);
+        if let Some(conn) = conn {
+            for p in &reliable {
+                send_packet(&self.objc, c, conn, p);
+            }
+        }
+        if out.as_ref().is_some_and(|o| o.ask_mic) {
+            log("a mod wants the microphone: asking the player");
+            self.shared.view.lock().unwrap_or_else(PoisonError::into_inner).mic_ask = true;
+            self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         if let Some(u) = &self.voice.unsequenced {
             u.outbox.set_in_world(in_world);
             if in_world {
@@ -483,12 +600,7 @@ impl ModGlue {
         if !in_world {
             self.voice.out.clear();
         }
-        // TODO(voice): hand these to bhmod-voice's push-to-talk state machine once it lands.
-        for k in self.voice.talk.take() {
-            if std::env::var_os("BHPC_VOICE_TRACE").is_some() {
-                log(&format!("push-to-talk {} {}", k.mode.name(), if k.pressed { "down" } else { "up" }));
-            }
-        }
+        publish_overheads(&self.shared);
     }
 
     /// The player left a failure or rejection notice: a failed join that kept its connection for "Try again" now
@@ -736,6 +848,22 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
                     }
                 });
             }
+            Action::Voice(msg) => MAIN.with(|m| {
+                if let Some(v) = m.borrow().voice.as_ref() {
+                    v.driver.on_message(&msg);
+                }
+            }),
+            Action::SettingsSchema(schema) => {
+                let ok = MAIN.with(|m| m.borrow_mut().forms.receive(&schema));
+                if !ok {
+                    log(&format!("server settings of {}: not readable", schema.mod_id));
+                }
+                refresh_settings(sh);
+            }
+            Action::SettingsResult(r) => {
+                MAIN.with(|m| m.borrow_mut().settings_status = Some(bhpc_mods::form::result_status(&r)));
+                refresh_settings(sh);
+            }
         }
     }
     sync_join(sh);
@@ -819,6 +947,41 @@ fn session_plan(opts: &ModsOptions, dirs: &ModsDirs, server: &Option<(String, Ve
     }
 }
 
+/// Voice chat for a session on a server, when both sides speak it and this build has a voice client.
+fn start_voice(opts: &ModsOptions) -> Option<VoiceSession> {
+    let io = DEVICES.get()?;
+    let (enabled, address) = MAIN.with(|m| {
+        let m = m.borrow();
+        m.flow.as_ref().map(|f| (f.voice_enabled(), f.address().to_string())).unwrap_or_default()
+    });
+    if !enabled {
+        return None;
+    }
+    let outbox = io.outbox.clone();
+    // mod-sdk's voice client with Opus; without in-band sends it needs the server's UDP port.
+    let driver = bhpc_mods::voice::opus_client(outbox.is_some());
+    let prefs_path = bhpc_mods::voice::VoicePrefs::path(&opts.data_dir);
+    let mut prefs = bhpc_mods::voice::VoicePrefs::load(&prefs_path);
+    driver.load_prefs(&prefs.client);
+    if let Some(master) = opts.voice_master.filter(|m| prefs.launcher_master != Some(*m)) {
+        // The launcher's setting changed since the last game: it wins over what was set in a game.
+        let _ = driver.as_host().set_master(master);
+        prefs.launcher_master = Some(master);
+    }
+    use std::net::ToSocketAddrs;
+    let server = address.to_socket_addrs().ok().and_then(|mut a| a.next()).map(|a| a.ip());
+    let pcio = crate::voicenet::PcVoiceIo::new(io.mic.clone(), io.out.clone(), outbox, server);
+    log("voice chat is on for this server");
+    Some(VoiceSession {
+        driver,
+        pump: bhpc_mods::voice::VoicePump::new(prefs.mic),
+        io: pcio,
+        prefs,
+        prefs_path,
+        started: Instant::now(),
+    })
+}
+
 fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     let server = session_server();
     let conn = MAIN.with(|m| m.borrow().conn);
@@ -848,12 +1011,16 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
         log(&note);
     }
     MAIN.with(|m| m.borrow_mut().local = local.clone().unwrap_or_default());
+    let voice = server.as_ref().and_then(|_| start_voice(opts));
     let mut host = ClientHost::load(HostSetup {
         mods_dir: &dir,
         storage_dir: &opts.data_dir.join("mods-data").join(&key),
         runtimes,
         online: server.is_some(),
         local_player: local.unwrap_or_default(),
+        voice: voice.as_ref().map(|v| v.driver.clone()),
+        binds: Some(bhpc_mods::binds::Binds::path(&opts.data_dir)),
+        client_settings: Some(bhpc_mods::host::client_settings_path(&opts.data_dir)),
     });
     let world = server.as_ref().map_or("single-player".to_string(), |(s, _)| s.clone());
     start_natives(opts, &dir, c);
@@ -864,6 +1031,7 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
         m.host = Some(host);
         m.host_online = server.is_some();
         m.placed = placed;
+        m.voice = voice;
     });
     {
         let mut v = sh.view.lock().unwrap_or_else(PoisonError::into_inner);
@@ -933,6 +1101,13 @@ fn stop_session(sh: &Shared, why: &str, keep_join: bool, c: &mut Cpu) {
     let stopped = MAIN.with(|m| {
         let mut m = m.borrow_mut();
         m.placed.clear();
+        if let Some(mut v) = m.voice.take() {
+            v.pump.stop(&mut v.io);
+            v.save();
+        }
+        m.forms.clear();
+        m.settings_open = None;
+        m.settings_status = None;
         // Leaving a server's world ends that join; leaving a single-player world keeps a join in progress.
         if m.host.is_some() && m.host_online && !keep_join {
             m.flow = None;
@@ -953,7 +1128,11 @@ fn stop_session(sh: &Shared, why: &str, keep_join: bool, c: &mut Cpu) {
         let mut v = sh.view.lock().unwrap_or_else(PoisonError::into_inner);
         v.mods.clear();
         v.server = None;
+        v.settings = None;
+        v.mic_ask = false;
     }
+    WANT_HEADS.with(|w| w.set(false));
+    sh.overheads.lock().unwrap_or_else(PoisonError::into_inner).clear();
 }
 
 /// Developer reload (F5, the launcher's live reload): the session folder is built again from the same plan and the
@@ -1017,13 +1196,22 @@ pub(crate) fn apply_effects(o: &Objc, c: &mut Cpu) {
             .map(|e| match e {
                 Effect::Channel { name, data } => m.flow.as_ref().and_then(|f| f.channel_packet(name, data)),
                 Effect::Service(call) => m.flow.as_ref().and_then(|f| f.service_call_packet(call)),
-                Effect::Chat(_) => None,
+                Effect::Chat(_) | Effect::OpenSettings(_) => None,
             })
             .collect();
         (m.conn, p)
     });
     for (e, p) in effects.iter().zip(packets) {
         match (e, conn) {
+            (Effect::OpenSettings(id), _) => {
+                log(&format!("settings of {id} opened"));
+                MAIN.with(|m| {
+                    let mut m = m.borrow_mut();
+                    m.settings_open = Some(id.clone());
+                    m.settings_status = None;
+                });
+                SETTINGS_DIRTY.with(|d| d.set(true));
+            }
             (Effect::Chat(text), Some(conn)) => {
                 let d = chat_dict(o, c, "MOD", text);
                 bypass(|| o.send(c, conn.client, "chatMessageRecieved:displayNotification:", &[d, 1]));
@@ -1209,4 +1397,109 @@ fn serde_status(mods: &[(bhpc_mods::host::ModStatus, &'static str)]) -> Option<S
         *last = line.clone();
         line
     })
+}
+
+/// The overhead icons of this frame for the window (world positions of the heads drawn), and whether the draw hook
+/// must keep recording heads.
+fn publish_overheads(sh: &Shared) {
+    let shown = MAIN.with(|m| m.borrow().host.as_ref().map(ClientHost::overheads).unwrap_or_default());
+    WANT_HEADS.with(|w| w.set(!shown.is_empty()));
+    let heads = HEADS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+    let list: Vec<_> =
+        shown.into_iter().filter_map(|(player, icon)| heads.get(&player).map(|at| (hud_kind(icon), *at))).collect();
+    *sh.overheads.lock().unwrap_or_else(PoisonError::into_inner) = list;
+}
+
+/// The settings screen follows the open mod, the host, the server's forms and the voice client.
+fn refresh_settings(sh: &Shared) {
+    let view = MAIN.with(|m| {
+        let m = m.borrow();
+        let id = m.settings_open.as_ref()?;
+        let h = m.host.as_ref()?;
+        let binds = h.binds(id);
+        let voice = m.voice.as_ref().map(|v| (v.driver.as_host().master().unwrap_or(100), v.pump.consent_state()));
+        let src =
+            bhpc_mods::form::Sources { voice, client: h.client_settings(id), binds: &binds, server: m.forms.get(id) };
+        Some(bhpc_mods::form::SettingsView::build(id, id, src, m.settings_status.clone()))
+    });
+    sh.view.lock().unwrap_or_else(PoisonError::into_inner).settings = view;
+    sh.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The player changed something on the settings screen or answered the microphone dialog.
+fn settings_cmd(o: &Objc, sh: &Shared, c: &mut Cpu, cmd: UiCmd) {
+    use bhpc_mods::form::{Section, MASTER, MIC};
+    let packet = MAIN.with(|m| {
+        let mut m = m.borrow_mut();
+        let m = &mut *m;
+        let mut packet = None;
+        let status = match cmd {
+            UiCmd::MicConsent(granted) => {
+                sh.view.lock().unwrap_or_else(PoisonError::into_inner).mic_ask = false;
+                if let Some(v) = m.voice.as_mut() {
+                    v.pump.consent(granted);
+                    v.save();
+                }
+                None
+            }
+            UiCmd::CloseSettings => {
+                m.settings_open = None;
+                None
+            }
+            UiCmd::Rebind { mod_id, action, key } => {
+                m.host.as_ref().map(|h| match h.rebind(&mod_id, &action, key.as_deref()) {
+                    Ok(()) => (true, "Key saved".to_string()),
+                    Err(e) => (false, format!("The key was not saved: {e}")),
+                })
+            }
+            UiCmd::Setting { section: Section::Voice, key, value, .. } => m.voice.as_mut().map(|v| {
+                if key == MASTER {
+                    let p = value.as_u64().unwrap_or(100).min(200) as u16;
+                    let _ = v.driver.as_host().set_master(p);
+                } else if key == MIC {
+                    v.pump.consent(value.as_bool().unwrap_or(false));
+                }
+                v.save();
+                (true, "Saved".to_string())
+            }),
+            UiCmd::Setting { section: Section::Client, mod_id, key, value } => {
+                m.host.as_mut().map(|h| match h.set_client_setting(&mod_id, &key, &value) {
+                    Ok(()) => (true, "Saved on this device".to_string()),
+                    Err(e) => (false, e),
+                })
+            }
+            UiCmd::Setting { section: Section::Server, mod_id, key, value } => {
+                packet = m
+                    .flow
+                    .as_ref()
+                    .and_then(|f| f.settings_set_packet(&mod_id, &key, bhpc_mods::form::value_cbor(&value)));
+                Some(match packet {
+                    Some(_) => (true, "Sent to the server…".to_string()),
+                    None => (false, "This server does not take settings changes".to_string()),
+                })
+            }
+            _ => None,
+        };
+        if status.is_some() {
+            m.settings_status = status;
+        }
+        packet.zip(m.conn)
+    });
+    if let Some((bytes, conn)) = packet {
+        send_packet(o, c, conn, &bytes);
+    }
+    refresh_settings(sh);
+}
+
+/// The window's picture of an overhead icon.
+fn hud_kind(icon: bhmod_core::ui::OverheadIcon) -> bhpc_app::hud::Overhead {
+    use bhmod_core::ui::OverheadIcon as I;
+    use bhpc_app::hud::Overhead as O;
+    match icon {
+        I::Speaking => O::Speaking,
+        I::NoVoice => O::NoVoice,
+        I::SelfMute => O::SelfMute,
+        I::Deafen => O::Deafen,
+        I::AdminMute => O::AdminMute,
+    }
 }

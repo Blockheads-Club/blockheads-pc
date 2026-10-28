@@ -108,6 +108,8 @@ pub struct PlayConfig {
     pub mods: Option<crate::modglue::ModsOptions>,
     /// Language of the messages shown over the game.
     pub lang: bhpc_app::hud::Lang,
+    /// Voice chat: the microphone to record from (`None`: the system's default).
+    pub mic_device: Option<String>,
     /// What the buttons, wheel and keys do.
     pub bindings: Bindings,
     /// Render for the launcher's window instead of one of our own: the frame file the launcher created. The video
@@ -155,6 +157,7 @@ impl PlayConfig {
             title: "The Blockheads".into(),
             mods: None,
             lang: bhpc_app::hud::Lang::En,
+            mic_device: None,
             bindings: Bindings::default(),
             embed: None,
             open_uri: None,
@@ -736,7 +739,10 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
             inner: backend,
             flags: flags.clone(),
             fullscreen: false,
-            mic: bhpc_audio::capture::MicDriver::new(flags.mic.clone()),
+            mic: {
+                flags.mic.set_device(cfg.mic_device.clone());
+                bhpc_audio::capture::MicDriver::new(flags.mic.clone())
+            },
         },
         SystemClock::new(),
         // The fullscreen key is a binding now (`HostAction::ToggleFullscreen` from the input mapper). The game's
@@ -1816,13 +1822,15 @@ impl UiThread {
             if let Some((w, h)) = vm.content_size().filter(|s| Some(*s) != mapper.geometry().content) {
                 mapper.set_content(w, h);
             }
+            let mut grid = None;
             if let Some(g) = &self.game {
                 let content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
                 let mem = sink.cpu.mem().clone();
                 let dpad = g.ui.dpad(&mem).and_then(|(size, right)| {
                     crate::gameui::dpad_centre(size, content, right, crate::gameui::DPAD_INSET)
                 });
-                mapper.pad_mut().set_grid(g.ui.grid(&mem, content));
+                grid = g.ui.grid(&mem, content);
+                mapper.pad_mut().set_grid(grid);
                 mapper.set_world_zoom(g.ui.zoom(&mem).is_some());
                 mapper.pad_mut().set_dpad(dpad);
             }
@@ -1896,6 +1904,12 @@ impl UiThread {
                         eprintln!("[zoom] host wheel dx {dx} dy {dy} at {now} ms");
                     }
                 }
+                // Keys for the mods' bindings (API `input`), not while typing, before the push-to-talk of the same key.
+                if let Event::Key { key, pressed, repeat: false, .. } = &ev {
+                    if let Some(name) = bhpc_input::keymap::api_key_name(key.0).filter(|_| mapper.text().is_none()) {
+                        flags.talk.post_key(name, *pressed);
+                    }
+                }
                 if let Some(h) = tracker.map(&ev) {
                     mapper.handle(h, now, &mut sink);
                 }
@@ -1921,6 +1935,17 @@ impl UiThread {
                 v.cursor = mapper.pad().cursor();
                 v.tile = mapper.pad().tile_size();
                 v.content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
+                // Overhead icons: the heads' world positions through the game's tap matrices.
+                let heads = flags
+                    .mods
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                    .map(|m| m.overheads.lock().unwrap_or_else(PoisonError::into_inner).clone());
+                v.overheads = match (grid, heads) {
+                    (Some(g), Some(h)) => h.into_iter().filter_map(|(k, at)| g.screen(at).map(|p| (k, p))).collect(),
+                    _ => Vec::new(),
+                };
             }
             vm.set_dialog_caret(mapper.text_caret());
             // An input dialog: Return in its field presses the focused (first) button, Escape the cancel button.

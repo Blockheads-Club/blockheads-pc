@@ -29,6 +29,7 @@ fn run_with(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn s
         return run_apk(args, stdout, stderr);
     }
     match args.first().map(String::as_str) {
+        Some("--list-mics") => list_mics(stdout, stderr),
         Some("--bench-thunk") => {
             let n = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10_000_000);
             match measure(n) {
@@ -99,7 +100,7 @@ fn run_with(args: &[String], stdout: &mut dyn std::io::Write, stderr: &mut dyn s
             }
         }
         _ => {
-            let _ = writeln!(stderr, "usage: bhpc-run <file.so> [--entry SYMBOL] [--trace-thunks] [--watchdog CYCLES] [--trace-pc FILE] | --bench-thunk [N]");
+            let _ = writeln!(stderr, "usage: bhpc-run <file.so> [--entry SYMBOL] [--trace-thunks] [--watchdog CYCLES] [--trace-pc FILE] | --bench-thunk [N] | --list-mics");
             2
         }
     }
@@ -166,7 +167,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
     if let Some((w, h)) = opt(args, "--window").and_then(|v| v.split_once('x')) {
         cfg.window = (w.parse().unwrap_or(1024), h.parse().unwrap_or(768));
     }
-    match bhpc_run::embed::parse_play_flags(args) {
+    let voice_master = match bhpc_run::embed::parse_play_flags(args) {
         Ok(f) => {
             cfg.fullscreen = f.fullscreen;
             cfg.vsync = f.vsync;
@@ -184,12 +185,14 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             cfg.hide_dpad = f.hide_dpad;
             cfg.pad_tile_cursor = f.pad_tile_cursor;
             cfg.lang = f.lang;
+            cfg.mic_device = f.mic_device;
+            f.voice_master
         }
         Err(e) => {
             let _ = writeln!(stderr, "bhpc-run: {e}");
             return 2;
         }
-    }
+    };
     // The client mod loader: on unless `--no-mods`; files below the data folder.
     if !args.iter().any(|a| a == "--no-mods") {
         let data = bhpc_run::apkrun::data_dirs(cfg.init.data_dir.as_deref(), bhpc_vfs::DataDirs::platform_default());
@@ -208,6 +211,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             jvm: args.iter().any(|a| a == "--mods-jvm"),
             java_home: opt(args, "--mods-java-home").map(Into::into),
             features: Vec::new(),
+            voice_master,
         });
     }
     cfg.control = args.iter().any(|a| a == "--control");
@@ -292,6 +296,29 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
     }
 }
 
+/// `--list-mics`: the recording devices, one name per line (the launcher's voice settings list them).
+#[cfg(feature = "play")]
+fn list_mics(stdout: &mut dyn std::io::Write, stderr: &mut dyn std::io::Write) -> u8 {
+    match bhpc_app::sdl::capture_device_names() {
+        Ok(names) => {
+            for n in names {
+                let _ = writeln!(stdout, "{n}");
+            }
+            0
+        }
+        Err(e) => {
+            let _ = writeln!(stderr, "bhpc-run: cannot list microphones: {e}");
+            1
+        }
+    }
+}
+
+#[cfg(not(feature = "play"))]
+fn list_mics(_stdout: &mut dyn std::io::Write, stderr: &mut dyn std::io::Write) -> u8 {
+    let _ = writeln!(stderr, "bhpc-run: listing microphones needs a build with `--features play`");
+    2
+}
+
 #[cfg(not(feature = "play"))]
 fn play_apk(_args: &[String], _init: bhpc_run::apkrun::InitConfig, stderr: &mut dyn std::io::Write) -> u8 {
     let _ = writeln!(stderr, "bhpc-run: running the game needs a build with `--features play` (or pass --init-only)");
@@ -320,6 +347,14 @@ mod tests {
         let failing = |_: u32| Err(bhpc_run::RunError::NoEntry("bench".into()));
         assert_eq!(run_with(&s(&["--bench-thunk"]), &mut o, &mut e, &failing), 1);
         assert!(String::from_utf8(e).unwrap().contains("bhpc-run: module does not export `bench`"));
+    }
+
+    #[cfg(not(feature = "play"))]
+    #[test]
+    fn microphones_need_the_play_build() {
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        assert_eq!(run(&s(&["--list-mics"]), &mut o, &mut e), 2);
+        assert!(String::from_utf8(e).unwrap().contains("--features play"));
     }
 
     #[test]
