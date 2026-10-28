@@ -18,6 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use bhmod_core::input::InputCommand;
 use bhmod_core::remote::{RemoteCall, RemoteError, RemoteTarget};
 use bhmod_core::storage::FileStorage;
 use bhmod_core::timings::ModTimings;
@@ -25,7 +26,13 @@ use bhmod_core::types::{
     ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandSender, Event, LogLevel, ObjectKind, Pos, Role,
     SavePhase, Side,
 };
-use bhmod_core::{GameBridge, HostOptions, ModHost, ModState, ReloadOutcome, Runtime};
+use bhmod_core::ui::{OverheadIcon, UiCommand};
+use bhmod_core::voice::VoiceEvent;
+use bhmod_core::{GameBridge, HostOptions, ModHost, ModState, ReloadOutcome, Runtime, VoiceHost};
+
+use crate::binds::{BindRow, Binds};
+use crate::overhead::Overheads;
+use crate::voice::VoiceDriver;
 use bhmod_proto::{ServiceCall, ServiceFailure, ServiceResult};
 
 /// Longest kept log.
@@ -44,6 +51,8 @@ pub enum Effect {
     /// Send a service call to the server (`SERVICE_CALL`); the answer comes back through
     /// [`ClientHost::service_result_in`], and a call that cannot be sent is failed with [`ClientHost::service_unavailable`].
     Service(RemoteCall),
+    /// A mod asked for the loader's settings screen of a mod (API 0.3.4 `ui.open-settings`).
+    OpenSettings(String),
 }
 
 /// One log line.
@@ -104,6 +113,12 @@ pub(crate) struct Bridge {
     effects: RefCell<Vec<Effect>>,
     log: RefCell<VecDeque<LogLine>>,
     fresh: RefCell<Vec<LogLine>>,
+    /// The voice client (API 0.3.4 `voice`), when this session runs voice chat.
+    voice: Option<Rc<dyn VoiceDriver>>,
+    /// The mods' key bindings (API 0.3.4 `input`).
+    binds: RefCell<Binds>,
+    /// The mods' overhead icons (API 0.3.4 `ui.set-overhead`).
+    overheads: RefCell<Overheads>,
 }
 
 impl Bridge {
@@ -174,6 +189,38 @@ impl GameBridge for Bridge {
         self.effects.borrow_mut().push(Effect::Service(call.clone()));
         Ok(())
     }
+    fn voice(&self) -> Option<&dyn VoiceHost> {
+        self.voice.as_deref().map(VoiceDriver::as_host)
+    }
+    fn input(&self, mod_id: &str, command: &InputCommand) -> Result<(), ApiError> {
+        let mut b = self.binds.borrow_mut();
+        match command {
+            InputCommand::Bind { action, default_key } => b.bind(mod_id, action, default_key),
+            InputCommand::Unbind { action } => {
+                b.unbind(mod_id, action);
+            }
+            InputCommand::ClearMod => b.clear_mod(mod_id),
+        }
+        Ok(())
+    }
+    fn input_key(&self, mod_id: &str, action: &str, _default_key: &str) -> Option<String> {
+        self.binds.borrow().key_of(mod_id, action)
+    }
+    fn ui(&self, mod_id: &str, command: &UiCommand) -> Result<(), ApiError> {
+        let mut o = self.overheads.borrow_mut();
+        match command {
+            UiCommand::SetOverhead { player, icon } => o.set(mod_id, player, *icon),
+            UiCommand::ClearOverhead { player } => {
+                o.clear(mod_id, player);
+            }
+            UiCommand::OpenSettings { mod_id: of } => self.effects.borrow_mut().push(Effect::OpenSettings(of.clone())),
+            UiCommand::ClearMod => o.clear_mod(mod_id),
+            // HUD widgets, toasts, dialogs and on-screen buttons are not drawn on PC yet (buttons are a touch control;
+            // a desktop mod binds a key instead).
+            _ => return Err(ApiError::Unsupported),
+        }
+        Ok(())
+    }
     fn channel_send(&self, _mod_id: &str, name: &str, target: &ChannelTarget, data: &[u8]) -> Result<(), ApiError> {
         match target {
             ChannelTarget::Server if self.online => {
@@ -210,6 +257,17 @@ pub struct HostSetup<'a> {
     /// Connected to a server.
     pub online: bool,
     pub local_player: String,
+    /// The voice client, when the server runs voice chat with this player.
+    pub voice: Option<Rc<dyn VoiceDriver>>,
+    /// Where the player's keys for mod actions are kept ([`Binds::path`]); `None`: not kept.
+    pub binds: Option<std::path::PathBuf>,
+    /// The device's file of `scope = "client"` settings ([`client_settings_path`]); `None`: defaults only.
+    pub client_settings: Option<std::path::PathBuf>,
+}
+
+/// The device's file of the mods' `scope = "client"` settings, in the launcher's data folder.
+pub fn client_settings_path(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("mod-settings.toml")
 }
 
 /// Luau and (when the engine starts) WASM, compiling into `cache` for later sessions.
@@ -275,10 +333,14 @@ impl ClientHost {
             effects: RefCell::new(Vec::new()),
             log: RefCell::new(VecDeque::new()),
             fresh: RefCell::new(Vec::new()),
+            voice: setup.voice,
+            binds: RefCell::new(setup.binds.as_deref().map(Binds::load).unwrap_or_default()),
+            overheads: RefCell::new(Overheads::default()),
         });
         let mut opts = HostOptions::new(setup.mods_dir, Side::Client);
         opts.runtimes = setup.runtimes;
         opts.storage = Box::new(FileStorage::new(setup.storage_dir));
+        opts.client_settings = setup.client_settings;
         let host = ModHost::load(opts, bridge.clone());
         ClientHost { host, bridge, last_tick: None }
     }
@@ -489,6 +551,49 @@ impl ClientHost {
     /// The connection to the server is gone: open service calls fail with `disconnected`.
     pub fn server_gone(&mut self) {
         self.host.remote_peer_gone(&RemoteTarget::Server);
+    }
+
+    /// Voice chat happened (talk start/stop, states, the microphone): `voice:*` events for the mods with `voice`.
+    pub fn voice_events(&mut self, events: Vec<VoiceEvent>) {
+        for e in &events {
+            self.host.voice_event(e);
+        }
+    }
+
+    /// A key with an `input` name went down or up (not while typing): `<mod>:input` for every action bound to it.
+    /// True when some mod's action took it.
+    pub fn key(&mut self, name: &str, pressed: bool) -> bool {
+        let hits = self.bridge.binds.borrow().find(name);
+        for (m, a) in &hits {
+            self.host.input_event(m, a, pressed);
+        }
+        !hits.is_empty()
+    }
+
+    /// The key bindings of a mod (settings screen).
+    pub fn binds(&self, mod_id: &str) -> Vec<BindRow> {
+        self.bridge.binds.borrow().rows(mod_id)
+    }
+
+    /// The player changed a key of a mod's action (`None` clears it).
+    pub fn rebind(&self, mod_id: &str, action: &str, key: Option<&str>) -> std::io::Result<()> {
+        self.bridge.binds.borrow_mut().set_key(mod_id, action, key)
+    }
+
+    /// The overhead icon per player, without the ones the admin turned off.
+    pub fn overheads(&self) -> Vec<(String, OverheadIcon)> {
+        let v = self.bridge.voice.as_ref().and_then(|d| d.as_host().icons().ok()).unwrap_or_default();
+        self.bridge.overheads.borrow().shown(&v)
+    }
+
+    /// The mod's `scope = "client"` settings form: `({"fields": [...]}, values)`.
+    pub fn client_settings(&self, mod_id: &str) -> Option<(serde_json::Value, serde_json::Value)> {
+        self.host.settings_form(mod_id, bhmod_manifest::settings::Scope::Client)
+    }
+
+    /// The player changes a client setting (stored on the device). The error is the reason for the player.
+    pub fn set_client_setting(&mut self, mod_id: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
+        self.host.set_setting(mod_id, key, value).map(|_| ()).map_err(|e| e.to_string())
     }
 
     /// Effects queued by the mods since the last call.

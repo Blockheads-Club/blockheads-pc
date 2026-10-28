@@ -9,8 +9,11 @@
 //! Nothing here touches the guest: the glue (`bhpc-run`, play build) installs the ObjC hooks, runs everything on
 //! the game's main thread and carries out the actions.
 
+pub mod binds;
+pub mod form;
 pub mod host;
 pub mod join;
+pub mod overhead;
 pub mod session;
 pub mod ui;
 pub mod view;
@@ -29,6 +32,8 @@ pub fn platform() -> String {
 }
 
 #[cfg(test)]
+mod tests_form;
+#[cfg(test)]
 mod tests_host;
 #[cfg(test)]
 mod tests_join;
@@ -38,6 +43,8 @@ mod tests_jvm;
 mod tests_session;
 #[cfg(test)]
 mod tests_voice;
+#[cfg(test)]
+mod tests_voicehost;
 
 /// The `blockheads:api` version the client host implements.
 pub const API_VERSION: &str = bhmod_core::API_VERSION;

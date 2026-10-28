@@ -48,6 +48,9 @@ fn setup(dir: &Path, online: bool, plan: Plan) -> (ClientHost, Vec<Placed>, Vec<
         runtimes: bhmod_core::default_runtimes(),
         online,
         local_player: "ME".into(),
+        voice: None,
+        binds: None,
+        client_settings: None,
     });
     (h, placed, problems)
 }

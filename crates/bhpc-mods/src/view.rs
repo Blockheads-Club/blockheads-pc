@@ -121,6 +121,9 @@ impl JoinView {
                     if p.channels {
                         perms.push("channels".into());
                     }
+                    if p.voice {
+                        perms.push("voice".into());
+                    }
                     JoinMod {
                         name: e.name(),
                         version: e.info.version.clone(),
@@ -241,6 +244,10 @@ pub struct View {
     pub server: Option<String>,
     /// Developer folder mods are loaded (F5 reloads them).
     pub dev: bool,
+    /// The settings screen of a mod is open.
+    pub settings: Option<crate::form::SettingsView>,
+    /// A mod turned the microphone on and the player was never asked: the opt-in dialog shows.
+    pub mic_ask: bool,
 }
 
 /// What the player did in the mod UI.
@@ -267,6 +274,14 @@ pub enum UiCmd {
     Copy(String),
     /// Say this line in the game's chat as if it had been typed (tests, developer tools).
     Say(String),
+    /// A row of the settings screen changed (`key` of the row, the new value).
+    Setting { section: crate::form::Section, mod_id: String, key: String, value: serde_json::Value },
+    /// The player gave a mod action another key (`None`: cleared).
+    Rebind { mod_id: String, action: String, key: Option<String> },
+    /// The answer to the microphone opt-in dialog.
+    MicConsent(bool),
+    /// The settings screen was closed.
+    CloseSettings,
 }
 
 #[derive(serde::Serialize)]

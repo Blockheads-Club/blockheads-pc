@@ -41,8 +41,7 @@ pub struct JoinConfig {
     pub api: String,
     /// `HELLO.runtimes`.
     pub runtimes: Vec<String>,
-    /// `HELLO.features` (e.g. [`crate::voice::FEATURE_VOICE_UNSEQUENCED`]). Not sent yet: the pinned mod-sdk's
-    /// `session::Options` has no `features`; once bumped, `JoinFlow::new` copies them into it.
+    /// `HELLO.features` ([`crate::voice::features`]: `settings`, `voice`, `voice-unsequenced`).
     pub features: Vec<String>,
     /// The launcher's mod folders (the server-mod cache lives in `cache/blobs`).
     pub dirs: ModsDirs,
@@ -155,6 +154,12 @@ pub enum Action {
     ServiceCallIn(bhmod_proto::ServiceCall),
     /// The server answers a call of a client mod (`SERVICE_RESULT`).
     ServiceResultIn(bhmod_proto::ServiceResult),
+    /// `VOICE_KEY`, `VOICE_STATE` or `VOICE_FRAME` for the voice client (both sides listed `voice`).
+    Voice(Message),
+    /// A mod's server settings for an admin (`SETTINGS_SCHEMA`; both sides listed `settings`).
+    SettingsSchema(bhmod_proto::SettingsSchema),
+    /// The answer to a `SETTINGS_SET`.
+    SettingsResult(bhmod_proto::SettingsResult),
 }
 
 /// A server mod the player accepted, downloaded and checked.
@@ -217,6 +222,7 @@ impl JoinFlow {
         opts.busy_retry_ms = BUSY_RETRY.as_millis() as u64;
         // Native packages are vetted here (index listing, "never allow native", the player's confirmation).
         opts.allow_native = true;
+        opts.features = cfg.features.clone();
         let caps = Caps {
             loader: semver::Version::parse(&cfg.loader).unwrap_or_else(|_| semver::Version::new(0, 0, 0)),
             runtimes: cfg
@@ -445,6 +451,32 @@ impl JoinFlow {
         self.handle(out)
     }
 
+    /// Voice chat runs on this connection (both sides listed `voice`).
+    pub fn voice_enabled(&self) -> bool {
+        self.session.voice_enabled()
+    }
+
+    /// Server settings can be shown and changed on this connection (both sides listed `settings`).
+    pub fn settings_enabled(&self) -> bool {
+        self.session.settings_enabled()
+    }
+
+    /// The server's dedicated voice UDP port (`SERVER_HELLO.voiceUdpPort`).
+    pub fn voice_udp_port(&self) -> Option<u16> {
+        self.session.voice_udp_port()
+    }
+
+    /// A reliable packet of the voice client (`VOICE_KEY`, `VOICE_CTRL`), `None` unless voice is on.
+    pub fn voice_packet(&self, packet: Vec<u8>) -> Option<Vec<u8>> {
+        self.session.voice_packet(packet)
+    }
+
+    /// The `SETTINGS_SET` packet changing a server setting (`value`: canonical CBOR), `None` unless both sides
+    /// listed `settings`.
+    pub fn settings_set_packet(&self, mod_id: &str, key: &str, value: Vec<u8>) -> Option<Vec<u8>> {
+        self.session.settings_set(mod_id, key, value)
+    }
+
     /// Hashes a file as it arrives: when `bytes` is the last chunk of a listed file, the session is about to check
     /// it and (on a mismatch) delete it, so the hash of what was received is taken here from the part file plus
     /// the chunk.
@@ -537,6 +569,9 @@ impl JoinFlow {
                 Output::Cosmetics(c) => actions.push(Action::Cosmetics(c)),
                 Output::ServiceCall(c) => actions.push(Action::ServiceCallIn(c)),
                 Output::ServiceResult(r) => actions.push(Action::ServiceResultIn(r)),
+                Output::Voice(m) => actions.push(Action::Voice(m)),
+                Output::SettingsSchema(sc) => actions.push(Action::SettingsSchema(sc)),
+                Output::SettingsResult(r) => actions.push(Action::SettingsResult(r)),
             }
         }
         actions

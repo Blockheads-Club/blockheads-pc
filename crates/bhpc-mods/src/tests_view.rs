@@ -21,6 +21,8 @@ fn join_view_follows_the_flow() {
             client_required: true,
             count: 2,
             players: None,
+            features: vec![],
+            voice_udp_port: None,
         })
         .encode(),
         t,
@@ -30,6 +32,7 @@ fn join_view_follows_the_flow() {
     rich.permissions.world = "read".into();
     rich.permissions.players = vec!["chat".into()];
     rich.permissions.net_http = vec!["x.org".into()];
+    rich.permissions.voice = true;
     let mut nat = info("nn", b"x", true);
     nat.permissions.channels = false;
     nat.permissions.world = String::new();
@@ -40,7 +43,7 @@ fn join_view_follows_the_flow() {
     let v = JoinView::of(&f, t).unwrap();
     assert_eq!(v.stage, JoinStage::Prompt);
     assert!(v.required);
-    assert_eq!(v.mods[0].permissions, ["world:read", "players:chat", "net-http", "channels"]);
+    assert_eq!(v.mods[0].permissions, ["world:read", "players:chat", "net-http", "channels", "voice"]);
     assert!(v.mods[1].native && v.mods[1].refused && v.mods[1].permissions.is_empty());
     assert!(!v.can_accept(true));
     let mut ok = v.clone();
@@ -72,6 +75,8 @@ fn downloading_and_failed_views() {
             client_required: false,
             count: 1,
             players: None,
+            features: vec![],
+            voice_udp_port: None,
         })
         .encode(),
         t,
@@ -96,8 +101,15 @@ fn downloading_and_failed_views() {
 fn accepted(d: &std::path::Path, mods: Vec<bhmod_proto::ModInfo>, t: Instant) -> JoinFlow {
     let mut f = JoinFlow::new(cfg(d));
     f.contact(t);
-    let hello =
-        ServerHello { proto: 1, mods_hash: [1; 32], client_required: true, count: mods.len() as u64, players: None };
+    let hello = ServerHello {
+        proto: 1,
+        mods_hash: [1; 32],
+        client_required: true,
+        count: mods.len() as u64,
+        players: None,
+        features: vec![],
+        voice_udp_port: None,
+    };
     f.packet(&Message::ServerHello(hello).encode(), t);
     f.packet(&Message::ModList(ModList { mods, channels: vec![], registry: Default::default() }).encode(), t);
     f.decide(true, false, t);
