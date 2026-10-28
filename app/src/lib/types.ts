@@ -56,6 +56,15 @@ export interface LaunchConfig {
   show_dpad?: boolean;
   /** The controller cursor moves tile by tile in a world (off by default). Missing in configurations from before it. */
   pad_tile_cursor?: boolean;
+  /** Voice chat: master volume and microphone. Missing in configurations from before it. */
+  voice?: VoiceOptions;
+}
+
+export interface VoiceOptions {
+  /** Every player's voice, 0 to 200 %. */
+  master: number;
+  /** The recording device by name; null: the system's default. */
+  mic_device: string | null;
 }
 
 export interface Prefs {

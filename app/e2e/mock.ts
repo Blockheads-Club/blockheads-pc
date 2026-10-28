@@ -240,6 +240,7 @@ export async function mockTauri(page: Page) {
       },
       game_poll: (a) => snapshot(a.since),
       save_log: () => undefined,
+      list_mics: () => ['USB Mic'],
       update_check: () => {
         if (q.get('update') === 'error') throw 'network unreachable';
         return q.get('update') === 'latest' ? null : update;

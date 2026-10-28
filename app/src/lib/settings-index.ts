@@ -95,6 +95,8 @@ export const SETTINGS: SettingEntry[] = [
 
   { id: 'set-snd-sound', page: 'audio', titleKey: 'set.sound', hintKey: 'set.soundHint', keywords: ['sound', 'volume', 'music', 'effects', 'audio', 'ses', 'müzik', 'efekt', 'ses düzeyi', 'звук', 'громкость', 'музыка', 'эффекты', 'дыбыс', 'дыбыс деңгейі', 'әсерлер'] },
   { id: 'set-snd-mute', page: 'audio', titleKey: 'set.muteBg', hintKey: 'set.muteSoon', keywords: ['mute', 'background', 'silent', 'sessiz', 'arka plan', 'sustur', 'без звука', 'фон', 'тишина', 'отключить звук', 'дыбыссыз', 'өшіру'] },
+  { id: 'set-snd-voice', page: 'audio', titleKey: 'set.voiceVolume', hintKey: 'set.voiceVolumeHint', keywords: ['voice', 'volume', 'chat', 'players', 'ses', 'sesli sohbet', 'ses düzeyi', 'голос', 'громкость', 'голосовой чат', 'дауыс', 'дауыстық чат'] },
+  { id: 'set-snd-mic', page: 'audio', titleKey: 'set.mic', hintKey: 'set.micHint', keywords: ['microphone', 'mic', 'input', 'device', 'record', 'mikrofon', 'giriş', 'cihaz', 'микрофон', 'устройство', 'запись', 'құрылғы'] },
 
   { id: 'set-lng-language', page: 'lang', titleKey: 'set.language', hintKey: 'set.languageHint', keywords: [
     'language', 'english', 'turkish', 'russian', 'kazakh', 'translation', 'dil', 'türkçe', 'ingilizce', 'rusça', 'kazakça', 'çeviri',

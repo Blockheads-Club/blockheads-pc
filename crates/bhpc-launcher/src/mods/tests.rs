@@ -138,6 +138,7 @@ fn permissions_have_bhmod_core_names() {
         players: vec![P::Chat, P::Teleport, P::Kick, P::Ban, P::Inventory, P::Health],
         net_http: vec!["a.test".into()],
         channels: true,
+        voice: true,
         native: true,
     };
     assert_eq!(
@@ -152,6 +153,7 @@ fn permissions_have_bhmod_core_names() {
             "players:health",
             "net-http:a.test",
             "channels",
+            "voice",
             "native"
         ]
     );

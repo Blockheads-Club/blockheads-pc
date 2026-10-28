@@ -151,6 +151,9 @@ pub fn required_permissions(p: &Permissions) -> Vec<String> {
     if p.channels {
         out.push("channels".to_string());
     }
+    if p.voice {
+        out.push("voice".to_string());
+    }
     if p.native {
         out.push("native".to_string());
     }

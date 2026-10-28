@@ -284,6 +284,15 @@ fn open_path(app: tauri::AppHandle, path: String) -> Res<()> {
     app.opener().open_path(path, None::<&str>).map_err(text)
 }
 
+/// The recording devices for the voice chat settings (`bhpc-run --list-mics`; empty when none can be listed).
+#[tauri::command]
+async fn list_mics() -> Res<Vec<String>> {
+    let exe = std::env::current_exe().map_err(text)?;
+    let dir = exe.parent().unwrap_or(Path::new("."));
+    let program = sidecar(bhpc_launcher::session::sidecar_path(dir));
+    Ok(bhpc_launcher::session::list_mics(&program))
+}
+
 /// The sidecar sits next to this executable; `BHPC_RUN` points at another build (development).
 fn sidecar(plan_program: PathBuf) -> PathBuf {
     std::env::var_os("BHPC_RUN").map(PathBuf::from).unwrap_or(plan_program)
@@ -562,6 +571,7 @@ pub fn run() {
             embed_focus,
             embed_fullscreen,
             save_log,
+            list_mics,
             updater::update_check,
             updater::update_install,
             updater::update_progress,

@@ -97,6 +97,57 @@ describe('Settings > game, graphics, audio, language', () => {
   });
 });
 
+describe('Settings > audio > voice chat', () => {
+  it('sets the voice volume and the microphone', async () => {
+    render(SettingsAudio);
+    await waitFor(() => expect(screen.getByRole('option', { name: 'USB Mic' })).toBeInTheDocument());
+    expect(mock.api.listMics).toHaveBeenCalledTimes(1);
+    const slider = screen.getByRole('slider', { name: 'Voice volume' });
+    expect(screen.getByText('100 %')).toBeVisible();
+    await fireEvent.input(slider, { target: { value: '150' } });
+    expect(screen.getByText('150 %')).toBeVisible();
+    await fireEvent.change(slider, { target: { value: '150' } });
+    await waitFor(() =>
+      expect(mock.api.saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ voice: { master: 150, mic_device: null } }))
+    );
+    await fireEvent.change(screen.getByLabelText('Microphone'), { target: { value: 'USB Mic' } });
+    await waitFor(() =>
+      expect(mock.api.saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ voice: { master: 150, mic_device: 'USB Mic' } }))
+    );
+    await fireEvent.change(screen.getByLabelText('Microphone'), { target: { value: '' } });
+    await waitFor(() =>
+      expect(mock.api.saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ voice: { master: 150, mic_device: null } }))
+    );
+    // The runner cannot list devices: only the default; Refresh asks again.
+    mock.api.listMics = vi.fn(async () => { throw new Error('no runner'); });
+    await click('Look for microphones again');
+    await waitFor(() => expect(store.mics).toEqual([]));
+    expect(screen.queryByRole('option', { name: 'USB Mic' })).toBeNull();
+  });
+
+  it('keeps an unplugged microphone and reads configurations from before voice chat', async () => {
+    store.config = makeConfig({ voice: { master: 300, mic_device: 'Old Mic' } });
+    render(SettingsAudio);
+    expect(screen.getByRole('option', { name: 'Old Mic' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('option', { name: 'USB Mic' })).toBeInTheDocument());
+    cleanup();
+    store.mics = ['USB Mic'];
+    render(SettingsAudio);
+    expect(screen.getByRole('option', { name: 'Old Mic' })).toBeInTheDocument();
+    expect(mock.api.listMics).toHaveBeenCalledTimes(1);
+    cleanup();
+    store.config = makeConfig({ voice: undefined });
+    store.mics = null;
+    render(SettingsAudio);
+    expect(screen.getByText('100 %')).toBeVisible();
+    await store.setVoiceMaster(-5);
+    expect(mock.api.saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ voice: { master: 0, mic_device: null } }));
+    store.config = makeConfig({ voice: undefined });
+    await store.setMicDevice('USB Mic');
+    expect(mock.api.saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ voice: { master: 100, mic_device: 'USB Mic' } }));
+  });
+});
+
 describe('Settings pages', () => {
   const nav = () => screen.getByRole('navigation', { name: 'Settings sections' });
   const item = (name: string) => within(nav()).getByRole('button', { name: new RegExp(`^${name}`) });
@@ -202,7 +253,7 @@ describe('Settings search', () => {
     await type('game speed');
     expect(titles()).toEqual(['Game speed', 'FPS limit']);
     await type('volume');
-    expect(titles()).toEqual(['Game sound']);
+    expect(titles()).toEqual(['Voice volume', 'Game sound']);
     await type('dil');
     expect(titles()).toEqual(['Launcher language']);
     await type('vsync');
@@ -215,8 +266,8 @@ describe('Settings search', () => {
     await type('tearing smoother');
     expect(titles()).toEqual(['VSync']);
     await type('audio');
-    expect(titles()).toEqual(['Game sound', 'Mute when Blockheads PC is in the background']);
-    expect(within(nav()).getByLabelText('2 matches')).toBeVisible();
+    expect(titles()).toEqual(['Game sound', 'Mute when Blockheads PC is in the background', 'Voice volume', 'Microphone']);
+    expect(within(nav()).getByLabelText('4 matches')).toBeVisible();
     await type('zzzz');
     expect(screen.getByText('No settings match “zzzz”')).toBeVisible();
     expect(screen.getByRole('status')).toHaveTextContent('0 settings found');

@@ -15,6 +15,7 @@ export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
     controller: true,
     show_dpad: false,
     pad_tile_cursor: false,
+    voice: { master: 100, mic_device: null },
     ...over
   };
 }
@@ -82,6 +83,7 @@ export function makeApi(over: Record<string, unknown> = {}) {
     gameStop: vi.fn(async () => {}),
     gamePoll: vi.fn(async () => makeSnap()),
     saveLog: vi.fn(async () => {}),
+    listMics: vi.fn(async () => ['USB Mic', 'Built-in Audio']),
     updateCheck: vi.fn(async () => ({ version: '0.2.0', size_mb: 43, notes: ['one', 'two'] })),
     updateInstall: vi.fn(async () => {}),
     updateRestart: vi.fn(async () => {}),

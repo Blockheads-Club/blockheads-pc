@@ -190,6 +190,14 @@ fn run_args_and_config_expansion() {
     c.window.parallel_threads = true;
     c.show_dpad = false;
     c.pad_tile_cursor = false;
+    // Voice chat: the master volume when not 100 %, the microphone when one is chosen.
+    c.voice.master = 150;
+    c.voice.mic_device = Some("USB Mic".into());
+    assert_eq!(c.run_args()[14..], ["--voice-master", "150", "--mic-device", "USB Mic"]);
+    c.voice.mic_device = Some(String::new());
+    c.voice.master = 900;
+    assert_eq!(c.run_args()[14..], ["--voice-master", "200"]);
+    c.voice = crate::config::VoiceOptions::default();
     use crate::window::FpsPosition;
     for (p, flag) in [(FpsPosition::TopRight, "tr"), (FpsPosition::BottomLeft, "bl"), (FpsPosition::BottomRight, "br")]
     {
@@ -1103,4 +1111,13 @@ fn launcher_links_and_copy_lines() {
     assert_eq!(page_line("<b>1%</b>\n"), "@page <b>1%25</b>%0A");
     assert_eq!(parse_page(&page_line("<p>\u{e9}\r\n</p>")).as_deref(), Some("<p>\u{e9}\r\n</p>"));
     assert_eq!(parse_page("@copy x"), None);
+}
+
+#[test]
+fn microphones_from_the_runner() {
+    use crate::session::{list_mics, mic_names};
+    assert_eq!(mic_names(b"USB Mic\r\n\n  Built-in  \n"), ["USB Mic", "Built-in"]);
+    assert!(list_mics(std::path::Path::new("/nonexistent/bhpc-run")).is_empty());
+    // A program that fails on the flag (this test binary does not know it).
+    assert!(list_mics(&std::env::current_exe().unwrap()).is_empty());
 }

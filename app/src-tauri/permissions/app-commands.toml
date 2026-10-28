@@ -31,6 +31,7 @@ permissions = [
   "allow-embed-focus",
   "allow-embed-fullscreen",
   "allow-save-log",
+  "allow-list-mics",
   "allow-update-check",
   "allow-update-install",
   "allow-update-progress",

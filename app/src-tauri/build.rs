@@ -32,6 +32,7 @@ const COMMANDS: &[&str] = &[
     "embed_focus",
     "embed_fullscreen",
     "save_log",
+    "list_mics",
     "update_check",
     "update_install",
     "update_progress",
