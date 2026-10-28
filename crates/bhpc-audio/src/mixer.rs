@@ -103,6 +103,8 @@ struct Stream {
     /// Fractional source position (0 when the rates are equal).
     frac: f64,
     gain: f32,
+    /// [`Mixer::set_quiet`]: no [`MixerEvent`]s for this stream.
+    quiet: bool,
     played_index: u32,
     played_frames: u64,
 }
@@ -213,6 +215,7 @@ impl Mixer {
                 pos: 0,
                 frac: 0.0,
                 gain: 1.0,
+                quiet: false,
                 played_index: 0,
                 played_frames: 0,
             },
@@ -293,6 +296,12 @@ impl Mixer {
         self.with(id, |s| s.gain = gain)
     }
 
+    /// A quiet stream reports nothing on [`Mixer::events`] (streams fed by host code, such as voice chat, whose
+    /// buffer completions no guest-side consumer waits for).
+    pub fn set_quiet(&self, id: StreamId, quiet: bool) -> Result<(), MixError> {
+        self.with(id, |s| s.quiet = quiet)
+    }
+
     /// Block until the stream has at most `max_frames` queued, it vanished, or `timeout` passed.
     /// Returns whether the condition holds.
     pub fn wait_for_space(&self, id: StreamId, max_frames: usize, timeout: Duration) -> bool {
@@ -351,10 +360,14 @@ impl Mixer {
                         s.pos = 0;
                         s.played_index = s.played_index.wrapping_add(1);
                         freed = true;
-                        self.shared.events.push(MixerEvent::BufferDone(id));
+                        if !s.quiet {
+                            self.shared.events.push(MixerEvent::BufferDone(id));
+                        }
                         if s.queue.is_empty() {
                             s.frac = 0.0;
-                            self.shared.events.push(MixerEvent::QueueEmpty(id));
+                            if !s.quiet {
+                                self.shared.events.push(MixerEvent::QueueEmpty(id));
+                            }
                             break;
                         }
                     }
