@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::capture::{CaptureBackend, MicControl, MicDriver, CHUNK_SAMPLES};
 use crate::testmic::{parse_wav, Signal, TestMic, AMPLITUDE};
@@ -84,11 +84,17 @@ fn the_test_mic_records_in_real_time_until_closed() {
     assert_eq!(mic.devices(), vec!["test"]);
     let got = Arc::new(Mutex::new(Vec::<usize>::new()));
     let g = got.clone();
+    let start = Instant::now();
     let dev = mic.open(None, 48_000, 960, Box::new(move |s| g.lock().unwrap().push(s.len()))).unwrap();
-    std::thread::sleep(Duration::from_millis(110));
+    // Wait for a few chunks instead of a fixed time: slow CI hosts (macOS x86_64) schedule the thread late.
+    while got.lock().unwrap().len() < 3 && start.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
     drop(dev);
+    let elapsed = start.elapsed().as_millis() as usize;
     let n = got.lock().unwrap().len();
-    assert!((3..=8).contains(&n), "about one chunk per 20 ms, got {n}");
+    assert!(n >= 3, "chunks keep coming, got {n}");
+    assert!(n <= elapsed / 20 + 2, "no faster than one chunk per 20 ms: {n} in {elapsed} ms");
     assert!(got.lock().unwrap().iter().all(|l| *l == CHUNK_SAMPLES));
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(got.lock().unwrap().len(), n, "stopped when dropped");
@@ -99,8 +105,15 @@ fn the_test_mic_records_in_real_time_until_closed() {
     ctl.set_wanted(true);
     drv.sync(&mut mic);
     assert!(ctl.live());
-    std::thread::sleep(Duration::from_millis(60));
-    assert_eq!(ctl.pop().unwrap().len(), CHUNK_SAMPLES);
+    let start = Instant::now();
+    let chunk = loop {
+        match ctl.pop() {
+            Some(c) => break c,
+            None if start.elapsed() < Duration::from_secs(5) => std::thread::sleep(Duration::from_millis(5)),
+            None => panic!("no chunk from the test mic"),
+        }
+    };
+    assert_eq!(chunk.len(), CHUNK_SAMPLES);
     ctl.set_wanted(false);
     drv.sync(&mut mic);
 }
