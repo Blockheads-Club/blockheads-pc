@@ -578,6 +578,8 @@ struct Watched {
     fullscreen: bool,
     /// Opens the microphone while voice chat wants it (SDL audio calls stay on this thread).
     mic: bhpc_audio::capture::MicDriver,
+    /// `BHPC_VOICE_TEST_MIC`: a generated or recorded signal instead of the microphone (headless voice tests).
+    test_mic: Option<bhpc_audio::testmic::TestMic>,
 }
 
 /// SDL's recording devices as a voice capture backend.
@@ -615,7 +617,10 @@ impl Backend for Watched {
             }
         }
         let was_open = self.mic.is_open();
-        self.mic.sync(&mut SdlMic(&mut self.inner));
+        match self.test_mic.as_mut() {
+            Some(t) => self.mic.sync(t),
+            None => self.mic.sync(&mut SdlMic(&mut self.inner)),
+        }
         if was_open && !self.mic.is_open() {
             eprintln!("[voice] microphone off");
         }
@@ -742,6 +747,17 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
             mic: {
                 flags.mic.set_device(cfg.mic_device.clone());
                 bhpc_audio::capture::MicDriver::new(flags.mic.clone())
+            },
+            test_mic: match bhpc_audio::testmic::TestMic::from_env() {
+                Some(Ok(t)) => {
+                    eprintln!("[voice] test microphone: {}", std::env::var("BHPC_VOICE_TEST_MIC").unwrap_or_default());
+                    Some(t)
+                }
+                Some(Err(e)) => {
+                    eprintln!("[voice] {e}");
+                    None
+                }
+                None => None,
             },
         },
         SystemClock::new(),

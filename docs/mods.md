@@ -172,7 +172,20 @@ Lower seams from the V5 groundwork:
 | Mic-on indicator | `overlay::PadView::mic` + `hud::mic_picture` | Drawn by the host top-right whenever the device is open (`MicControl::live`); mods cannot reach it. |
 | Playback | `bhpc_audio::voice::VoiceOut` | Per-speaker streams (`push`, gain and pan baked in) or the finished mix (`push_stereo`). Cleared outside a server's world. |
 
-`BHPC_VOICE_TRACE=1` logs push-to-talk keys.
+Test hooks (headless runs, all off unless set):
+
+- `BHPC_VOICE_TRACE=1` logs push-to-talk keys and the voice path (`[voice]` lines, `VoicePump::set_trace`): a counter
+  line per second (`stats <ms> mic <audible>/<frames>`, datagrams sent to the voice UDP port by kind (`AUTH`, frames),
+  received (`AUTH_OK`, frames), mixes written / audible, RMS peaks), rising edges of sound (`onset mic|mix <ms>`, for
+  latency), every voice event (`event <ms> TalkStart ...`, states, the microphone) and the overhead icons shown.
+- `BHPC_VOICE_TEST_MIC=sine[:HZ] | pulse[:HZ[:ON_MS[:PERIOD_MS]]] | <file.wav>` records a generated tone or a WAV file
+  (16-bit PCM, 48 kHz) in real time instead of the microphone (`bhpc_audio::testmic`).
+- `BHPC_ANDROID_ID=<hex>` gives the game another device id (`VerdeActivity.uuid()` uses the first 12 digits): every
+  copy of the port reports the same one by default, and a server lets one device play under one name at a time.
+
+`scripts/e2e-voice.sh` uses them: a server with the voice mod and three games (two talking, one with the loader off);
+it checks AUTH on the voice UDP port, audio both ways, a live `/mods set`, an admin mute, the icons and the vanilla
+join, and prints frames by phase and the latency.
 
 ## Newer mod loader: "Update after this game"
 

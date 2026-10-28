@@ -19,6 +19,7 @@ pub mod mixer;
 pub mod music;
 pub mod pcm;
 pub mod sles;
+pub mod testmic;
 pub mod track;
 pub mod voice;
 
@@ -37,5 +38,7 @@ mod tests;
 mod tests_music;
 #[cfg(test)]
 mod tests_sles;
+#[cfg(test)]
+mod tests_testmic;
 #[cfg(test)]
 mod tests_voice;

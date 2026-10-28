@@ -332,3 +332,43 @@ fn voice_client_sends_map_one_to_one() {
     assert_eq!(outgoing(O::Reliable(vec![1])), Outgoing::Reliable(vec![1]));
     assert_eq!(outgoing(O::Udp(vec![3])), Outgoing::Udp(vec![3]));
 }
+
+#[test]
+fn trace_counts_the_voice_path() {
+    let d = FakeDriver::default();
+    let mut io = FakeIo::default();
+    let mut p = VoicePump::new(Consent::Granted);
+    assert!(p.take_trace().is_empty() && p.trace().is_none(), "off by default");
+    p.set_trace(true);
+    d.wanted.set(true);
+    d.port.set(Some(7777));
+    // Popped from the end: a silent chunk, then two loud ones.
+    io.chunks = vec![vec![8000; FRAME], vec![8000; FRAME], vec![0; FRAME]];
+    io.udp_in = vec![vec![2, 0, 0], vec![3, 0, 0], vec![9], vec![]];
+    d.send.borrow_mut().extend([Outgoing::Udp(vec![1, 0, 0]), Outgoing::Udp(vec![3, 0, 0])]);
+    d.events.borrow_mut().push(VoiceEvent::Mic(MicState::On));
+    p.frame(&d, &mut io, 1000);
+    let t = p.trace().unwrap().clone();
+    assert_eq!((t.mic_frames, t.mic_audible), (3, 2));
+    assert_eq!((t.sent_auth, t.sent_frames), (1, 1));
+    assert_eq!((t.got_auth_ok, t.got_frames, t.got_other), (1, 1, 2));
+    assert_eq!((t.mixes, t.mixes_audible), (OUT_TARGET as u64, OUT_TARGET as u64));
+    let lines = p.take_trace();
+    assert_eq!(lines, ["onset mic 1000 rms 0.244", "onset mix 1000 rms 0.011", "event 1000 Mic(On)"]);
+    // A second later: a counter line; loud mixes give one onset.
+    io.queued = 0;
+    p.frame(&d, &mut io, 2000);
+    let lines = p.take_trace();
+    assert!(lines[0].starts_with("stats 2000 mic 2/3 audible, sent auth 1 frames 1, got auth_ok 1 frames 1 other 2"));
+    assert!(lines[0].ends_with("peak rms mic 0.244 mix 0.011"), "{}", lines[0]);
+    assert_eq!(lines.len(), 1, "still loud: no new onset");
+    let mut tr = VoiceTrace::default();
+    tr.mixed(5, &[0.5; 4]);
+    tr.mixed(6, &[0.5; 4]);
+    tr.mixed(7, &[0.0; 4]);
+    tr.mixed(8, &[0.5; 4]);
+    assert_eq!(tr.mixes_audible, 3);
+    p.set_trace(false);
+    assert!(p.take_trace().is_empty());
+    assert_eq!(rms(&[]), 0.0);
+}

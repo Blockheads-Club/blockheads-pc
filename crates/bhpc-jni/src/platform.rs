@@ -284,6 +284,17 @@ impl Default for Platform {
     }
 }
 
+/// The `Settings.Secure.ANDROID_ID` the guest sees: `BHPC_ANDROID_ID` when it is 1-16 hex digits, else the fixed
+/// default. Headless tests that run several clients on one server need it: the game's device id (`udidNew` of its
+/// join) comes from `VerdeActivity.uuid()`, built from the first 12 digits, and a server lets one device play under
+/// one name at a time.
+pub fn android_id(env: Option<&str>) -> String {
+    match env {
+        Some(v) if (1..=16).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_hexdigit()) => v.to_ascii_lowercase(),
+        _ => Platform::default().android_id,
+    }
+}
+
 impl Platform {
     /// Platform values for a guest whose directories are the Android paths of `paths` (what
     /// `bhpc-vfs` mounts): the guest sees these strings, the VFS maps them to the host.
@@ -295,6 +306,7 @@ impl Platform {
             external_dir: "/sdcard".to_string(),
             obb_dir: paths.obb_dir(),
             apk_path: paths.code_path(),
+            android_id: android_id(std::env::var("BHPC_ANDROID_ID").ok().as_deref()),
             ..Platform::default()
         }
     }
@@ -347,5 +359,14 @@ mod tests {
         p.locale = "pt-BR.UTF-8".into();
         assert_eq!(p.language_country(), ("pt".into(), "BR".into()));
         assert!(p.files_dir.ends_with("/files"));
+    }
+
+    #[test]
+    fn android_id_override() {
+        assert_eq!(android_id(None), "0123456789abcdef");
+        assert_eq!(android_id(Some("00000000000000A1")), "00000000000000a1");
+        for bad in ["", "xyz", "0123456789abcdef0"] {
+            assert_eq!(android_id(Some(bad)), "0123456789abcdef", "{bad:?}");
+        }
     }
 }

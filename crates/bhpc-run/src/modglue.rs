@@ -189,6 +189,8 @@ thread_local! {
     /// Heads of the blockheads drawn this frame, by alias (world tiles).
     static HEADS: RefCell<HashMap<String, (f32, f32)>> = RefCell::new(HashMap::new());
     static WANT_HEADS: Cell<bool> = const { Cell::new(false) };
+    /// The overhead icons last logged (`BHPC_VOICE_TRACE`).
+    static TRACED_OVERHEADS: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 /// True while some mod shows an overhead icon (the draw hook then records where the blockheads are).
@@ -563,6 +565,9 @@ impl ModGlue {
             let now_ms =
                 std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
             let out = v.pump.frame(&*v.driver, &mut v.io, now_ms);
+            for line in v.pump.take_trace() {
+                eprintln!("[voice] {line}");
+            }
             let packets: Vec<Vec<u8>> =
                 v.io.take_reliable()
                     .into_iter()
@@ -975,7 +980,11 @@ fn start_voice(opts: &ModsOptions) -> Option<VoiceSession> {
     log("voice chat is on for this server");
     Some(VoiceSession {
         driver,
-        pump: bhpc_mods::voice::VoicePump::new(prefs.mic),
+        pump: {
+            let mut p = bhpc_mods::voice::VoicePump::new(prefs.mic);
+            p.set_trace(std::env::var_os("BHPC_VOICE_TRACE").is_some());
+            p
+        },
         io: pcio,
         prefs,
         prefs_path,
@@ -1443,6 +1452,12 @@ fn publish_overheads(sh: &Shared) {
             h.map(ClientHost::online).unwrap_or_default(),
         )
     });
+    if std::env::var_os("BHPC_VOICE_TRACE").is_some() {
+        let now = format!("{shown:?}");
+        if TRACED_OVERHEADS.with(|t| t.replace(now.clone())) != now {
+            eprintln!("[voice] overhead icons {now}");
+        }
+    }
     // Heads are recorded while icons show or voice chat runs (clicks on a blockhead pick a player).
     WANT_HEADS.with(|w| w.set(!shown.is_empty() || voice));
     let heads = HEADS.with(|h| std::mem::take(&mut *h.borrow_mut()));

@@ -210,12 +210,29 @@ pub struct VoicePump {
     /// The key of the last key event belongs to a mod binding: the push-to-talk event that follows it is not for the
     /// loader's own push-to-talk.
     key_bound: bool,
+    /// Counters for `BHPC_VOICE_TRACE=1` (headless tests), when on.
+    trace: Option<VoiceTrace>,
 }
 
 impl VoicePump {
     /// A pump with the player's stored microphone answer.
     pub fn new(consent: Consent) -> VoicePump {
         VoicePump { consent, ..VoicePump::default() }
+    }
+
+    /// Turns the voice path counters on (`BHPC_VOICE_TRACE=1`; [`VoicePump::take_trace`] gives their lines).
+    pub fn set_trace(&mut self, on: bool) {
+        self.trace = on.then(VoiceTrace::default);
+    }
+
+    /// The trace lines since the last call (none while the trace is off).
+    pub fn take_trace(&mut self) -> Vec<String> {
+        self.trace.as_mut().map(|t| std::mem::take(&mut t.lines)).unwrap_or_default()
+    }
+
+    /// The trace counters, when on.
+    pub fn trace(&self) -> Option<&VoiceTrace> {
+        self.trace.as_ref()
     }
 
     /// The player's stored or given microphone answer.
@@ -298,8 +315,14 @@ impl VoicePump {
                 *o = f32::from(*s) / 32768.0;
             }
             d.on_mic_frame(&pcm);
+            if let Some(t) = self.trace.as_mut() {
+                t.mic(now_ms, &pcm);
+            }
         }
         for datagram in io.recv_udp() {
+            if let Some(t) = self.trace.as_mut() {
+                t.received(&datagram);
+            }
             d.on_udp(&datagram);
         }
         for o in d.poll_send(now_ms) {
@@ -307,6 +330,9 @@ impl VoicePump {
                 Outgoing::Reliable(p) => io.send_reliable(p),
                 Outgoing::Udp(p) => {
                     if let Some(port) = d.udp_port() {
+                        if let Some(t) = self.trace.as_mut() {
+                            t.sent(&p);
+                        }
                         io.send_udp(port, &p);
                     }
                 }
@@ -317,11 +343,18 @@ impl VoicePump {
         while io.out_queued() < OUT_TARGET * FRAME && n < OUT_TARGET {
             buf.fill(0.0);
             d.mix(&mut buf);
+            if let Some(t) = self.trace.as_mut() {
+                t.mixed(now_ms, &buf);
+            }
             io.out_push(&buf);
             n += 1;
         }
         out.events = d.take_events();
         out.transmitting = d.transmitting();
+        if let Some(t) = self.trace.as_mut() {
+            t.events(now_ms, &out.events);
+            t.report(now_ms);
+        }
         out
     }
 
@@ -332,6 +365,118 @@ impl VoicePump {
         self.started = false;
         self.asking = false;
         self.told = None;
+    }
+}
+
+/// Root mean square of samples in -1..1.
+pub fn rms(pcm: &[f32]) -> f32 {
+    if pcm.is_empty() {
+        return 0.0;
+    }
+    (pcm.iter().map(|s| s * s).sum::<f32>() / pcm.len() as f32).sqrt()
+}
+
+/// Above this RMS a microphone frame or a mix counts as sound (about -40 dBFS).
+pub const AUDIBLE_RMS: f32 = 0.01;
+/// How often [`VoiceTrace`] writes a counter line.
+pub const TRACE_EVERY_MS: u64 = 1000;
+
+/// Counters of the voice path for headless tests (`BHPC_VOICE_TRACE=1`): microphone frames fed to the client,
+/// datagrams sent and received on the voice UDP port by kind (`01 AUTH`, `02 AUTH_OK`, `03 FRAME`), mixes written and
+/// how many were audible, RMS peaks, rising edges of sound (`onset` lines, for latency) and the voice events.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VoiceTrace {
+    pub mic_frames: u64,
+    pub mic_audible: u64,
+    pub sent_auth: u64,
+    pub sent_frames: u64,
+    pub got_auth_ok: u64,
+    pub got_frames: u64,
+    pub got_other: u64,
+    pub mixes: u64,
+    pub mixes_audible: u64,
+    /// Peaks since the last counter line.
+    pub mic_peak: f32,
+    pub mix_peak: f32,
+    mic_loud: bool,
+    mix_loud: bool,
+    last_report: Option<u64>,
+    lines: Vec<String>,
+}
+
+impl VoiceTrace {
+    /// A microphone frame went to the client.
+    pub fn mic(&mut self, now_ms: u64, pcm: &[f32]) {
+        let r = rms(pcm);
+        self.mic_frames += 1;
+        self.mic_peak = self.mic_peak.max(r);
+        let loud = r >= AUDIBLE_RMS;
+        self.mic_audible += u64::from(loud);
+        if loud && !self.mic_loud {
+            self.lines.push(format!("onset mic {now_ms} rms {r:.3}"));
+        }
+        self.mic_loud = loud;
+    }
+
+    /// A datagram was sent to the voice UDP port.
+    pub fn sent(&mut self, d: &[u8]) {
+        match d.first() {
+            Some(1) => self.sent_auth += 1,
+            _ => self.sent_frames += 1,
+        }
+    }
+
+    /// A datagram came from the voice UDP port.
+    pub fn received(&mut self, d: &[u8]) {
+        match d.first() {
+            Some(2) => self.got_auth_ok += 1,
+            Some(3) => self.got_frames += 1,
+            _ => self.got_other += 1,
+        }
+    }
+
+    /// A mix went to the speakers.
+    pub fn mixed(&mut self, now_ms: u64, stereo: &[f32]) {
+        let r = rms(stereo);
+        self.mixes += 1;
+        self.mix_peak = self.mix_peak.max(r);
+        let loud = r >= AUDIBLE_RMS;
+        self.mixes_audible += u64::from(loud);
+        if loud && !self.mix_loud {
+            self.lines.push(format!("onset mix {now_ms} rms {r:.3}"));
+        }
+        self.mix_loud = loud;
+    }
+
+    /// The voice events of a frame.
+    pub fn events(&mut self, now_ms: u64, events: &[VoiceEvent]) {
+        self.lines.extend(events.iter().map(|e| format!("event {now_ms} {e:?}")));
+    }
+
+    /// Writes a counter line every [`TRACE_EVERY_MS`].
+    pub fn report(&mut self, now_ms: u64) {
+        let last = *self.last_report.get_or_insert(now_ms);
+        if now_ms < last + TRACE_EVERY_MS {
+            return;
+        }
+        self.last_report = Some(now_ms);
+        self.lines.push(format!(
+            "stats {now_ms} mic {}/{} audible, sent auth {} frames {}, got auth_ok {} frames {} other {}, mix {}/{} audible, \
+             peak rms mic {:.3} mix {:.3}",
+            self.mic_audible,
+            self.mic_frames,
+            self.sent_auth,
+            self.sent_frames,
+            self.got_auth_ok,
+            self.got_frames,
+            self.got_other,
+            self.mixes_audible,
+            self.mixes,
+            self.mic_peak,
+            self.mix_peak
+        ));
+        self.mic_peak = 0.0;
+        self.mix_peak = 0.0;
     }
 }
 
