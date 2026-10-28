@@ -50,6 +50,9 @@ const IVARS: [(&str, &str); 15] = [
     ("Blockhead", "headHairTexture"),
 ];
 
+/// Ivars used when the game exports them (overhead icons).
+const OPTIONAL_IVARS: [(&str, &str); 2] = [("DynamicObject", "floatPos"), ("Blockhead", "clientName")];
+
 /// Exports of the game's libraries the hooks need.
 #[derive(Clone)]
 pub struct Ivars {
@@ -66,10 +69,20 @@ impl Ivars {
             let a = export(&format!("OBJC_IVAR_$_{class}.{name}")).ok_or(format!("no ivar {class}.{name}"))?;
             addr.insert(&*Box::leak(format!("{class}.{name}").into_boxed_str()), a);
         }
+        // Optional: where a blockhead is and whose it is, for the voice chat's overhead icons.
+        for (class, name) in OPTIONAL_IVARS {
+            if let Some(a) = export(&format!("OBJC_IVAR_$_{class}.{name}")) {
+                addr.insert(&*Box::leak(format!("{class}.{name}").into_boxed_str()), a);
+            }
+        }
         Ok(Ivars { store_strong, addr })
     }
 
     /// The offset of an ivar: `Class.name`, or just `name` for the ones of `Blockhead` and `DynamicObject`.
+    pub(crate) fn has(&self, name: &str) -> bool {
+        self.addr.contains_key(name)
+    }
+
     pub(crate) fn offset(&self, c: &mut Cpu, name: &str) -> u32 {
         let a = [name.to_string(), format!("Blockhead.{name}"), format!("DynamicObject.{name}")]
             .iter()
@@ -597,6 +610,9 @@ pub(crate) fn register(hooks: &ObjcHooks, o: Arc<Objc>, iv: Ivars) {
                 if let Some((o, iv)) = GLUE.with(|g| g.borrow().clone()) {
                     let bh = inv.receiver();
                     refresh(&o, inv.cpu(), &iv, bh);
+                    if crate::modglue::overheads_wanted() {
+                        note_position(&o, inv.cpu(), &iv, bh);
+                    }
                 }
             }
         },
@@ -759,4 +775,34 @@ fn other_draw(target: &str) -> crate::objchook::Sig {
         return Sig { ret: Ty::Void, args: vec![matrix, matrix] };
     }
     Sig { ret: Ty::Void, args: vec![Ty::F32, matrix, matrix, Ty::Word, Ty::Word, Ty::Word, Ty::Word] }
+}
+
+/// Where a drawn blockhead's head is (world tiles: `floatPos` is the middle of its feet, the body is two tiles tall)
+/// and whose it is (`clientName`, the alias the PC bridge names players by; this client's own blockheads have none),
+/// for the overhead icons.
+fn note_position(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32) {
+    if !iv.has("DynamicObject.floatPos") || !iv.has("Blockhead.clientName") {
+        return;
+    }
+    let off = iv.offset(c, "floatPos");
+    let (Ok(x), Ok(y)) = (c.mem().read_u32(bh + off), c.mem().read_u32(bh + off + 4)) else { return };
+    let (x, y) = (f32::from_bits(x), f32::from_bits(y));
+    if !x.is_finite() || !y.is_finite() {
+        return;
+    }
+    let name_off = iv.offset(c, "clientName");
+    let name = c.mem().read_u32(bh + name_off).unwrap_or(0);
+    let mut alias = if name == 0 { String::new() } else { o.string(c, name) };
+    if alias.is_empty() && !is_net(c, iv, bh) {
+        alias = crate::modglue::MAIN.with(|m| m.borrow().local.clone());
+    }
+    let head = (x, y + bhpc_mods::overhead::HEAD_LIFT);
+    // Mods name players by alias on PC, by id (`clientID`) once voice chat lists them: both are kept.
+    let id = player_of(o, c, iv, bh, false);
+    if !id.is_empty() && id != alias {
+        crate::modglue::note_head(id, head);
+    }
+    if !alias.is_empty() {
+        crate::modglue::note_head(alias, head);
+    }
 }

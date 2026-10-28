@@ -51,6 +51,8 @@ export const api = {
   embedFullscreen: (on: boolean) => invoke<void>('embed_fullscreen', { on }),
   gamePoll: (since: number) => invoke<Snapshot>('game_poll', { since }),
   saveLog: (path: string) => invoke<void>('save_log', { path }),
+  /** The recording devices the game runner sees (voice chat). */
+  listMics: () => invoke<string[]>('list_mics'),
   updateCheck: () => invoke<UpdateInfo | null>('update_check'),
   updateInstall: () => invoke<void>('update_install'),
   updateProgress: () => invoke<UpdateProgress>('update_progress'),

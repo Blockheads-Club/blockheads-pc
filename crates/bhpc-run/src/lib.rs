@@ -37,6 +37,7 @@ pub mod png;
 pub mod script;
 pub mod tracks;
 pub mod vfd;
+pub mod voicenet;
 #[cfg(feature = "play")]
 pub mod weapons;
 
@@ -276,3 +277,5 @@ mod tests_timerfd;
 mod tests_tracks;
 #[cfg(test)]
 mod tests_vfd;
+#[cfg(test)]
+mod tests_voicenet;

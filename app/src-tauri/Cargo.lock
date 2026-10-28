@@ -242,11 +242,11 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bhmod-manifest"
-version = "0.3.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=506077d45f12e4aadd111204a78eab2f97244369#506077d45f12e4aadd111204a78eab2f97244369"
+version = "0.3.1"
 dependencies = [
  "semver",
  "serde",
+ "serde_json",
  "sha2",
  "toml 0.9.12+spec-1.1.0",
  "zip 2.6.1",
@@ -709,7 +709,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.9",
+ "syn 2.0.119",
 ]
 
 [[package]]

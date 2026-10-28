@@ -142,6 +142,17 @@ fn default_bindings_and_conflicts() {
     assert_eq!(kb.get(Action::Chat).to_string(), "T");
     assert_eq!(Action::Chat.label(), "Open chat");
     assert_eq!(Action::from_name("chat"), Some(Action::Chat));
+    let voice = [Action::VoiceProximity, Action::VoiceChannel, Action::VoiceGlobal, Action::VoiceBroadcast];
+    assert_eq!(voice.map(|a| kb.get(a).to_string()), ["V", "B", "G", "J"], "push-to-talk, H stays hide_ui");
+    assert_eq!(voice.map(Action::name), ["voice_proximity", "voice_channel", "voice_global", "voice_broadcast"]);
+    assert!(voice.iter().all(|a| Action::from_name(a.name()) == Some(*a)));
+    let mut ptt = KeyBindings::default();
+    ptt.apply_flag("voice_broadcast=Ctrl+B").unwrap();
+    assert_eq!(ptt.bind_flags(), ["--bind", "voice_broadcast=Ctrl+B"]);
+    assert!(ptt.to_bindings().voice[3].mods.ctrl);
+    // Old launcher.toml files without the voice keys get the defaults.
+    let old: KeyBindings = toml::from_str("chat = \"Y\"").unwrap();
+    assert_eq!(old.voice_global.to_string(), "G");
     kb.set(Action::Pan, kb.touch);
     assert_eq!(kb.conflicts(), vec![(Action::Touch, Action::Pan)]);
 }

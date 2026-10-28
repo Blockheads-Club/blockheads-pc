@@ -383,6 +383,117 @@ pub fn cursor_picture(size: u32) -> Picture {
     Picture { width: s, height: s, rgba }
 }
 
+/// Mic-on indicator colours (premultiplied, opaque): a red disc with a white microphone.
+pub const MIC_RED: [u8; 4] = [214, 40, 40, 255];
+pub const MIC_WHITE: [u8; 4] = [255, 255, 255, 255];
+
+/// The host's mic-on indicator, `size` x `size` pixels: shown while the microphone records, drawn by the host over
+/// everything (mods cannot hide or fake it).
+pub fn mic_picture(size: u32) -> Picture {
+    let s = size.clamp(12, 256);
+    let f = s as f32;
+    let c = f / 2.0;
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    for y in 0..s {
+        for x in 0..s {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let d = ((px - c).powi(2) + (py - c).powi(2)).sqrt();
+            // Anti-aliased disc edge.
+            let cover = (c - d).clamp(0.0, 1.0);
+            if cover == 0.0 {
+                continue;
+            }
+            // The microphone: a capsule (body), the stand below it.
+            let (dx, top, bottom) = ((px - c).abs(), 0.22 * f, 0.58 * f);
+            let r = 0.12 * f;
+            let body = dx <= r && py >= top + r && py <= bottom - r
+                || ((px - c).powi(2) + (py - (top + r)).powi(2)).sqrt() <= r
+                || ((px - c).powi(2) + (py - (bottom - r)).powi(2)).sqrt() <= r;
+            let stand = (dx <= 0.04 * f && py > bottom && py <= 0.74 * f)
+                || (dx <= 0.16 * f && (0.72 * f..=0.78 * f).contains(&py));
+            let base = if body || stand { MIC_WHITE } else { MIC_RED };
+            let at = ((y * s + x) * 4) as usize;
+            for i in 0..4 {
+                rgba[at + i] = (base[i] as f32 * cover).round() as u8;
+            }
+        }
+    }
+    Picture { width: s, height: s, rgba }
+}
+
+/// The voice chat icons drawn above a blockhead (API 0.3.4 `ui.overhead-icon`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Overhead {
+    Speaking,
+    NoVoice,
+    SelfMute,
+    Deafen,
+    AdminMute,
+}
+
+impl Overhead {
+    pub const ALL: [Overhead; 5] =
+        [Overhead::Speaking, Overhead::NoVoice, Overhead::SelfMute, Overhead::Deafen, Overhead::AdminMute];
+
+    /// Disc colour, whether the glyph is a microphone (else headphones), whether it is crossed out.
+    fn look(self) -> ([u8; 4], bool, bool) {
+        match self {
+            Overhead::Speaking => ([46, 160, 90, 255], true, false),
+            Overhead::NoVoice => ([96, 96, 96, 255], false, true),
+            Overhead::SelfMute => ([210, 130, 30, 255], true, true),
+            Overhead::Deafen => ([210, 130, 30, 255], false, true),
+            Overhead::AdminMute => (MIC_RED, true, true),
+        }
+    }
+}
+
+/// An overhead icon, `size` x `size` pixels: a disc with a white microphone or headphones, crossed out for the mute
+/// and "no voice" states.
+pub fn overhead_picture(kind: Overhead, size: u32) -> Picture {
+    let s = size.clamp(12, 256);
+    let f = s as f32;
+    let c = f / 2.0;
+    let (bg, mic, crossed) = kind.look();
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    for y in 0..s {
+        for x in 0..s {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let d = ((px - c).powi(2) + (py - c).powi(2)).sqrt();
+            let cover = (c - d).clamp(0.0, 1.0);
+            if cover == 0.0 {
+                continue;
+            }
+            let dx = (px - c).abs();
+            let glyph = if mic {
+                let (top, bottom, r) = (0.22 * f, 0.58 * f, 0.12 * f);
+                dx <= r && py >= top + r && py <= bottom - r
+                    || ((px - c).powi(2) + (py - (top + r)).powi(2)).sqrt() <= r
+                    || ((px - c).powi(2) + (py - (bottom - r)).powi(2)).sqrt() <= r
+                    || (dx <= 0.04 * f && py > bottom && py <= 0.74 * f)
+                    || (dx <= 0.16 * f && (0.72 * f..=0.78 * f).contains(&py))
+            } else {
+                // Headphones: the band (upper half ring) and two ear cups.
+                let band = py <= 0.55 * f
+                    && (0.24 * f..=0.31 * f).contains(&((px - c).powi(2) + (py - 0.55 * f).powi(2)).sqrt());
+                let cup = (0.17 * f..=0.33 * f).contains(&dx) && (0.5 * f..=0.75 * f).contains(&py);
+                band || cup
+            };
+            // The slash, top-left to bottom-right, with a dark edge.
+            let slash = crossed && ((px - py).abs() / std::f32::consts::SQRT_2) <= 0.06 * f && d <= 0.42 * f;
+            let base = match (slash, glyph) {
+                (true, _) => [40, 20, 20, 255],
+                (false, true) => MIC_WHITE,
+                (false, false) => bg,
+            };
+            let at = ((y * s + x) * 4) as usize;
+            for i in 0..4 {
+                rgba[at + i] = (base[i] as f32 * cover).round() as u8;
+            }
+        }
+    }
+    Picture { width: s, height: s, rgba }
+}
+
 /// A short message: `text` on the counter's box, `scale` as for [`hud_scale`].
 pub fn message_sprite(text: &str, scale: u32, serial: u64, at: (f32, f32)) -> Sprite {
     let p = render_label(text, scale);
@@ -392,6 +503,19 @@ pub fn message_sprite(text: &str, scale: u32, serial: u64, at: (f32, f32)) -> Sp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mic_indicator_is_a_red_disc_with_a_white_mic() {
+        let p = mic_picture(64);
+        assert_eq!((p.width, p.height), (64, 64));
+        assert_eq!(p.pixel(0, 0), [0; 4], "outside the disc");
+        assert_eq!(p.pixel(32, 24), MIC_WHITE, "the capsule");
+        assert_eq!(p.pixel(32, 44), MIC_WHITE, "the stand");
+        assert_eq!(p.pixel(10, 32), MIC_RED);
+        let edge = p.pixel(32, 0);
+        assert!(edge[3] > 0 && edge[3] < 255, "anti-aliased edge {edge:?}");
+        assert_eq!(mic_picture(1).width, 12);
+    }
 
     #[test]
     fn the_font_has_digits_and_fps() {

@@ -220,6 +220,23 @@ fn feed(mut sink: Box<dyn Write + Send>) -> Sender<String> {
     tx
 }
 
+/// The recording devices the runner `program` sees (`bhpc-run --list-mics`, one name per line), for the voice chat
+/// settings; empty when it cannot list them.
+pub fn list_mics(program: &Path) -> Vec<String> {
+    let mut c = Command::new(program);
+    c.arg("--list-mics").stdin(Stdio::null());
+    hide_console(&mut c);
+    match c.output() {
+        Ok(o) if o.status.success() => mic_names(&o.stdout),
+        _ => Vec::new(),
+    }
+}
+
+/// The device names in `--list-mics` output (blank lines skipped).
+pub fn mic_names(stdout: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(stdout).lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
+}
+
 /// The game runner is a console program: do not flash a console window when the (windowed) launcher starts it.
 #[cfg(windows)]
 fn hide_console(command: &mut Command) {

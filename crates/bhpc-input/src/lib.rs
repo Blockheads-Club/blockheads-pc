@@ -20,6 +20,7 @@
 //! | resize | `SurfaceChanged` (`nativeOnSurfaceChanged` + `nativeRootGeometryChanged`) |
 //! | fullscreen binding (F11) / window close | [`HostAction::ToggleFullscreen`] / [`HostAction::Quit`] |
 //! | hide-buttons binding (H, not while typing) | [`HostAction::ToggleGameButtons`] |
+//! | push-to-talk bindings (V, B, G, J, not while typing) | [`HostAction::Voice`] down and up (released on focus loss) |
 //! | game controller | see [`pad`]: cursor, touch at the cursor, walking, zoom, pause |
 //!
 //! The long press of the game is a held left button; it needs no mapping.
@@ -33,7 +34,7 @@ pub mod text;
 
 pub use event::{
     Bindings, EventSink, GuestEvent, HostAction, HostEvent, HostKey, Input, Lifecycle, Mods, MouseButton, Recorder,
-    Target, Trigger, KEYCODE_BACK,
+    Target, Trigger, VoiceMode, KEYCODE_BACK,
 };
 pub use grid::Grid;
 pub use mapper::{Config, Geometry, InputMapper};

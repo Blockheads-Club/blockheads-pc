@@ -1,6 +1,6 @@
 //! Key binding model. The actions are the ones `bhpc-input` implements; the defaults reproduce its
 //! hard-wired mapping (left button = touch, right drag = pan, wheel = zoom, Ctrl+left drag = pinch,
-//! Esc = back, F11 = fullscreen, H = hide the game's buttons).
+//! Esc = back, F11 = fullscreen, H = hide the game's buttons, T = chat, V/B/G/J = push-to-talk per voice mode).
 
 use bhpc_input::HostKey;
 use serde::{Deserialize, Serialize};
@@ -25,11 +25,16 @@ pub enum Action {
     HideUi,
     /// Open the game's chat.
     Chat,
+    /// Push-to-talk, one per voice chat mode.
+    VoiceProximity,
+    VoiceChannel,
+    VoiceGlobal,
+    VoiceBroadcast,
 }
 
 impl Action {
     /// All actions in UI order.
-    pub const ALL: [Action; 8] = [
+    pub const ALL: [Action; 12] = [
         Action::Touch,
         Action::Pan,
         Action::Zoom,
@@ -38,6 +43,10 @@ impl Action {
         Action::Fullscreen,
         Action::HideUi,
         Action::Chat,
+        Action::VoiceProximity,
+        Action::VoiceChannel,
+        Action::VoiceGlobal,
+        Action::VoiceBroadcast,
     ];
 
     /// Name used in `--bind NAME=BINDING` flags.
@@ -51,6 +60,10 @@ impl Action {
             Action::Fullscreen => "fullscreen",
             Action::HideUi => "hide_ui",
             Action::Chat => "chat",
+            Action::VoiceProximity => "voice_proximity",
+            Action::VoiceChannel => "voice_channel",
+            Action::VoiceGlobal => "voice_global",
+            Action::VoiceBroadcast => "voice_broadcast",
         }
     }
 
@@ -70,6 +83,10 @@ impl Action {
             Action::Fullscreen => "Toggle fullscreen",
             Action::HideUi => "Hide game buttons",
             Action::Chat => "Open chat",
+            Action::VoiceProximity => "Talk to players nearby",
+            Action::VoiceChannel => "Talk in your channel",
+            Action::VoiceGlobal => "Talk to everyone",
+            Action::VoiceBroadcast => "Admin broadcast",
         }
     }
 }
@@ -293,6 +310,10 @@ pub struct KeyBindings {
     pub fullscreen: Binding,
     pub hide_ui: Binding,
     pub chat: Binding,
+    pub voice_proximity: Binding,
+    pub voice_channel: Binding,
+    pub voice_global: Binding,
+    pub voice_broadcast: Binding,
 }
 
 impl Default for KeyBindings {
@@ -307,6 +328,11 @@ impl Default for KeyBindings {
             fullscreen: Binding::plain(Input::Key(Key::F(11))),
             hide_ui: Binding::plain(Input::Key(Key::Char('H'))),
             chat: Binding::plain(Input::Key(Key::Char('T'))),
+            // Broadcast is J, not H: H hides the game's buttons.
+            voice_proximity: Binding::plain(Input::Key(Key::Char('V'))),
+            voice_channel: Binding::plain(Input::Key(Key::Char('B'))),
+            voice_global: Binding::plain(Input::Key(Key::Char('G'))),
+            voice_broadcast: Binding::plain(Input::Key(Key::Char('J'))),
         }
     }
 }
@@ -323,6 +349,10 @@ impl KeyBindings {
             Action::Fullscreen => self.fullscreen,
             Action::HideUi => self.hide_ui,
             Action::Chat => self.chat,
+            Action::VoiceProximity => self.voice_proximity,
+            Action::VoiceChannel => self.voice_channel,
+            Action::VoiceGlobal => self.voice_global,
+            Action::VoiceBroadcast => self.voice_broadcast,
         }
     }
 
@@ -337,6 +367,10 @@ impl KeyBindings {
             Action::Fullscreen => self.fullscreen = b,
             Action::HideUi => self.hide_ui = b,
             Action::Chat => self.chat = b,
+            Action::VoiceProximity => self.voice_proximity = b,
+            Action::VoiceChannel => self.voice_channel = b,
+            Action::VoiceGlobal => self.voice_global = b,
+            Action::VoiceBroadcast => self.voice_broadcast = b,
         }
     }
 
@@ -366,6 +400,8 @@ impl KeyBindings {
             fullscreen: self.fullscreen.trigger(),
             hide_ui: self.hide_ui.trigger(),
             chat: self.chat.trigger(),
+            voice: [self.voice_proximity, self.voice_channel, self.voice_global, self.voice_broadcast]
+                .map(|b| b.trigger()),
         }
     }
 

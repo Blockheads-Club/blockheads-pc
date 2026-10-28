@@ -121,6 +121,9 @@ impl JoinView {
                     if p.channels {
                         perms.push("channels".into());
                     }
+                    if p.voice {
+                        perms.push("voice".into());
+                    }
                     JoinMod {
                         name: e.name(),
                         version: e.info.version.clone(),
@@ -241,6 +244,16 @@ pub struct View {
     pub server: Option<String>,
     /// Developer folder mods are loaded (F5 reloads them).
     pub dev: bool,
+    /// The settings screen of a mod is open.
+    pub settings: Option<crate::form::SettingsView>,
+    /// A mod turned the microphone on and the player was never asked: the opt-in dialog shows.
+    pub mic_ask: bool,
+    /// The mods' widgets (hidden mods left out), notices and the dialog that shows.
+    pub widgets: Vec<crate::hud::ModWidget>,
+    pub notices: Vec<crate::hud::Notice>,
+    pub dialog: Option<crate::hud::ModDialog>,
+    /// The mods' toasts (shown with the loader's own).
+    pub mod_toasts: Vec<(Instant, String)>,
 }
 
 /// What the player did in the mod UI.
@@ -267,6 +280,16 @@ pub enum UiCmd {
     Copy(String),
     /// Say this line in the game's chat as if it had been typed (tests, developer tools).
     Say(String),
+    /// A row of the settings screen changed (`key` of the row, the new value).
+    Setting { section: crate::form::Section, mod_id: String, key: String, value: serde_json::Value },
+    /// The player gave a mod action another key (`None`: cleared).
+    Rebind { mod_id: String, action: String, key: Option<String> },
+    /// The answer to the microphone opt-in dialog.
+    MicConsent(bool),
+    /// The settings screen was closed.
+    CloseSettings,
+    /// The answer to a mod's dialog (`button` from 0, `CLOSED` when dismissed; the field's text).
+    DialogAnswer { id: u32, button: u32, text: Option<String> },
 }
 
 #[derive(serde::Serialize)]
@@ -297,4 +320,29 @@ pub fn status_line(mods: &[(ModStatus, &'static str)]) -> String {
         })
         .collect();
     format!("@mods {}", serde_json::to_string(&items).expect("status serialises"))
+}
+
+/// The notice for an optional server mod this loader is too old for (`lang`: the launcher's language code).
+pub fn skipped_notice(lang: &str, m: &bhmod_client::session::SkippedMod) -> String {
+    let lang = lang.split(['-', '_']).next().unwrap_or_default().to_ascii_lowercase();
+    let name = m.name.get(&lang).or_else(|| m.name.get("en")).cloned().unwrap_or_else(|| m.id.clone());
+    let voice = m.id == "voice";
+    match lang.as_str() {
+        "tr" => {
+            let what = if voice { format!("{name} (sesli sohbet)") } else { name };
+            format!("Bu sunucuda {what} var: kullanmak için Blockheads PC'yi güncelle")
+        }
+        "ru" => {
+            let what = if voice { format!("{name} (голосовой чат)") } else { name };
+            format!("На этом сервере есть {what}: обнови Blockheads PC, чтобы пользоваться им")
+        }
+        "kk" => {
+            let what = if voice { format!("{name} (дауыстық чат)") } else { name };
+            format!("Бұл серверде {what} бар: қолдану үшін Blockheads PC-ді жаңарт")
+        }
+        _ => {
+            let what = if voice { format!("{name} (voice chat)") } else { name };
+            format!("This server has {what}: update Blockheads PC to use it")
+        }
+    }
 }

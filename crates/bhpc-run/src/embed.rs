@@ -42,6 +42,10 @@ pub struct PlayFlags {
     pub pad_tile_cursor: bool,
     /// Language of the messages shown over the game (`--lang CODE`, the launcher's language; default English).
     pub lang: bhpc_app::hud::Lang,
+    /// Voice chat: the microphone to record from (`--mic-device NAME`; default: the system's).
+    pub mic_device: Option<String>,
+    /// Voice chat: master volume in percent (`--voice-master N`, 0..=200).
+    pub voice_master: Option<u16>,
 }
 
 /// Reads the flags above from a command line.
@@ -99,6 +103,10 @@ pub fn parse_play_flags(args: &[String]) -> Result<PlayFlags, String> {
             .map(|v| v.as_deref().map(bhpc_app::hud::Lang::parse).ok_or("--lang needs a language code"))
             .transpose()?
             .unwrap_or_default(),
+        mic_device: value("--mic-device").map(|v| v.ok_or("--mic-device needs a device name")).transpose()?,
+        voice_master: value("--voice-master")
+            .map(|v| v.and_then(|n| n.parse::<u16>().ok()).filter(|n| *n <= 200).ok_or("--voice-master needs 0 to 200"))
+            .transpose()?,
     })
 }
 

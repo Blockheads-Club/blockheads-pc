@@ -13,7 +13,9 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 
 use crate::view::{FailKind, JoinStage, JoinView, UiCmd, View};
 
+mod hud;
 mod join;
+mod settings;
 
 static TITLE_FONT: &[u8] = include_bytes!("../fonts/Tiny5-Regular.ttf");
 /// The design's body face (Atkinson Hyperlegible Next, OFL, `third_party/fonts`). It has no Cyrillic and no bold
@@ -259,6 +261,16 @@ pub enum Hit {
     ToggleTimings,
     /// Clear the time accounting.
     ResetTimings,
+    /// Settings screen: one step down / up of row `0`, or (keys) start taking the row's new key.
+    SettingDec(usize),
+    SettingInc(usize),
+    SettingKey(usize),
+    CloseSettings,
+    /// The microphone opt-in dialog.
+    MicAllow,
+    MicDeny,
+    /// Button `0` of a mod's dialog.
+    DialogButton(usize),
 }
 
 /// Window input the UI may take.
@@ -268,6 +280,8 @@ pub enum UiInput {
     Key(u32),
     /// A left click in window pixels (the picture's coordinates).
     Click(f32, f32),
+    /// A typed character (text input), for a dialog's field.
+    Char(char),
     /// Anything else the window sends (mouse moves, releases, text, wheel).
     Other,
 }
@@ -282,6 +296,11 @@ pub const HID_UP: u32 = 82;
 pub const HID_F5: u32 = 62;
 pub const HID_T: u32 = 23;
 pub const HID_R: u32 = 21;
+pub const HID_LEFT: u32 = 80;
+pub const HID_RIGHT: u32 = 79;
+pub const HID_BACKSPACE: u32 = 42;
+pub const HID_DELETE: u32 = 76;
+pub const HID_TAB: u32 = 43;
 
 /// Byte sizes for people.
 pub fn size_text(b: u64) -> String {
@@ -292,8 +311,9 @@ pub fn size_text(b: u64) -> String {
     }
 }
 
-/// The last picture: view serial, size, (panel open, timings shown), native box ticked, focused item, pixels.
-type Drawn = (u64, (u32, u32), (bool, bool), bool, usize, Arc<Vec<u8>>);
+/// The last picture: view serial, size, (panel open, timings shown), native box ticked, focused item, (settings row,
+/// taking a key, dialog button focus and field text), pixels.
+type Drawn = (u64, (u32, u32), (bool, bool), bool, usize, (usize, bool, usize, String), Arc<Vec<u8>>);
 
 /// The mod UI's own state (what is open, the native confirmation, the clickable areas of the last picture).
 #[derive(Default)]
@@ -304,6 +324,14 @@ pub struct ModUi {
     pub native_ok: bool,
     /// The focused item of the join prompt (see [`join::focusables`]).
     focus: usize,
+    /// The selected row of the settings screen.
+    pub sel: usize,
+    /// The settings screen waits for the key of the selected binding.
+    pub capture: bool,
+    /// The mod dialog the field text belongs to, its text and the focused button.
+    dialog_for: Option<u32>,
+    pub dialog_text: String,
+    pub dialog_focus: usize,
     hits: Vec<(Rect, Hit)>,
     last: Option<Drawn>,
 }
@@ -327,7 +355,7 @@ impl ModUi {
 
     /// True while the UI takes the window's input.
     pub fn modal(&self, v: &View) -> bool {
-        v.join.is_some() || self.panel
+        v.join.is_some() || self.panel || v.mic_ask || v.settings.is_some() || v.dialog.is_some()
     }
 
     fn act(&mut self, h: Hit, v: &View) -> Option<UiCmd> {
@@ -359,7 +387,28 @@ impl ModUi {
                 None
             }
             Hit::ResetTimings => Some(UiCmd::ResetTimings),
+            Hit::SettingDec(i) => settings::change(v, i, -1),
+            Hit::SettingInc(i) => settings::change(v, i, 1),
+            Hit::SettingKey(i) => {
+                self.sel = i;
+                self.capture = true;
+                None
+            }
+            Hit::CloseSettings => {
+                self.capture = false;
+                Some(UiCmd::CloseSettings)
+            }
+            Hit::MicAllow => Some(UiCmd::MicConsent(true)),
+            Hit::MicDeny => Some(UiCmd::MicConsent(false)),
+            Hit::DialogButton(i) => {
+                let d = v.dialog.clone()?;
+                self.answer(&d, i as u32)
+            }
         }
+    }
+
+    fn clicked(&self, x: f32, y: f32) -> Option<Hit> {
+        self.hits.iter().find(|(r, _)| r.contains(x, y)).map(|(_, h)| *h)
     }
 
     /// Handles one input. Returns whether the UI took it (the game must not see it) and what the player decided.
@@ -388,9 +437,24 @@ impl ModUi {
             let hit = match ev {
                 UiInput::Key(k) => key(k),
                 UiInput::Click(x, y) => self.hits.iter().find(|(r, _)| r.contains(x, y)).map(|(_, h)| *h),
-                UiInput::Other => None,
+                UiInput::Other | UiInput::Char(_) => None,
             };
             return (true, hit.and_then(|h| self.act(h, v)));
+        }
+        if v.mic_ask {
+            let hit = match ev {
+                UiInput::Key(HID_ENTER) => Some(Hit::MicAllow),
+                UiInput::Key(HID_ESCAPE) => Some(Hit::MicDeny),
+                UiInput::Click(x, y) => self.clicked(x, y),
+                _ => None,
+            };
+            return (true, hit.and_then(|h| self.act(h, v)));
+        }
+        if let Some(d) = &v.dialog {
+            return (true, self.dialog_input(ev, v, d));
+        }
+        if let Some(s) = &v.settings {
+            return (true, self.settings_input(ev, v, s));
         }
         match ev {
             UiInput::Key(HID_F9) => {
@@ -416,17 +480,20 @@ impl ModUi {
     /// The picture for `v` at `(w, h)` window pixels; `None` when nothing shows. `serial` identifies the view's
     /// content (the picture is reused while it and the UI state stay the same).
     pub fn render(&mut self, v: &View, serial: u64, w: u32, h: u32) -> Option<Arc<Vec<u8>>> {
-        if v.join.is_none() && !self.panel && v.toasts.is_empty() {
+        let hud = !v.widgets.is_empty() || !v.notices.is_empty() || v.dialog.is_some();
+        let hud = hud || !v.mod_toasts.is_empty();
+        if v.join.is_none() && !self.panel && v.toasts.is_empty() && v.settings.is_none() && !v.mic_ask && !hud {
             self.hits.clear();
             self.last = None;
             return None;
         }
-        if let Some((s, size, p, n, f, px)) = &self.last {
+        if let Some((s, size, p, n, f, sc, px)) = &self.last {
             if *s == serial
                 && *size == (w, h)
                 && *p == (self.panel, self.timings)
                 && *n == self.native_ok
                 && *f == self.focus
+                && *sc == (self.sel, self.capture, self.dialog_focus, self.dialog_text.clone())
             {
                 return Some(px.clone());
             }
@@ -434,14 +501,23 @@ impl ModUi {
         let mut c = Canvas::new(w, h);
         self.hits.clear();
         let u = ((3.0 * (w as f32 / 1280.0).min(h as f32 / 720.0)).round() as i32).max(2);
+        self.widgets(&mut c, u, &v.widgets);
+        self.notices(&mut c, u, &v.notices);
         if let Some(j) = &v.join {
             self.join(&mut c, (w as f32 / 1280.0).min(h as f32 / 720.0).clamp(0.5, 3.0), j);
+        } else if v.mic_ask {
+            self.mic_dialog(&mut c, u);
+        } else if let Some(s) = &v.settings {
+            self.settings_screen(&mut c, u, s);
+        } else if let Some(d) = &v.dialog {
+            self.dialog(&mut c, u, d);
         } else if self.panel {
             self.mods_panel(&mut c, u, v);
         }
         toasts(&mut c, u, v);
         let px = Arc::new(c.px);
-        self.last = Some((serial, (w, h), (self.panel, self.timings), self.native_ok, self.focus, px.clone()));
+        let sc = (self.sel, self.capture, self.dialog_focus, self.dialog_text.clone());
+        self.last = Some((serial, (w, h), (self.panel, self.timings), self.native_ok, self.focus, sc, px.clone()));
         Some(px)
     }
 
@@ -618,7 +694,7 @@ fn cut(u: i32, text: &str, width: i32) -> String {
 fn toasts(c: &mut Canvas, u: i32, v: &View) {
     let size = 5.3 * u as f32;
     let mut y = c.h - 24 * u;
-    for (_, text) in v.toasts.iter().rev().take(3) {
+    for (_, text) in v.toasts.iter().chain(&v.mod_toasts).rev().take(3) {
         let w = (measure(Face::Body, size, text) as i32 + 10 * u).min(120 * u);
         let r = Rect { x: c.w - w - 4 * u, y: y - 14 * u, w, h: 14 * u };
         c.bevel(r, u, PANEL, INK);

@@ -11,6 +11,7 @@ The game is a touch game and the mouse is the finger (`bhpc-input`):
 |---|---|
 | left button press, drag, release | one-finger touch (tap, drag, long press = hold) |
 | right button drag | two-finger pan |
+| middle click on a blockhead | mods: pick that player (the voice chat opens its volume for them) |
 | mouse wheel | two-finger pinch (zoom) around the cursor |
 | Ctrl + left drag | pinch around the press point (right/up = spread) |
 | Esc | Android Back |
@@ -40,6 +41,11 @@ Start a server first (for example `blockheads_server --new myworld --port 15160`
 game: Join World > Advanced... > Online IP/Port..., tap the port field and enter the server port (the field is
 pre-filled with 15151), optionally set a nickname, then Join Online World. Details and a script that does this are in
 [`m7/net-bringup.md`](m7/net-bringup.md).
+
+Each install has its own device id (`DIR/device-id`, 16 random hex digits made on the first start; servers tie a
+player's name to the device). Release note: *PC now has its own device id per install; servers may see an existing PC
+player as a new device once.* (Before, every copy of the port reported the same id, so two PC players could not be on
+one server at the same time.) Deleting the file makes a new device; `BHPC_ANDROID_ID=<hex>` overrides it for tests.
 
 ## Where saves go
 

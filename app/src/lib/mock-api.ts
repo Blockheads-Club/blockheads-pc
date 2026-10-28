@@ -2,7 +2,8 @@ import { vi } from 'vitest';
 import type { ApkReport, BootState, LaunchConfig, Prefs, Snapshot } from './types';
 import { makeModsApi } from './mods/mock';
 
-export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H', chat: 'T' };
+export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H', chat: 'T',
+  voice_proximity: 'V', voice_channel: 'B', voice_global: 'G', voice_broadcast: 'J' };
 
 export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
   return {
@@ -14,6 +15,7 @@ export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
     controller: true,
     show_dpad: false,
     pad_tile_cursor: false,
+    voice: { master: 100, mic_device: null },
     ...over
   };
 }
@@ -81,6 +83,7 @@ export function makeApi(over: Record<string, unknown> = {}) {
     gameStop: vi.fn(async () => {}),
     gamePoll: vi.fn(async () => makeSnap()),
     saveLog: vi.fn(async () => {}),
+    listMics: vi.fn(async () => ['USB Mic', 'Built-in Audio']),
     updateCheck: vi.fn(async () => ({ version: '0.2.0', size_mb: 43, notes: ['one', 'two'] })),
     updateInstall: vi.fn(async () => {}),
     updateRestart: vi.fn(async () => {}),

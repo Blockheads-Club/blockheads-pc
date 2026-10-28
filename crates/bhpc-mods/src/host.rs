@@ -18,6 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use bhmod_core::input::InputCommand;
 use bhmod_core::remote::{RemoteCall, RemoteError, RemoteTarget};
 use bhmod_core::storage::FileStorage;
 use bhmod_core::timings::ModTimings;
@@ -25,7 +26,14 @@ use bhmod_core::types::{
     ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandSender, Event, LogLevel, ObjectKind, Pos, Role,
     SavePhase, Side,
 };
-use bhmod_core::{GameBridge, HostOptions, ModHost, ModState, ReloadOutcome, Runtime};
+use bhmod_core::ui::{NoticeLevel, OverheadIcon, UiCommand};
+use bhmod_core::voice::VoiceEvent;
+use bhmod_core::{GameBridge, HostOptions, ModHost, ModState, ReloadOutcome, Runtime, VoiceHost};
+
+use crate::binds::{BindRow, Binds};
+use crate::hud::Hud;
+use crate::overhead::Overheads;
+use crate::voice::VoiceDriver;
 use bhmod_proto::{ServiceCall, ServiceFailure, ServiceResult};
 
 /// Longest kept log.
@@ -44,6 +52,8 @@ pub enum Effect {
     /// Send a service call to the server (`SERVICE_CALL`); the answer comes back through
     /// [`ClientHost::service_result_in`], and a call that cannot be sent is failed with [`ClientHost::service_unavailable`].
     Service(RemoteCall),
+    /// A mod asked for the loader's settings screen of a mod (API 0.3.4 `ui.open-settings`).
+    OpenSettings(String),
 }
 
 /// One log line.
@@ -104,9 +114,35 @@ pub(crate) struct Bridge {
     effects: RefCell<Vec<Effect>>,
     log: RefCell<VecDeque<LogLine>>,
     fresh: RefCell<Vec<LogLine>>,
+    /// The voice client (API 0.3.4 `voice`), when this session runs voice chat.
+    voice: Option<Rc<dyn VoiceDriver>>,
+    /// The local player's id on the server (`-[BHNetClientMatch localPlayerID]`), when online.
+    local_id: RefCell<Option<String>>,
+    /// `(id, alias)` of the players the server listed with their vanilla `playerID`.
+    ids: RefCell<Vec<(String, String)>>,
+    /// The mods' key bindings (API 0.3.4 `input`).
+    binds: RefCell<Binds>,
+    /// The mods' overhead icons (API 0.3.4 `ui.set-overhead`).
+    overheads: RefCell<Overheads>,
+    /// The mods' widgets, toasts, notices and dialogs.
+    hud: RefCell<Hud>,
 }
 
 impl Bridge {
+    /// The id the mods name the player of `alias` by: the vanilla `playerID` when known, else the alias.
+    fn id_of(&self, alias: &str) -> String {
+        if *self.local.borrow() == alias {
+            if let Some(id) = self.local_id.borrow().clone() {
+                return id;
+            }
+        }
+        if let Some(id) = self.ids.borrow().iter().find(|(_, a)| a == alias).map(|(i, _)| i.clone()) {
+            return id;
+        }
+        let voiced = self.voice.as_ref().map(|v| v.players()).unwrap_or_default();
+        voiced.into_iter().find(|(_, a)| a == alias).map_or_else(|| alias.to_string(), |(i, _)| i)
+    }
+
     fn push_log(&self, mod_id: Option<&str>, level: LogLevel, text: &str) {
         let line = LogLine {
             ms: self.started.elapsed().as_millis() as u64,
@@ -134,16 +170,44 @@ impl GameBridge for Bridge {
         self.push_log(mod_id, level, message);
     }
     fn online_players(&self) -> Vec<String> {
-        let mut all = self.players.borrow().clone();
+        // Players by vanilla id where it is known (the server's list, `localPlayerID`, `VOICE_STATE`), else by alias.
+        // (Ids that became known after a player joined replace the alias the list holds.)
+        let mut all: Vec<String> = Vec::new();
+        for p in self.players.borrow().iter().map(|p| self.id_of(p)) {
+            if !all.contains(&p) {
+                all.push(p);
+            }
+        }
+        for (id, _) in self.voice.as_ref().map(|v| v.players()).unwrap_or_default() {
+            if !all.contains(&id) {
+                all.push(id);
+            }
+        }
         // The player is in their own game, in single-player and before the server's list arrives.
-        let me = self.local.borrow();
+        let me = self.local_player().unwrap_or_default();
         if !all.contains(&me) && !me.is_empty() {
-            all.insert(0, me.clone());
+            all.insert(0, me);
         }
         all
     }
     fn player_alias(&self, id: &str) -> Option<String> {
+        if let Some(a) = self.ids.borrow().iter().find(|(i, _)| i == id).map(|(_, a)| a.clone()) {
+            return Some(a);
+        }
+        if let Some(a) = self.voice.as_ref().and_then(|v| v.alias(id)) {
+            return Some(a);
+        }
+        if self.local_id.borrow().as_deref() == Some(id) {
+            return Some(self.local.borrow().clone());
+        }
         self.online_players().into_iter().find(|p| p.as_str() == id)
+    }
+    fn local_player(&self) -> Option<String> {
+        let me = self.local.borrow();
+        self.local_id.borrow().clone().or_else(|| (!me.is_empty()).then(|| me.clone()))
+    }
+    fn platform(&self) -> String {
+        crate::platform()
     }
     fn player_pos(&self, id: &str) -> Option<Pos> {
         self.positions.borrow().get(id).copied()
@@ -152,7 +216,7 @@ impl GameBridge for Bridge {
         Role::Player
     }
     fn send_chat(&self, id: &str, text: &str) -> bool {
-        let me = *self.local.borrow() == id;
+        let me = *self.local.borrow() == id || self.local_id.borrow().as_deref() == Some(id);
         if me {
             self.effects.borrow_mut().push(Effect::Chat(text.to_string()));
         }
@@ -172,6 +236,49 @@ impl GameBridge for Bridge {
             return Err(RemoteError::Unavailable);
         }
         self.effects.borrow_mut().push(Effect::Service(call.clone()));
+        Ok(())
+    }
+    fn voice(&self) -> Option<&dyn VoiceHost> {
+        self.voice.as_deref().map(VoiceDriver::as_host)
+    }
+    fn input(&self, mod_id: &str, command: &InputCommand) -> Result<(), ApiError> {
+        let mut b = self.binds.borrow_mut();
+        match command {
+            InputCommand::Bind { action, default_key } => b.bind(mod_id, action, default_key),
+            InputCommand::Unbind { action } => {
+                b.unbind(mod_id, action);
+            }
+            InputCommand::ClearMod => b.clear_mod(mod_id),
+        }
+        Ok(())
+    }
+    fn input_key(&self, mod_id: &str, action: &str, _default_key: &str) -> Option<String> {
+        self.binds.borrow().key_of(mod_id, action)
+    }
+    fn ui(&self, mod_id: &str, command: &UiCommand) -> Result<(), ApiError> {
+        let mut o = self.overheads.borrow_mut();
+        let mut hud = self.hud.borrow_mut();
+        match command {
+            UiCommand::SetOverhead { player, icon } => o.set(mod_id, player, *icon),
+            UiCommand::ClearOverhead { player } => {
+                o.clear(mod_id, player);
+            }
+            UiCommand::OpenSettings { mod_id: of } => self.effects.borrow_mut().push(Effect::OpenSettings(of.clone())),
+            UiCommand::SetWidget { id, widget } => hud.set_widget(mod_id, id, widget.clone()),
+            UiCommand::RemoveWidget { id } => hud.remove_widget(mod_id, id),
+            UiCommand::Toast { text } => hud.toast(text, Instant::now()),
+            UiCommand::Notice { text, level } => hud.notice(*level, text, Instant::now()),
+            UiCommand::ShowDialog { id, dialog } => hud.show_dialog(mod_id, *id, dialog.clone()),
+            UiCommand::CloseDialog { id } => {
+                hud.close_dialog(*id);
+            }
+            UiCommand::ClearMod => {
+                o.clear_mod(mod_id);
+                hud.clear_mod(mod_id);
+            }
+            // On-screen buttons are a touch control (`ui.has-touch` is false on PC): a desktop mod binds a key.
+            UiCommand::SetButton { .. } | UiCommand::RemoveButton { .. } => return Err(ApiError::Unsupported),
+        }
         Ok(())
     }
     fn channel_send(&self, _mod_id: &str, name: &str, target: &ChannelTarget, data: &[u8]) -> Result<(), ApiError> {
@@ -210,6 +317,19 @@ pub struct HostSetup<'a> {
     /// Connected to a server.
     pub online: bool,
     pub local_player: String,
+    /// The voice client, when the server runs voice chat with this player.
+    pub voice: Option<Rc<dyn VoiceDriver>>,
+    /// Where the player's keys for mod actions are kept ([`Binds::path`]); `None`: not kept.
+    pub binds: Option<std::path::PathBuf>,
+    /// The device's file of `scope = "client"` settings ([`client_settings_path`]); `None`: defaults only.
+    pub client_settings: Option<std::path::PathBuf>,
+    /// The device's file of the mods whose widgets the player hid ([`Hud::hidden_path`]); `None`: not kept.
+    pub hud: Option<std::path::PathBuf>,
+}
+
+/// The device's file of the mods' `scope = "client"` settings, in the launcher's data folder.
+pub fn client_settings_path(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("mod-settings.toml")
 }
 
 /// Luau and (when the engine starts) WASM, compiling into `cache` for later sessions.
@@ -275,10 +395,17 @@ impl ClientHost {
             effects: RefCell::new(Vec::new()),
             log: RefCell::new(VecDeque::new()),
             fresh: RefCell::new(Vec::new()),
+            voice: setup.voice,
+            local_id: RefCell::new(None),
+            ids: RefCell::new(Vec::new()),
+            binds: RefCell::new(setup.binds.as_deref().map(Binds::load).unwrap_or_default()),
+            overheads: RefCell::new(Overheads::default()),
+            hud: RefCell::new(Hud::new(setup.hud)),
         });
         let mut opts = HostOptions::new(setup.mods_dir, Side::Client);
         opts.runtimes = setup.runtimes;
         opts.storage = Box::new(FileStorage::new(setup.storage_dir));
+        opts.client_settings = setup.client_settings;
         let host = ModHost::load(opts, bridge.clone());
         ClientHost { host, bridge, last_tick: None }
     }
@@ -313,11 +440,53 @@ impl ClientHost {
     /// Leaving the world: `on-disable` for every mod, storage flushed.
     pub fn stop(&mut self) {
         self.host.disable_all();
+        self.bridge.hud.borrow_mut().clear();
+    }
+
+    /// The mods' HUD: what to draw and the change counter.
+    pub fn hud(&self) -> std::cell::Ref<'_, Hud> {
+        self.bridge.hud.borrow()
+    }
+
+    /// Toasts and notices that ran out go; true when the HUD changed.
+    pub fn expire_hud(&self, now: Instant) -> bool {
+        self.bridge.hud.borrow_mut().expire(now)
+    }
+
+    /// A notice of the loader itself (above the game, like a mod's `ui.notice`).
+    pub fn notice(&self, level: NoticeLevel, text: &str) {
+        self.bridge.hud.borrow_mut().notice(level, text, Instant::now());
+    }
+
+    /// The player answered dialog `id` (`button` from 0, [`bhmod_core::ui::CLOSED`] when dismissed): the mod gets
+    /// `<mod-id>:ui-action`. False when the dialog was not open.
+    pub fn dialog_answer(&mut self, id: u32, button: u32, text: Option<String>) -> bool {
+        self.bridge.hud.borrow_mut().answered(id) && self.host.ui_result(id, button, text)
+    }
+
+    /// The player shows or hides a mod's widgets (kept on the device).
+    pub fn hide_widgets(&self, mod_id: &str, hidden: bool) -> std::io::Result<()> {
+        self.bridge.hud.borrow_mut().set_hidden(mod_id, hidden)
     }
 
     /// The local player's alias.
     pub fn set_local_player(&self, alias: &str) {
         *self.bridge.local.borrow_mut() = alias.to_string();
+    }
+
+    /// The local player's id on the server (`players.local-player`; voice chat names players by id).
+    pub fn set_local_id(&self, id: Option<String>) {
+        *self.bridge.local_id.borrow_mut() = id.filter(|i| !i.is_empty());
+    }
+
+    /// The players as the mods name them (`players.online`: aliases, or ids once voice chat lists them).
+    pub fn online(&self) -> Vec<String> {
+        self.bridge.online_players()
+    }
+
+    /// The player clicked a blockhead: `<mod>:ui-pick {player}` for every mod.
+    pub fn pick(&mut self, player: &str) {
+        self.host.ui_pick(player);
     }
 
     /// A chat message from the server (`alias` empty for server messages). `None`: a mod hid it; otherwise the
@@ -326,7 +495,8 @@ impl ClientHost {
         if !self.host.wants(bhmod_core::types::EventKind::Chat) {
             return Some(text.to_string());
         }
-        let ev = self.host.fire(Event::Chat { player: alias.to_string(), text: text.to_string(), cancelled: false });
+        let player = if alias.is_empty() { String::new() } else { self.bridge.id_of(alias) };
+        let ev = self.host.fire(Event::Chat { player, text: text.to_string(), cancelled: false });
         // `fire` hands back the event it was given, with the handlers' changes.
         let Event::Chat { text: new, cancelled, .. } = ev else { return None };
         (!cancelled).then_some(new)
@@ -338,7 +508,7 @@ impl ClientHost {
         if !line.starts_with('/') {
             return false;
         }
-        let me = self.bridge.local.borrow().clone();
+        let me = self.bridge.local_player().unwrap_or_default();
         match self.host.command(CommandSender::Player(me), line) {
             Some(replies) => {
                 self.bridge.effects.borrow_mut().extend(replies.into_iter().map(Effect::Chat));
@@ -360,8 +530,15 @@ impl ClientHost {
         self.host.poll();
     }
 
-    /// The server's player list changed: `player-join` / `player-quit` for the differences.
+    /// The vanilla `playerID`s of the server's players, `(id, alias)` (the client's player list). Players are then
+    /// named by id in every event and in `players.*`, as on the server.
+    pub fn set_ids(&self, ids: Vec<(String, String)>) {
+        *self.bridge.ids.borrow_mut() = ids.into_iter().filter(|(i, a)| !i.is_empty() && !a.is_empty()).collect();
+    }
+
+    /// The server's player list changed (aliases): `player-join` / `player-quit` for the differences.
     pub fn players(&mut self, now: Vec<String>) {
+        let now: Vec<String> = now.iter().map(|a| self.bridge.id_of(a)).collect();
         let before = self.bridge.players.replace(now.clone());
         for p in now.iter().filter(|p| !before.contains(p)) {
             self.host.fire(Event::PlayerJoin { player: p.clone() });
@@ -391,6 +568,7 @@ impl ClientHost {
 
     /// A tile of type `tile` was put at `at` by `player` (`block-place`, `block-changed`).
     pub fn block_placed(&mut self, player: &str, at: (i32, i32), tile: u32, data: (u16, u16)) {
+        let player = &self.bridge.id_of(player);
         let pos = Pos { x: at.0, y: at.1 };
         {
             let mut tiles = self.bridge.tiles.borrow_mut();
@@ -415,6 +593,7 @@ impl ClientHost {
 
     /// The tile or back wall at `at` was removed by `player` (`block-break`, `block-changed`).
     pub fn block_broken(&mut self, player: &str, at: (i32, i32), back_wall: bool) {
+        let player = &self.bridge.id_of(player);
         let pos = Pos { x: at.0, y: at.1 };
         let tile = if back_wall { 0 } else { self.bridge.tiles.borrow_mut().remove(&at).unwrap_or(0) };
         let known = self.listed(player);
@@ -429,6 +608,7 @@ impl ClientHost {
 
     /// A workbench (`item` is its type) or an interaction object was placed (`object-place`).
     pub fn object_placed(&mut self, player: &str, at: (i32, i32), workbench: bool, item: u32) {
+        let player = &self.bridge.id_of(player);
         if self.listed(player) {
             let object = if workbench { ObjectKind::Workbench } else { ObjectKind::InteractionObject };
             let pos = Pos { x: at.0, y: at.1 };
@@ -438,18 +618,19 @@ impl ClientHost {
 
     /// A blockhead (`blockhead` is its id) took damage (`damage`); `owner` is the player it belongs to.
     pub fn damaged(&mut self, owner: Option<&str>, blockhead: u64, amount: f32) {
-        let player = owner.filter(|p| self.listed(p)).map(str::to_string);
+        let player = owner.map(|o| self.bridge.id_of(o)).filter(|p| self.listed(p));
         self.watch(Event::Damage { player, blockhead, amount, attacker: None, cancelled: false });
     }
 
     /// A blockhead died (`death`).
     pub fn died(&mut self, owner: Option<&str>, blockhead: u64) {
-        let player = owner.filter(|p| self.listed(p)).map(str::to_string);
+        let player = owner.map(|o| self.bridge.id_of(o)).filter(|p| self.listed(p));
         self.watch(Event::Death { player, blockhead });
     }
 
     /// A player's blockhead stands on tile `to` now: `player:pos()` follows, `player-move` fires when it changed.
     pub fn moved(&mut self, player: &str, to: (i32, i32)) {
+        let player = &self.bridge.id_of(player);
         let to = Pos { x: to.0, y: to.1 };
         let from = self.bridge.positions.borrow_mut().insert(player.to_string(), to);
         if let Some(from) = from.filter(|f| *f != to).filter(|_| self.listed(player)) {
@@ -489,6 +670,49 @@ impl ClientHost {
     /// The connection to the server is gone: open service calls fail with `disconnected`.
     pub fn server_gone(&mut self) {
         self.host.remote_peer_gone(&RemoteTarget::Server);
+    }
+
+    /// Voice chat happened (talk start/stop, states, the microphone): `voice:*` events for the mods with `voice`.
+    pub fn voice_events(&mut self, events: Vec<VoiceEvent>) {
+        for e in &events {
+            self.host.voice_event(e);
+        }
+    }
+
+    /// A key with an `input` name went down or up (not while typing): `<mod>:input` for every action bound to it.
+    /// True when some mod's action took it.
+    pub fn key(&mut self, name: &str, pressed: bool) -> bool {
+        let hits = self.bridge.binds.borrow().find(name);
+        for (m, a) in &hits {
+            self.host.input_event(m, a, pressed);
+        }
+        !hits.is_empty()
+    }
+
+    /// The key bindings of a mod (settings screen).
+    pub fn binds(&self, mod_id: &str) -> Vec<BindRow> {
+        self.bridge.binds.borrow().rows(mod_id)
+    }
+
+    /// The player changed a key of a mod's action (`None` clears it).
+    pub fn rebind(&self, mod_id: &str, action: &str, key: Option<&str>) -> std::io::Result<()> {
+        self.bridge.binds.borrow_mut().set_key(mod_id, action, key)
+    }
+
+    /// The overhead icon per player, without the ones the admin turned off.
+    pub fn overheads(&self) -> Vec<(String, OverheadIcon)> {
+        let v = self.bridge.voice.as_ref().and_then(|d| d.as_host().icons().ok()).unwrap_or_default();
+        self.bridge.overheads.borrow().shown(&v)
+    }
+
+    /// The mod's `scope = "client"` settings form: `({"fields": [...]}, values)`.
+    pub fn client_settings(&self, mod_id: &str) -> Option<(serde_json::Value, serde_json::Value)> {
+        self.host.settings_form(mod_id, bhmod_manifest::settings::Scope::Client)
+    }
+
+    /// The player changes a client setting (stored on the device). The error is the reason for the player.
+    pub fn set_client_setting(&mut self, mod_id: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
+        self.host.set_setting(mod_id, key, value).map(|_| ()).map_err(|e| e.to_string())
     }
 
     /// Effects queued by the mods since the last call.

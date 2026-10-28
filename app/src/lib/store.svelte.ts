@@ -85,6 +85,8 @@ export class AppStore {
   undoKeys = $state<LaunchConfig['keys'] | null>(null);
   /** Controls: open the capture prompt for this action (set by the conflict banner). */
   focusAction = $state<ActionId | null>(null);
+  /** Audio: the recording devices the game runner listed (`null` until asked). */
+  mics = $state<string[] | null>(null);
   private logNext = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private fast: ReturnType<typeof setInterval> | undefined;
@@ -338,6 +340,22 @@ export class AppStore {
 
   async setPadTileCursor(on: boolean) {
     await this.patchConfig((c) => (c.pad_tile_cursor = on));
+  }
+
+  /** Voice chat: every player's voice, 0 to 200 %. */
+  async setVoiceMaster(percent: number) {
+    const master = Math.min(200, Math.max(0, Math.round(percent)));
+    await this.patchConfig((c) => (c.voice = { mic_device: null, ...c.voice, master }));
+  }
+
+  /** Voice chat: the microphone by name (empty: the system's default). */
+  async setMicDevice(name: string) {
+    await this.patchConfig((c) => (c.voice = { master: 100, ...c.voice, mic_device: name || null }));
+  }
+
+  /** Ask the game runner for the recording devices (an empty list when it cannot tell). */
+  async loadMics() {
+    this.mics = await api.listMics().catch(() => []);
   }
 
   async setBinding(action: ActionId, text: string): Promise<boolean> {

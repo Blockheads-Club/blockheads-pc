@@ -28,7 +28,9 @@ fn flags_default_to_the_plain_desktop_window() {
             controller: true,
             hide_dpad: false,
             pad_tile_cursor: false,
-            lang: bhpc_app::hud::Lang::En
+            lang: bhpc_app::hud::Lang::En,
+            mic_device: None,
+            voice_master: None,
         }
     );
 }
@@ -94,6 +96,15 @@ fn bad_flags_are_reported() {
     assert!(parse_play_flags(&s(&["--fps-limit", "fast"])).unwrap_err().contains("--fps-limit"));
     assert!(parse_play_flags(&s(&["--fps-position", "middle"])).unwrap_err().contains("--fps-position"));
     assert!(parse_play_flags(&s(&["--fps-position"])).unwrap_err().contains("--fps-position"));
+    assert!(parse_play_flags(&s(&["--mic-device"])).unwrap_err().contains("--mic-device"));
+    assert!(parse_play_flags(&s(&["--voice-master", "300"])).unwrap_err().contains("--voice-master"));
+    assert!(parse_play_flags(&s(&["--voice-master"])).unwrap_err().contains("--voice-master"));
+}
+
+#[test]
+fn voice_flags() {
+    let f = parse_play_flags(&s(&["--mic-device", "USB Mic", "--voice-master", "150"])).unwrap();
+    assert_eq!((f.mic_device.as_deref(), f.voice_master), (Some("USB Mic"), Some(150)));
 }
 
 #[test]

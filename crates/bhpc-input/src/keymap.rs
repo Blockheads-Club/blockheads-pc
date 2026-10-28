@@ -46,6 +46,63 @@ pub fn host_key_from_hid(hid: u32) -> HostKey {
     }
 }
 
+const LETTERS: [&str; 26] = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w",
+    "x", "y", "z",
+];
+const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+const FKEYS: [&str; 12] = ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"];
+const KEYPAD: [&str; 10] = [
+    "keypad-0", "keypad-1", "keypad-2", "keypad-3", "keypad-4", "keypad-5", "keypad-6", "keypad-7", "keypad-8",
+    "keypad-9",
+];
+
+/// The key name of the mod API's `input` interface (mod-sdk `wit/blockheads-api/input.wit`) for a USB HID usage id
+/// (an SDL scancode); `None` for keys it does not name.
+pub fn api_key_name(hid: u32) -> Option<&'static str> {
+    Some(match hid {
+        n @ 4..=29 => LETTERS[(n - 4) as usize],
+        n @ 30..=38 => DIGITS[(n - 29) as usize],
+        39 => "0",
+        40 | 88 => "enter",
+        41 => "escape",
+        42 => "backspace",
+        43 => "tab",
+        44 => "space",
+        45 => "minus",
+        46 => "equals",
+        47 => "left-bracket",
+        48 => "right-bracket",
+        49 => "backslash",
+        51 => "semicolon",
+        52 => "apostrophe",
+        53 => "grave",
+        54 => "comma",
+        55 => "period",
+        56 => "slash",
+        n @ 58..=69 => FKEYS[(n - 58) as usize],
+        73 => "insert",
+        74 => "home",
+        75 => "page-up",
+        76 => "delete",
+        77 => "end",
+        78 => "page-down",
+        79 => "right",
+        80 => "left",
+        81 => "down",
+        82 => "up",
+        n @ 89..=97 => KEYPAD[(n - 88) as usize],
+        98 => "keypad-0",
+        224 => "left-ctrl",
+        225 => "left-shift",
+        226 => "left-alt",
+        228 => "right-ctrl",
+        229 => "right-shift",
+        230 => "right-alt",
+        _ => return None,
+    })
+}
+
 /// Android key code for `key`, or `None` when the game has no use for it (`HostKey::Other`, and the
 /// host-only function keys).
 pub fn key_code(key: HostKey) -> Option<i32> {

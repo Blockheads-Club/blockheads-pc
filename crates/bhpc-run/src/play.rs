@@ -108,6 +108,8 @@ pub struct PlayConfig {
     pub mods: Option<crate::modglue::ModsOptions>,
     /// Language of the messages shown over the game.
     pub lang: bhpc_app::hud::Lang,
+    /// Voice chat: the microphone to record from (`None`: the system's default).
+    pub mic_device: Option<String>,
     /// What the buttons, wheel and keys do.
     pub bindings: Bindings,
     /// Render for the launcher's window instead of one of our own: the frame file the launcher created. The video
@@ -155,6 +157,7 @@ impl PlayConfig {
             title: "The Blockheads".into(),
             mods: None,
             lang: bhpc_app::hud::Lang::En,
+            mic_device: None,
             bindings: Bindings::default(),
             embed: None,
             open_uri: None,
@@ -254,6 +257,9 @@ struct Flags {
     clipboard: Mutex<Option<String>>,
     /// The mod loader's view and the player's answers (drawn and handled on the window thread).
     mods: Mutex<Option<Arc<crate::modglue::Shared>>>,
+    /// Voice chat: the microphone (opened and closed by the window thread) and the push-to-talk keys.
+    mic: Arc<bhpc_audio::capture::MicControl>,
+    talk: Arc<bhpc_mods::voice::TalkKeys>,
 }
 
 /// A failure to get a window or GL context: in-window mode reports that it cannot work here (the launcher falls back
@@ -435,7 +441,9 @@ impl Hooks {
             self.sdl.set_hud(Some(hud));
         }
         {
-            let view = self.flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            let mut view = self.flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            // The mic-on indicator: the host's own, from the device state (no mod can hide it).
+            view.mic = self.flags.mic.live();
             let (sw, sh) = self.window.surface_size();
             let (dw, dh) = self.window.drawable_size();
             // The game picture as the window letterboxes it.
@@ -568,6 +576,30 @@ struct Watched {
     inner: SdlBackend,
     flags: Arc<Flags>,
     fullscreen: bool,
+    /// Opens the microphone while voice chat wants it (SDL audio calls stay on this thread).
+    mic: bhpc_audio::capture::MicDriver,
+    /// `BHPC_VOICE_TEST_MIC`: a generated or recorded signal instead of the microphone (headless voice tests).
+    test_mic: Option<bhpc_audio::testmic::TestMic>,
+}
+
+/// SDL's recording devices as a voice capture backend.
+struct SdlMic<'a>(&'a mut SdlBackend);
+
+impl bhpc_audio::capture::CaptureBackend for SdlMic<'_> {
+    fn devices(&mut self) -> Vec<String> {
+        self.0.capture_devices()
+    }
+    fn open(
+        &mut self,
+        device: Option<&str>,
+        rate: u32,
+        samples: u16,
+        mut sink: bhpc_audio::capture::CaptureSink,
+    ) -> Result<Box<dyn std::any::Any>, String> {
+        let dev = self.0.open_capture(device, rate as i32, samples, move |s| sink(s))?;
+        eprintln!("[voice] microphone on ({})", device.unwrap_or("default device"));
+        Ok(Box::new(dev))
+    }
 }
 
 impl Backend for Watched {
@@ -583,6 +615,14 @@ impl Backend for Watched {
             if !self.inner.set_clipboard_text(&text) {
                 eprintln!("[play] cannot set the clipboard");
             }
+        }
+        let was_open = self.mic.is_open();
+        match self.test_mic.as_mut() {
+            Some(t) => self.mic.sync(t),
+            None => self.mic.sync(&mut SdlMic(&mut self.inner)),
+        }
+        if was_open && !self.mic.is_open() {
+            eprintln!("[voice] microphone off");
         }
         if self.flags.toggle_fullscreen.swap(false, Ordering::SeqCst) {
             let want = !self.fullscreen;
@@ -700,7 +740,26 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
         .stack_size(256 << 20)
         .spawn(move || guest_main(&c, gl, rx, f, mx))?;
     let mut app = App::new(
-        Watched { inner: backend, flags: flags.clone(), fullscreen: false },
+        Watched {
+            inner: backend,
+            flags: flags.clone(),
+            fullscreen: false,
+            mic: {
+                flags.mic.set_device(cfg.mic_device.clone());
+                bhpc_audio::capture::MicDriver::new(flags.mic.clone())
+            },
+            test_mic: match bhpc_audio::testmic::TestMic::from_env() {
+                Some(Ok(t)) => {
+                    eprintln!("[voice] test microphone: {}", std::env::var("BHPC_VOICE_TEST_MIC").unwrap_or_default());
+                    Some(t)
+                }
+                Some(Err(e)) => {
+                    eprintln!("[voice] {e}");
+                    None
+                }
+                None => None,
+            },
+        },
         SystemClock::new(),
         // The fullscreen key is a binding now (`HostAction::ToggleFullscreen` from the input mapper). The game's
         // swap interval is set through the GL window (`set_vsync_allowed`); the loop itself does not render.
@@ -1105,7 +1164,12 @@ fn boot(
         let ivars = crate::cosmetics::Ivars::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
             .inspect_err(|e| eprintln!("[cosmetics] off: {e}"))
             .ok();
-        let g = Arc::new(crate::modglue::ModGlue::new(rt, opts, ivars));
+        let voice = crate::modglue::VoiceIo {
+            mic: flags.mic.clone(),
+            out: Arc::new(bhpc_audio::voice::VoiceOut::new(mixer.clone())),
+            talk: flags.talk.clone(),
+        };
+        let g = Arc::new(crate::modglue::ModGlue::new(rt, opts, ivars, voice));
         g.install(&mut sess.cpu);
         // Native mods: the libbhmod functions as thunks, the game's modules as the hooks' view of the guest.
         let natives = crate::native::Natives::new(rt, sess.st.clone(), sess.linker.modules());
@@ -1360,6 +1424,10 @@ impl UiThread {
         let pad_at = pad_cursor.unwrap_or((content.0 / 2.0, content.1 / 2.0));
         let pad_at = (pad_at.0.round() as i32, pad_at.1.round() as i32);
         for a in actions {
+            if let HostAction::Voice { mode, pressed } = *a {
+                self.flags.talk.post(mode, pressed);
+                continue;
+            }
             let Some(g) = &self.game else {
                 if *a == HostAction::ToggleGameButtons {
                     self.say("GAME BUTTONS CANNOT BE HIDDEN");
@@ -1766,13 +1834,15 @@ impl UiThread {
             if let Some((w, h)) = vm.content_size().filter(|s| Some(*s) != mapper.geometry().content) {
                 mapper.set_content(w, h);
             }
+            let mut grid = None;
             if let Some(g) = &self.game {
                 let content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
                 let mem = sink.cpu.mem().clone();
                 let dpad = g.ui.dpad(&mem).and_then(|(size, right)| {
                     crate::gameui::dpad_centre(size, content, right, crate::gameui::DPAD_INSET)
                 });
-                mapper.pad_mut().set_grid(g.ui.grid(&mem, content));
+                grid = g.ui.grid(&mem, content);
+                mapper.pad_mut().set_grid(grid);
                 mapper.set_world_zoom(g.ui.zoom(&mem).is_some());
                 mapper.pad_mut().set_dpad(dpad);
             }
@@ -1794,6 +1864,21 @@ impl UiThread {
                 let mods = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).clone();
                 if let Some(m) = mods {
                     use bhpc_mods::ui::UiInput;
+                    // A dialog's text field takes typed characters (SDL text input is always on for the window).
+                    if let Event::Text(t) = &ev {
+                        let field = {
+                            let view = m.view.lock().unwrap_or_else(PoisonError::into_inner);
+                            view.dialog.as_ref().is_some_and(|d| d.dialog.field.is_some())
+                        };
+                        if field {
+                            let view = m.view.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                            for ch in t.chars() {
+                                m.ui.lock().unwrap_or_else(PoisonError::into_inner).input(UiInput::Char(ch), &view);
+                            }
+                            m.serial.fetch_add(1, Ordering::SeqCst);
+                            continue;
+                        }
+                    }
                     let input = match &ev {
                         Event::Key { key, pressed: true, .. } => UiInput::Key(key.0),
                         Event::MouseButton { button: bhpc_app::MouseButton::Left, pressed: true, x, y } => {
@@ -1846,6 +1931,26 @@ impl UiThread {
                         eprintln!("[zoom] host wheel dx {dx} dy {dy} at {now} ms");
                     }
                 }
+                // A middle click on a blockhead picks its player for the mods (`<mod>:ui-pick`). Left is the game's
+                // touch (portals, chests, walking) and right drags pan, so neither picks.
+                if let (Event::MouseButton { button: bhpc_app::MouseButton::Middle, pressed: true, x, y }, Some(g)) =
+                    (&ev, grid)
+                {
+                    let mods = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                    if let Some(m) = mods {
+                        let heads = m.heads.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                        let at = mapper.to_content(*x, *y);
+                        if let Some(p) = g.world(at).and_then(|w| bhpc_mods::overhead::pick(&heads, w)) {
+                            m.picks.lock().unwrap_or_else(PoisonError::into_inner).push(p);
+                        }
+                    }
+                }
+                // Keys for the mods' bindings (API `input`), not while typing, before the push-to-talk of the same key.
+                if let Event::Key { key, pressed, repeat: false, .. } = &ev {
+                    if let Some(name) = bhpc_input::keymap::api_key_name(key.0).filter(|_| mapper.text().is_none()) {
+                        flags.talk.post_key(name, *pressed);
+                    }
+                }
                 if let Some(h) = tracker.map(&ev) {
                     mapper.handle(h, now, &mut sink);
                 }
@@ -1871,6 +1976,17 @@ impl UiThread {
                 v.cursor = mapper.pad().cursor();
                 v.tile = mapper.pad().tile_size();
                 v.content = mapper.geometry().content.unwrap_or((cfg.window.0 as f32, cfg.window.1 as f32));
+                // Overhead icons: the heads' world positions through the game's tap matrices.
+                let heads = flags
+                    .mods
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                    .map(|m| m.overheads.lock().unwrap_or_else(PoisonError::into_inner).clone());
+                v.overheads = match (grid, heads) {
+                    (Some(g), Some(h)) => h.into_iter().filter_map(|(k, at)| g.screen(at).map(|p| (k, p))).collect(),
+                    _ => Vec::new(),
+                };
             }
             vm.set_dialog_caret(mapper.text_caret());
             // An input dialog: Return in its field presses the focused (first) button, Escape the cancel button.

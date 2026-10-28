@@ -38,6 +38,7 @@ export function resetStore(overrides: Partial<Record<keyof AppStore, unknown>> =
     update: { stage: 'idle', info: null, progress: null, error: '', checked: false },
     undoKeys: null,
     focusAction: null,
+    mics: null,
     ...overrides
   });
   setLang('en');

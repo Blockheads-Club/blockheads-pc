@@ -31,10 +31,29 @@ pub struct LaunchConfig {
     /// The controller cursor moves tile by tile in a world instead of gliding (`bhpc-run --pad-tile-cursor`).
     #[serde(default)]
     pub pad_tile_cursor: bool,
+    /// Voice chat: the microphone and the master volume.
+    #[serde(default)]
+    pub voice: VoiceOptions,
 }
 
 fn on() -> bool {
     true
+}
+
+/// Voice chat settings of the launcher (personal, on this device: the server never learns them).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceOptions {
+    /// Every player's voice, 0..=200 % (`bhpc-run --voice-master N` when not 100).
+    pub master: u16,
+    /// The recording device by name (`bhpc-run --mic-device NAME`); `None`: the system's default.
+    pub mic_device: Option<String>,
+}
+
+impl Default for VoiceOptions {
+    fn default() -> Self {
+        VoiceOptions { master: 100, mic_device: None }
+    }
 }
 
 /// Launcher failures.
@@ -75,6 +94,7 @@ impl LaunchConfig {
             controller: true,
             show_dpad: false,
             pad_tile_cursor: false,
+            voice: VoiceOptions::default(),
         }
     }
 
@@ -144,7 +164,9 @@ impl LaunchConfig {
     /// `--ui-scale F` (when not 1), `--game-speed F` (when not 1),
     /// `--no-controller` (when controllers are off), `--hide-dpad` (when the game's D-pad is not to show),
     /// `--pad-tile-cursor` (when the controller cursor moves tile by tile),
-    /// `--serial-guest` (when the game's threads may not run in parallel) and a `--bind ACTION=BINDING` for every key binding that is not the default.
+    /// `--serial-guest` (when the game's threads may not run in parallel), `--voice-master N` (when not 100),
+    /// `--mic-device NAME` (when one is chosen) and a `--bind ACTION=BINDING` for every key binding that is not the
+    /// default.
     pub fn run_args(&self) -> Vec<String> {
         let mut a = vec![
             "--apk".to_string(),
@@ -182,6 +204,12 @@ impl LaunchConfig {
         }
         if self.window.game_speed != 1.0 {
             a.extend(["--game-speed".to_string(), self.window.game_speed.to_string()]);
+        }
+        if self.voice.master != 100 {
+            a.extend(["--voice-master".to_string(), self.voice.master.min(200).to_string()]);
+        }
+        if let Some(d) = self.voice.mic_device.as_ref().filter(|d| !d.is_empty()) {
+            a.extend(["--mic-device".to_string(), d.clone()]);
         }
         a.extend(self.keys.bind_flags());
         a

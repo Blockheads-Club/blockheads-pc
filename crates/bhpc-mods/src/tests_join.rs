@@ -60,7 +60,14 @@ pub(crate) fn info(id: &str, bytes: &[u8], native: bool) -> ModInfo {
         client_required: true,
         sha256: sha(bytes),
         size: bytes.len() as u64,
-        permissions: ModPermissions { world: "none".into(), players: vec![], net_http: vec![], channels: true, native },
+        permissions: ModPermissions {
+            world: "none".into(),
+            players: vec![],
+            net_http: vec![],
+            channels: true,
+            voice: false,
+            native,
+        },
         source_url: None,
         index_listed: false,
     }
@@ -72,6 +79,7 @@ pub(crate) fn cfg(dir: &Path) -> JoinConfig {
         platform: crate::platform(),
         api: "0.2.0".into(),
         runtimes: vec!["lua".into(), "wasm".into()],
+        features: crate::voice::features(true),
         dirs: ModsDirs::new(dir),
         index: None,
         block_native: false,
@@ -86,8 +94,16 @@ pub(crate) fn optional(mut i: ModInfo) -> ModInfo {
 }
 
 fn hello(count: u64, required: bool) -> Vec<u8> {
-    Message::ServerHello(ServerHello { proto: 1, mods_hash: [7; 32], client_required: required, count, players: None })
-        .encode()
+    Message::ServerHello(ServerHello {
+        proto: 1,
+        mods_hash: [7; 32],
+        client_required: required,
+        count,
+        players: None,
+        features: vec![],
+        voice_udp_port: None,
+    })
+    .encode()
 }
 
 fn list(mods: Vec<ModInfo>) -> Vec<u8> {
@@ -731,6 +747,8 @@ fn the_server_hello_player_count_reaches_the_dialog() {
         client_required: true,
         count: 1,
         players: Some(bhmod_proto::PlayerCount { online: 2, capacity: 8 }),
+        features: vec![],
+        voice_udp_port: None,
     })
     .encode();
     f.packet(&pkt, t);
@@ -738,4 +756,64 @@ fn the_server_hello_player_count_reaches_the_dialog() {
     // A count set by hand wins over the server's.
     f.set_players(5, 6);
     assert_eq!(f.players(), Some((5, 6)));
+}
+
+#[test]
+fn voice_and_settings_ops_once_both_sides_listed_them() {
+    let d = tempfile::tempdir().unwrap();
+    let t = Instant::now();
+    // A server without the features: nothing flows.
+    let mut f = JoinFlow::new(cfg(d.path()));
+    f.contact(t);
+    f.packet(&hello(0, false), t);
+    assert!(!f.voice_enabled() && !f.settings_enabled());
+    assert_eq!(f.voice_packet(vec![1]), None);
+    assert_eq!(f.settings_set_packet("m", "k", vec![0xf5]), None);
+    // One that lists them.
+    let mut f = JoinFlow::new(cfg(d.path()));
+    f.contact(t);
+    let h = ServerHello {
+        proto: 1,
+        mods_hash: [7; 32],
+        client_required: false,
+        count: 0,
+        players: None,
+        features: vec!["voice".into(), "settings".into()],
+        voice_udp_port: Some(15152),
+    };
+    f.packet(&Message::ServerHello(h).encode(), t);
+    assert!(f.voice_enabled() && f.settings_enabled());
+    assert_eq!(f.voice_udp_port(), Some(15152));
+    assert_eq!(f.voice_packet(vec![1]), Some(vec![1]));
+    assert!(f.settings_set_packet("m", "k", vec![0xf5]).is_some());
+    let key = Message::VoiceKey(bhmod_proto::VoiceKey { public: [3; 32], peer: Some(1), udp_port: None });
+    assert_eq!(f.packet(&key.encode(), t), vec![Action::Voice(key)]);
+    let schema = bhmod_proto::SettingsSchema { mod_id: "m".into(), schema: vec![0xa0], values: vec![0xa0] };
+    assert_eq!(f.packet(&Message::SettingsSchema(schema.clone()).encode(), t), vec![Action::SettingsSchema(schema)]);
+    let r = bhmod_proto::SettingsResult { mod_id: Some("m".into()), key: None, outcome: Ok(()) };
+    assert_eq!(f.packet(&Message::SettingsResult(r.clone()).encode(), t), vec![Action::SettingsResult(r)]);
+}
+
+#[test]
+fn an_optional_mod_for_a_newer_api_is_skipped_with_a_notice() {
+    let d = tempfile::tempdir().unwrap();
+    // A package asking for a far newer API than this loader has.
+    let nv = {
+        let toml = "schema = 1\nid = \"nv\"\nversion = \"1.0.0\"\nname = { en = \"Mod nv\" }\nauthors = [\"a\"]\n\
+                    license = \"MIT\"\napi = \"^9.0\"\n[sides]\nclient = true\n[entry.client]\nruntime = \"lua\"\n\
+                    path = \"client/main.luau\"\n";
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        w.start_file("mod.toml", o).unwrap();
+        std::io::Write::write_all(&mut w, toml.as_bytes()).unwrap();
+        w.start_file("client/main.luau", o).unwrap();
+        std::io::Write::write_all(&mut w, b"return {}\n").unwrap();
+        w.finish().unwrap().into_inner()
+    };
+    let (mut f, t) = at_prompt(d.path(), vec![optional(info("nv", &nv, false))], cfg(d.path()));
+    f.decide(true, false, t);
+    let a = f.packet(&chunks(&nv)[0], t);
+    let skipped = a.iter().find_map(|x| if let Action::Skipped(s) = x { Some(s.clone()) } else { None });
+    let skipped = skipped.unwrap_or_else(|| panic!("{a:?}"));
+    assert_eq!(skipped[0].id, "nv");
 }
