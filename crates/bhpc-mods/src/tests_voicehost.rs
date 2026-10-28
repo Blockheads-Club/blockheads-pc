@@ -20,6 +20,7 @@ use crate::tests_voice::FakeDriver;
 
 const MAIN: &str = r#"
 bh.events.on_custom("vm:input", function(ev) bh.log.info("input") end)
+bh.events.on_custom("vm:ui-pick", function(ev) bh.log.info("picked") end)
 bh.events.on_custom("voice:talk-start", function(ev) bh.log.info("talk-start") end)
 bh.commands.register({ name = "ov" }, function()
     bh.ui.clear_overhead(bh.players.get("ME"))
@@ -214,4 +215,42 @@ fn overhead_priority_and_visibility() {
         o.shown(&all),
         vec![("p".to_string(), OverheadIcon::AdminMute), ("q".to_string(), OverheadIcon::NoVoice)]
     );
+}
+
+#[test]
+fn players_by_id_once_voice_lists_them() {
+    let d = tempfile::tempdir().unwrap();
+    let drv = Rc::new(FakeDriver::default());
+    let mut h = host(d.path(), Some(drv.clone()));
+    let b = h.bridge_for_tests();
+    assert_eq!(b.local_player(), Some("ME".into()));
+    assert!(b.platform().starts_with("pc-"));
+    assert_eq!(b.online_players(), vec!["ME".to_string()]);
+    h.set_local_id(Some("id-me".into()));
+    assert_eq!(b.local_player(), Some("id-me".into()));
+    assert_eq!(b.player_alias("id-me"), Some("ME".into()));
+    *drv.names.borrow_mut() = vec![("id-a".into(), "Ann".into())];
+    assert_eq!(b.online_players(), vec!["id-me".to_string(), "id-a".to_string()]);
+    assert_eq!(h.online(), b.online_players());
+    assert_eq!(b.player_alias("id-a"), Some("Ann".into()));
+    assert_eq!(b.player_alias("nobody"), None);
+    assert!(b.send_chat("id-me", "hi") && b.send_chat("ME", "hi") && !b.send_chat("id-a", "hi"));
+    h.set_local_id(Some(String::new()));
+    assert_eq!(b.local_player(), Some("ME".into()));
+    *drv.names.borrow_mut() = vec![];
+    h.enable("World", "w");
+    let _ = logs(&h);
+    h.pick("ME");
+    assert!(logs(&h).contains(&"picked".to_string()));
+}
+
+#[test]
+fn picking_a_blockhead() {
+    use crate::overhead::{pick, HEAD_LIFT};
+    let heads = vec![("a".to_string(), (10.0, 5.0 + HEAD_LIFT)), ("b".to_string(), (10.4, 5.0 + HEAD_LIFT))];
+    assert_eq!(pick(&heads, (10.35, 6.0)), Some("b".into()));
+    assert_eq!(pick(&heads, (9.8, 5.0)), Some("a".into()));
+    assert_eq!(pick(&heads, (10.0, 8.0)), None, "above the head");
+    assert_eq!(pick(&heads, (12.0, 6.0)), None);
+    assert_eq!(pick(&[], (0.0, 0.0)), None);
 }

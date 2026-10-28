@@ -796,10 +796,13 @@ fn note_position(o: &Objc, c: &mut Cpu, iv: &Ivars, bh: u32) {
     if alias.is_empty() && !is_net(c, iv, bh) {
         alias = crate::modglue::MAIN.with(|m| m.borrow().local.clone());
     }
+    let head = (x, y + bhpc_mods::overhead::HEAD_LIFT);
+    // Mods name players by alias on PC, by id (`clientID`) once voice chat lists them: both are kept.
+    let id = player_of(o, c, iv, bh, false);
+    if !id.is_empty() && id != alias {
+        crate::modglue::note_head(id, head);
+    }
     if !alias.is_empty() {
-        crate::modglue::note_head(alias, (x, y + OVERHEAD_LIFT));
+        crate::modglue::note_head(alias, head);
     }
 }
-
-/// Tiles above the feet where an overhead icon goes.
-const OVERHEAD_LIFT: f32 = 2.6;

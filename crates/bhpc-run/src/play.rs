@@ -1904,6 +1904,19 @@ impl UiThread {
                         eprintln!("[zoom] host wheel dx {dx} dy {dy} at {now} ms");
                     }
                 }
+                // A click on a blockhead picks its player for the mods (`<mod>:ui-pick`); the game still gets it.
+                if let (Event::MouseButton { button: bhpc_app::MouseButton::Left, pressed: true, x, y }, Some(g)) =
+                    (&ev, grid)
+                {
+                    let mods = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                    if let Some(m) = mods {
+                        let heads = m.heads.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                        let at = mapper.to_content(*x, *y);
+                        if let Some(p) = g.world(at).and_then(|w| bhpc_mods::overhead::pick(&heads, w)) {
+                            m.picks.lock().unwrap_or_else(PoisonError::into_inner).push(p);
+                        }
+                    }
+                }
                 // Keys for the mods' bindings (API `input`), not while typing, before the push-to-talk of the same key.
                 if let Event::Key { key, pressed, repeat: false, .. } = &ev {
                     if let Some(name) = bhpc_input::keymap::api_key_name(key.0).filter(|_| mapper.text().is_none()) {

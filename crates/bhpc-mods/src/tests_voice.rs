@@ -65,6 +65,7 @@ pub(crate) struct FakeDriver {
     pub icons: Cell<Option<Icons>>,
     pub events: RefCell<Vec<VoiceEvent>>,
     pub no_key: Cell<bool>,
+    pub names: RefCell<Vec<(String, String)>>,
 }
 
 impl VoiceHost for FakeDriver {
@@ -114,6 +115,12 @@ impl VoiceDriver for FakeDriver {
     }
     fn udp_port(&self) -> Option<u16> {
         self.port.get()
+    }
+    fn players(&self) -> Vec<(String, String)> {
+        self.names.borrow().clone()
+    }
+    fn alias(&self, player: &str) -> Option<String> {
+        self.names.borrow().iter().find(|(p, _)| p == player).map(|(_, a)| a.clone())
     }
     fn prefs(&self) -> String {
         self.prefs.borrow().clone()
@@ -228,6 +235,8 @@ fn the_opus_voice_client_behind_the_driver_seam() {
     assert_eq!(d.take_events(), vec![VoiceEvent::Mic(MicState::On)]);
     assert_eq!(d.transmitting(), None);
     assert_eq!(d.udp_port(), None);
+    assert!(d.players().is_empty());
+    assert_eq!(d.alias("p"), None);
     d.load_prefs("master 150\n");
     assert!(d.prefs().starts_with("master 150"));
     assert_eq!(d.as_host().master(), Ok(150));

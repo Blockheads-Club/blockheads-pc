@@ -115,6 +115,8 @@ pub(crate) struct Bridge {
     fresh: RefCell<Vec<LogLine>>,
     /// The voice client (API 0.3.4 `voice`), when this session runs voice chat.
     voice: Option<Rc<dyn VoiceDriver>>,
+    /// The local player's id on the server (`-[BHNetClientMatch localPlayerID]`), when online.
+    local_id: RefCell<Option<String>>,
     /// The mods' key bindings (API 0.3.4 `input`).
     binds: RefCell<Binds>,
     /// The mods' overhead icons (API 0.3.4 `ui.set-overhead`).
@@ -149,16 +151,35 @@ impl GameBridge for Bridge {
         self.push_log(mod_id, level, message);
     }
     fn online_players(&self) -> Vec<String> {
-        let mut all = self.players.borrow().clone();
+        // With voice chat the server lists players by id (`VOICE_STATE`), as its mods name them.
+        let voiced: Vec<String> =
+            self.voice.as_ref().map(|v| v.players()).unwrap_or_default().into_iter().map(|p| p.0).collect();
+        let (mut all, me) = if voiced.is_empty() {
+            (self.players.borrow().clone(), self.local.borrow().clone())
+        } else {
+            (voiced, self.local_player().unwrap_or_default())
+        };
         // The player is in their own game, in single-player and before the server's list arrives.
-        let me = self.local.borrow();
         if !all.contains(&me) && !me.is_empty() {
-            all.insert(0, me.clone());
+            all.insert(0, me);
         }
         all
     }
     fn player_alias(&self, id: &str) -> Option<String> {
+        if let Some(a) = self.voice.as_ref().and_then(|v| v.alias(id)) {
+            return Some(a);
+        }
+        if self.local_id.borrow().as_deref() == Some(id) {
+            return Some(self.local.borrow().clone());
+        }
         self.online_players().into_iter().find(|p| p.as_str() == id)
+    }
+    fn local_player(&self) -> Option<String> {
+        let me = self.local.borrow();
+        self.local_id.borrow().clone().or_else(|| (!me.is_empty()).then(|| me.clone()))
+    }
+    fn platform(&self) -> String {
+        crate::platform()
     }
     fn player_pos(&self, id: &str) -> Option<Pos> {
         self.positions.borrow().get(id).copied()
@@ -167,7 +188,7 @@ impl GameBridge for Bridge {
         Role::Player
     }
     fn send_chat(&self, id: &str, text: &str) -> bool {
-        let me = *self.local.borrow() == id;
+        let me = *self.local.borrow() == id || self.local_id.borrow().as_deref() == Some(id);
         if me {
             self.effects.borrow_mut().push(Effect::Chat(text.to_string()));
         }
@@ -334,6 +355,7 @@ impl ClientHost {
             log: RefCell::new(VecDeque::new()),
             fresh: RefCell::new(Vec::new()),
             voice: setup.voice,
+            local_id: RefCell::new(None),
             binds: RefCell::new(setup.binds.as_deref().map(Binds::load).unwrap_or_default()),
             overheads: RefCell::new(Overheads::default()),
         });
@@ -380,6 +402,21 @@ impl ClientHost {
     /// The local player's alias.
     pub fn set_local_player(&self, alias: &str) {
         *self.bridge.local.borrow_mut() = alias.to_string();
+    }
+
+    /// The local player's id on the server (`players.local-player`; voice chat names players by id).
+    pub fn set_local_id(&self, id: Option<String>) {
+        *self.bridge.local_id.borrow_mut() = id.filter(|i| !i.is_empty());
+    }
+
+    /// The players as the mods name them (`players.online`: aliases, or ids once voice chat lists them).
+    pub fn online(&self) -> Vec<String> {
+        self.bridge.online_players()
+    }
+
+    /// The player clicked a blockhead: `<mod>:ui-pick {player}` for every mod.
+    pub fn pick(&mut self, player: &str) {
+        self.host.ui_pick(player);
     }
 
     /// A chat message from the server (`alias` empty for server messages). `None`: a mod hid it; otherwise the

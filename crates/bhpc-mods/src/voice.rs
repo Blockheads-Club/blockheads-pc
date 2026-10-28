@@ -93,6 +93,10 @@ pub trait VoiceDriver {
     fn take_events(&self) -> Vec<VoiceEvent>;
     /// The server's voice UDP port when the client switched to it.
     fn udp_port(&self) -> Option<u16>;
+    /// Every player the server listed in `VOICE_STATE`: `(player id, alias)`.
+    fn players(&self) -> Vec<(String, String)>;
+    /// A listed player's alias.
+    fn alias(&self, player: &str) -> Option<String>;
     /// Master volume, per-player volumes and local mutes as text (kept on the device).
     fn prefs(&self) -> String;
     /// Restores [`VoiceDriver::prefs`].
@@ -418,6 +422,12 @@ impl VoiceDriver for bhmod_voice::client::SharedVoiceClient {
     }
     fn udp_port(&self) -> Option<u16> {
         self.lock().udp_port()
+    }
+    fn players(&self) -> Vec<(String, String)> {
+        self.lock().players()
+    }
+    fn alias(&self, player: &str) -> Option<String> {
+        self.lock().alias(player)
     }
     fn prefs(&self) -> String {
         self.lock().prefs()

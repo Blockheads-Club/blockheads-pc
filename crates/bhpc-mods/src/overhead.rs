@@ -65,3 +65,19 @@ impl Overheads {
         best.into_iter().map(|(p, i)| (p.to_string(), i)).collect()
     }
 }
+
+/// The blockhead under a click: `heads` are `(player, head)` in world tiles (the head is [`HEAD_LIFT`] above the
+/// feet, the body two tiles tall, half a tile to each side), `at` is the clicked world point. The closest wins.
+pub fn pick(heads: &[(String, (f32, f32))], at: (f32, f32)) -> Option<String> {
+    heads
+        .iter()
+        .filter(|(_, (x, y))| {
+            let feet = y - HEAD_LIFT;
+            (at.0 - x).abs() <= 0.6 && at.1 >= feet - 0.1 && at.1 <= feet + 2.2
+        })
+        .min_by(|a, b| (a.1 .0 - at.0).abs().total_cmp(&(b.1 .0 - at.0).abs()))
+        .map(|(p, _)| p.clone())
+}
+
+/// Tiles from a blockhead's feet (`floatPos`) to where its overhead icon goes.
+pub const HEAD_LIFT: f32 = 2.6;

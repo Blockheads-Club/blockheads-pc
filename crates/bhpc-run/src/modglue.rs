@@ -79,6 +79,10 @@ pub struct Shared {
     /// Overhead icons to draw and where (world tiles, the head of the blockhead); the window maps them to the
     /// screen with the game's tap matrices.
     pub overheads: Mutex<Vec<(bhpc_app::hud::Overhead, (f32, f32))>>,
+    /// The heads of the blockheads drawn last frame by player (world tiles), for clicks on a blockhead.
+    pub heads: Mutex<Vec<(String, (f32, f32))>>,
+    /// Players whose blockhead was clicked, for `<mod>:ui-pick` (window thread -> main thread).
+    pub picks: Mutex<Vec<String>>,
     /// The mod UI's own state (open panel, native confirmation, clickable areas).
     pub ui: Mutex<bhpc_mods::ui::ModUi>,
     cmds: Mutex<Vec<UiCmd>>,
@@ -1024,6 +1028,9 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
     });
     let world = server.as_ref().map_or("single-player".to_string(), |(s, _)| s.clone());
     start_natives(opts, &dir, c);
+    if server.is_some() {
+        host.set_local_id(Some(local_player_id(o, c)));
+    }
     host.enable(&world, &key);
     log(&format!("session started ({world}): {} mod(s)", placed.len()));
     MAIN.with(|m| {
@@ -1402,9 +1409,24 @@ fn serde_status(mods: &[(bhpc_mods::host::ModStatus, &'static str)]) -> Option<S
 /// The overhead icons of this frame for the window (world positions of the heads drawn), and whether the draw hook
 /// must keep recording heads.
 fn publish_overheads(sh: &Shared) {
-    let shown = MAIN.with(|m| m.borrow().host.as_ref().map(ClientHost::overheads).unwrap_or_default());
-    WANT_HEADS.with(|w| w.set(!shown.is_empty()));
+    let (shown, voice, online) = MAIN.with(|m| {
+        let m = m.borrow();
+        let h = m.host.as_ref();
+        (
+            h.map(ClientHost::overheads).unwrap_or_default(),
+            m.voice.is_some(),
+            h.map(ClientHost::online).unwrap_or_default(),
+        )
+    });
+    // Heads are recorded while icons show or voice chat runs (clicks on a blockhead pick a player).
+    WANT_HEADS.with(|w| w.set(!shown.is_empty() || voice));
     let heads = HEADS.with(|h| std::mem::take(&mut *h.borrow_mut()));
+    let picks = std::mem::take(&mut *sh.picks.lock().unwrap_or_else(PoisonError::into_inner));
+    if !picks.is_empty() {
+        with_host(|h| picks.iter().for_each(|p| h.pick(p)));
+    }
+    *sh.heads.lock().unwrap_or_else(PoisonError::into_inner) =
+        heads.iter().filter(|(p, _)| online.contains(p)).map(|(p, at)| (p.clone(), *at)).collect();
     let list: Vec<_> =
         shown.into_iter().filter_map(|(player, icon)| heads.get(&player).map(|at| (hud_kind(icon), *at))).collect();
     *sh.overheads.lock().unwrap_or_else(PoisonError::into_inner) = list;
