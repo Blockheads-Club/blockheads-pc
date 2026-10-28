@@ -3,6 +3,7 @@
 //! - [`join`]: the 0xBC join flow against a server (mod-sdk `docs/protocol-0xbc.md`), as a state machine the
 //!   `bhpc-run` glue drives from the game's networking hooks.
 //! - [`session`]: the folder of mods one game session runs (the player's own, developer folders, a server's).
+//! - [`voice`]: voice chat seams (HELLO features, push-to-talk events).
 //! - [`host`]: the mod host of a session (bhmod-core: Luau, WASM) with the PC client's game bridge.
 //!
 //! Nothing here touches the guest: the glue (`bhpc-run`, play build) installs the ObjC hooks, runs everything on
@@ -13,6 +14,7 @@ pub mod join;
 pub mod session;
 pub mod ui;
 pub mod view;
+pub mod voice;
 
 /// The loader version sent in `HELLO.loader`.
 pub const LOADER_VERSION: &str = bhpc_launcher::mods::LOADER_VERSION;
@@ -34,6 +36,8 @@ mod tests_join;
 mod tests_jvm;
 #[cfg(test)]
 mod tests_session;
+#[cfg(test)]
+mod tests_voice;
 
 /// The `blockheads:api` version the client host implements.
 pub const API_VERSION: &str = bhmod_core::API_VERSION;

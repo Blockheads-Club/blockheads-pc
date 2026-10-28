@@ -53,6 +53,21 @@ pub struct ModsOptions {
     pub jvm: bool,
     /// The JRE to use (`--mods-java-home`); `None` searches `JAVA_HOME` and the `PATH`.
     pub java_home: Option<PathBuf>,
+    /// `HELLO.features` (set by [`ModGlue::new`] from what the game build allows).
+    pub features: Vec<String>,
+}
+
+/// The platform I/O the voice chat host plugs into (mod-sdk `bhmod-voice` does crypto, Opus, jitter, mixing policy,
+/// VAD and the push-to-talk state machine on top of it).
+pub struct VoiceIo {
+    /// Unsequenced in-band send; `None` when the game does not export what it needs.
+    pub unsequenced: Option<crate::voicenet::Unsequenced>,
+    /// The microphone (opened by the window thread only while wanted).
+    pub mic: Arc<bhpc_audio::capture::MicControl>,
+    /// Per-speaker playback on the game's mixer.
+    pub out: Arc<bhpc_audio::voice::VoiceOut>,
+    /// Push-to-talk key events from the input thread.
+    pub talk: Arc<bhpc_mods::voice::TalkKeys>,
 }
 
 /// State shared with the window thread (drawing, input).
@@ -249,6 +264,7 @@ pub struct ModGlue {
     pub shared: Arc<Shared>,
     pub(crate) objc: Arc<Objc>,
     opts: Arc<ModsOptions>,
+    pub voice: VoiceIo,
 }
 
 pub(crate) fn log(msg: &str) {
@@ -257,13 +273,14 @@ pub(crate) fn log(msg: &str) {
 
 impl ModGlue {
     /// Registers the hooks (install them with [`ModGlue::install`]).
-    pub fn new(rt: Runtime, opts: ModsOptions, ivars: Option<crate::cosmetics::Ivars>) -> ModGlue {
+    pub fn new(rt: Runtime, mut opts: ModsOptions, ivars: Option<crate::cosmetics::Ivars>, voice: VoiceIo) -> ModGlue {
         let hooks = Arc::new(ObjcHooks::new());
         let objc = Arc::new(Objc { rt, cache: Mutex::new(HashMap::new()) });
         let shared = Arc::new(Shared::default());
         shared.view.lock().unwrap_or_else(PoisonError::into_inner).dev = !opts.dev.is_empty();
+        opts.features.extend(bhpc_mods::voice::features(voice.unsequenced.is_some()));
         let opts = Arc::new(opts);
-        let g = ModGlue { hooks, rt, shared, objc, opts };
+        let g = ModGlue { hooks, rt, shared, objc, opts, voice };
         g.register();
         match ivars {
             Some(iv) => crate::cosmetics::register(&g.hooks, g.objc.clone(), iv),
@@ -432,9 +449,46 @@ impl ModGlue {
             }
         });
         apply_effects(&self.objc, c);
+        self.voice_frame(c);
         crate::cosmetics::frame(c);
         self.join_from_menu(c);
         publish(&self.shared, false);
+    }
+
+    /// Queue one voice payload (a whole 0xBC packet) for an unsequenced send on the game connection; any thread.
+    /// It leaves at the next frame (main thread), only while in a world on a server.
+    pub fn send_unsequenced(&self, payload: &[u8]) -> Result<(), crate::voicenet::SendError> {
+        match &self.voice.unsequenced {
+            Some(u) => u.outbox.queue(payload),
+            None => Err(crate::voicenet::SendError::Unsupported),
+        }
+    }
+
+    /// Voice I/O once per frame (main thread): the unsequenced queue goes out, the mic is never left open outside a
+    /// server's world, push-to-talk events are handed on.
+    fn voice_frame(&self, c: &mut Cpu) {
+        let (in_world, matcher) = MAIN.with(|m| {
+            let m = m.borrow();
+            (m.host.is_some() && m.host_online && m.conn.is_some(), m.conn.map_or(0, |c| c.matcher))
+        });
+        if let Some(u) = &self.voice.unsequenced {
+            u.outbox.set_in_world(in_world);
+            if in_world {
+                u.flush(c, matcher);
+            }
+        }
+        if !in_world && self.voice.mic.wanted() {
+            self.voice.mic.set_wanted(false);
+        }
+        if !in_world {
+            self.voice.out.clear();
+        }
+        // TODO(voice): hand these to bhmod-voice's push-to-talk state machine once it lands.
+        for k in self.voice.talk.take() {
+            if std::env::var_os("BHPC_VOICE_TRACE").is_some() {
+                log(&format!("push-to-talk {} {}", k.mode.name(), if k.pressed { "down" } else { "up" }));
+            }
+        }
     }
 
     /// The player left a failure or rejection notice: a failed join that kept its connection for "Try again" now
@@ -497,6 +551,7 @@ fn join_config(opts: &ModsOptions, address: String) -> JoinConfig {
         platform: bhpc_mods::platform(),
         api: bhpc_mods::API_VERSION.into(),
         runtimes: runtime_names(opts),
+        features: opts.features.clone(),
         dirs,
         index,
         block_native: opts.block_native,

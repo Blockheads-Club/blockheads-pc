@@ -13,6 +13,7 @@ jvm = ["bhmod-core/jvm"]
 
 [dependencies]
 bhpc-launcher = { path = "../bhpc-launcher" }
+bhpc-input = { path = "../bhpc-input" }
 bhmod-core.workspace = true
 bhmod-wasm.workspace = true
 bhmod-proto.workspace = true

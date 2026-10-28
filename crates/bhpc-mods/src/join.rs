@@ -41,6 +41,9 @@ pub struct JoinConfig {
     pub api: String,
     /// `HELLO.runtimes`.
     pub runtimes: Vec<String>,
+    /// `HELLO.features` (e.g. [`crate::voice::FEATURE_VOICE_UNSEQUENCED`]). Not sent yet: the pinned mod-sdk's
+    /// `session::Options` has no `features`; once bumped, `JoinFlow::new` copies them into it.
+    pub features: Vec<String>,
     /// The launcher's mod folders (the server-mod cache lives in `cache/blobs`).
     pub dirs: ModsDirs,
     /// The player's copy of the public mod index (for `indexListed`).

@@ -79,7 +79,8 @@ fn the_cursor_and_messages_become_sprites_rebuilt_only_on_change() {
     use std::time::{Duration, Instant};
     let now = Instant::now();
     let mut cache = SpriteCache::default();
-    let mut v = PadView { cursor: Some((250.0, 200.0)), tile: None, content: (1000.0, 800.0), message: None };
+    let mut v =
+        PadView { cursor: Some((250.0, 200.0)), tile: None, content: (1000.0, 800.0), message: None, mic: false };
     // A 2000x1600 picture: twice the content, the default cursor is 64 px.
     let s = cache.sprites(&v, (2000, 1600), now);
     assert_eq!(s.len(), 1);
@@ -121,6 +122,7 @@ fn messages_are_drawn_in_the_launcher_language() {
         tile: None,
         content: (1000.0, 800.0),
         message: Some(("GAME BUTTONS SHOWN".into(), now)),
+        mic: false,
     };
     let s = SpriteCache::new(Lang::Ru).sprites(&v, (1000, 800), now);
     let want = render_label("КНОПКИ ИГРЫ ПОКАЗАНЫ", hud_scale(800));
@@ -147,4 +149,20 @@ fn composer_blends_the_mod_ui_over_the_views() {
     assert_eq!((g.width, &g.rgba[..4]), (3, &[64, 0, 0, 128][..]));
     let h = c.compose(None, Some((half, 2, 1))).unwrap();
     assert_ne!(h.serial, g.serial);
+}
+
+#[test]
+fn the_mic_indicator_shows_while_the_mic_records() {
+    use crate::overlay::{PadView, SpriteCache, MIC_AT};
+    use std::time::Instant;
+    let now = Instant::now();
+    let mut cache = SpriteCache::default();
+    let mut v = PadView { content: (1000.0, 800.0), ..PadView::default() };
+    assert!(cache.sprites(&v, (2000, 1600), now).is_empty());
+    v.mic = true;
+    let s = cache.sprites(&v, (2000, 1600), now);
+    assert_eq!((s.len(), s[0].at, s[0].overlay.width), (1, MIC_AT, 48), "12 px x the HUD scale (4)");
+    let serial = s[0].overlay.serial;
+    assert_eq!(cache.sprites(&v, (2000, 1600), now)[0].overlay.serial, serial, "kept");
+    assert_ne!(cache.sprites(&v, (1000, 800), now)[0].overlay.serial, serial, "rebuilt for another scale");
 }

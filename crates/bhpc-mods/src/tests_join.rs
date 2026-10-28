@@ -72,6 +72,7 @@ pub(crate) fn cfg(dir: &Path) -> JoinConfig {
         platform: crate::platform(),
         api: "0.2.0".into(),
         runtimes: vec!["lua".into(), "wasm".into()],
+        features: crate::voice::features(true),
         dirs: ModsDirs::new(dir),
         index: None,
         block_native: false,

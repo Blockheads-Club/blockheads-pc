@@ -262,6 +262,7 @@ dependencies = [
  "bhmod-manifest",
  "bhmod-proto",
  "bhmod-wasm",
+ "bhpc-input",
  "bhpc-launcher",
  "semver",
  "serde",

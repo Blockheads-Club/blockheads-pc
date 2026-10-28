@@ -254,6 +254,9 @@ struct Flags {
     clipboard: Mutex<Option<String>>,
     /// The mod loader's view and the player's answers (drawn and handled on the window thread).
     mods: Mutex<Option<Arc<crate::modglue::Shared>>>,
+    /// Voice chat: the microphone (opened and closed by the window thread) and the push-to-talk keys.
+    mic: Arc<bhpc_audio::capture::MicControl>,
+    talk: Arc<bhpc_mods::voice::TalkKeys>,
 }
 
 /// A failure to get a window or GL context: in-window mode reports that it cannot work here (the launcher falls back
@@ -435,7 +438,9 @@ impl Hooks {
             self.sdl.set_hud(Some(hud));
         }
         {
-            let view = self.flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            let mut view = self.flags.pad_view.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            // The mic-on indicator: the host's own, from the device state (no mod can hide it).
+            view.mic = self.flags.mic.live();
             let (sw, sh) = self.window.surface_size();
             let (dw, dh) = self.window.drawable_size();
             // The game picture as the window letterboxes it.
@@ -568,6 +573,28 @@ struct Watched {
     inner: SdlBackend,
     flags: Arc<Flags>,
     fullscreen: bool,
+    /// Opens the microphone while voice chat wants it (SDL audio calls stay on this thread).
+    mic: bhpc_audio::capture::MicDriver,
+}
+
+/// SDL's recording devices as a voice capture backend.
+struct SdlMic<'a>(&'a mut SdlBackend);
+
+impl bhpc_audio::capture::CaptureBackend for SdlMic<'_> {
+    fn devices(&mut self) -> Vec<String> {
+        self.0.capture_devices()
+    }
+    fn open(
+        &mut self,
+        device: Option<&str>,
+        rate: u32,
+        samples: u16,
+        mut sink: bhpc_audio::capture::CaptureSink,
+    ) -> Result<Box<dyn std::any::Any>, String> {
+        let dev = self.0.open_capture(device, rate as i32, samples, move |s| sink(s))?;
+        eprintln!("[voice] microphone on ({})", device.unwrap_or("default device"));
+        Ok(Box::new(dev))
+    }
 }
 
 impl Backend for Watched {
@@ -583,6 +610,11 @@ impl Backend for Watched {
             if !self.inner.set_clipboard_text(&text) {
                 eprintln!("[play] cannot set the clipboard");
             }
+        }
+        let was_open = self.mic.is_open();
+        self.mic.sync(&mut SdlMic(&mut self.inner));
+        if was_open && !self.mic.is_open() {
+            eprintln!("[voice] microphone off");
         }
         if self.flags.toggle_fullscreen.swap(false, Ordering::SeqCst) {
             let want = !self.fullscreen;
@@ -700,7 +732,12 @@ pub fn play(cfg: &PlayConfig) -> Result<PlayReport, RunError> {
         .stack_size(256 << 20)
         .spawn(move || guest_main(&c, gl, rx, f, mx))?;
     let mut app = App::new(
-        Watched { inner: backend, flags: flags.clone(), fullscreen: false },
+        Watched {
+            inner: backend,
+            flags: flags.clone(),
+            fullscreen: false,
+            mic: bhpc_audio::capture::MicDriver::new(flags.mic.clone()),
+        },
         SystemClock::new(),
         // The fullscreen key is a binding now (`HostAction::ToggleFullscreen` from the input mapper). The game's
         // swap interval is set through the GL window (`set_vsync_allowed`); the loop itself does not render.
@@ -1105,7 +1142,16 @@ fn boot(
         let ivars = crate::cosmetics::Ivars::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
             .inspect_err(|e| eprintln!("[cosmetics] off: {e}"))
             .ok();
-        let g = Arc::new(crate::modglue::ModGlue::new(rt, opts, ivars));
+        let enet = crate::voicenet::EnetExports::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
+            .inspect_err(|e| eprintln!("[voice] no unsequenced send: {e}"))
+            .ok();
+        let voice = crate::modglue::VoiceIo {
+            unsequenced: enet.map(crate::voicenet::Unsequenced::new),
+            mic: flags.mic.clone(),
+            out: Arc::new(bhpc_audio::voice::VoiceOut::new(mixer.clone())),
+            talk: flags.talk.clone(),
+        };
+        let g = Arc::new(crate::modglue::ModGlue::new(rt, opts, ivars, voice));
         g.install(&mut sess.cpu);
         // Native mods: the libbhmod functions as thunks, the game's modules as the hooks' view of the guest.
         let natives = crate::native::Natives::new(rt, sess.st.clone(), sess.linker.modules());
@@ -1360,6 +1406,10 @@ impl UiThread {
         let pad_at = pad_cursor.unwrap_or((content.0 / 2.0, content.1 / 2.0));
         let pad_at = (pad_at.0.round() as i32, pad_at.1.round() as i32);
         for a in actions {
+            if let HostAction::Voice { mode, pressed } = *a {
+                self.flags.talk.post(mode, pressed);
+                continue;
+            }
             let Some(g) = &self.game else {
                 if *a == HostAction::ToggleGameButtons {
                     self.say("GAME BUTTONS CANNOT BE HIDDEN");

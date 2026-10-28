@@ -207,6 +207,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             auto_accept: args.iter().any(|a| a == "--mods-auto-accept"),
             jvm: args.iter().any(|a| a == "--mods-jvm"),
             java_home: opt(args, "--mods-java-home").map(Into::into),
+            features: Vec::new(),
         });
     }
     cfg.control = args.iter().any(|a| a == "--control");

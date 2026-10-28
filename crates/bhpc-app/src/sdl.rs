@@ -133,6 +133,22 @@ impl sdl2::audio::AudioCallback for AudioOut {
     }
 }
 
+/// Receives the captured samples of a recording device.
+pub type CaptureFill = Box<dyn FnMut(&[i16]) + Send>;
+
+/// The callback of an open recording device.
+pub struct AudioIn(CaptureFill);
+
+impl sdl2::audio::AudioCallback for AudioIn {
+    type Channel = i16;
+    fn callback(&mut self, input: &mut [i16]) {
+        (self.0)(input);
+    }
+}
+
+/// An open recording device; dropping it closes the device (on the thread that owns SDL).
+pub type CaptureDevice = sdl2::audio::AudioDevice<AudioIn>;
+
 /// The GL half of the window, usable from guest threads.
 pub struct SdlGl {
     window: *mut sys::SDL_Window,
@@ -255,6 +271,34 @@ impl SdlBackend {
         dev.resume();
         self.audio = Some(dev);
         Ok(())
+    }
+
+    /// Names of the recording devices SDL sees (empty when it cannot list them).
+    pub fn capture_devices(&self) -> Vec<String> {
+        let Ok(audio) = self._sdl.audio() else { return Vec::new() };
+        let n = audio.num_audio_capture_devices().unwrap_or(0);
+        (0..n).filter_map(|i| audio.audio_capture_device_name(i).ok()).collect()
+    }
+
+    /// Open the recording device `device` (`None`: the default) for mono `i16` at `rate` Hz, `samples` frames per
+    /// callback, and start it; `push` gets the samples on SDL's audio thread. Voice chat opens it only on demand.
+    pub fn open_capture(
+        &mut self,
+        device: Option<&str>,
+        rate: i32,
+        samples: u16,
+        push: impl FnMut(&[i16]) + Send + 'static,
+    ) -> Result<CaptureDevice, String> {
+        let audio = self._sdl.audio()?;
+        let spec = sdl2::audio::AudioSpecDesired { freq: Some(rate), channels: Some(1), samples: Some(samples) };
+        let dev = audio.open_capture(device, &spec, |got| {
+            if got.freq != rate || got.channels != 1 {
+                eprintln!("[sdl] capture device gives {} Hz x {} (asked {rate} x 1)", got.freq, got.channels);
+            }
+            AudioIn(Box::new(push))
+        })?;
+        dev.resume();
+        Ok(dev)
     }
 
     /// Set the window icon from RGBA pixels (`width` x `height`, 4 bytes each).
