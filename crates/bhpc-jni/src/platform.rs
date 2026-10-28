@@ -284,15 +284,39 @@ impl Default for Platform {
     }
 }
 
-/// The `Settings.Secure.ANDROID_ID` the guest sees: `BHPC_ANDROID_ID` when it is 1-16 hex digits, else the fixed
-/// default. Headless tests that run several clients on one server need it: the game's device id (`udidNew` of its
-/// join) comes from `VerdeActivity.uuid()`, built from the first 12 digits, and a server lets one device play under
-/// one name at a time.
-pub fn android_id(env: Option<&str>) -> String {
-    match env {
-        Some(v) if (1..=16).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_hexdigit()) => v.to_ascii_lowercase(),
-        _ => Platform::default().android_id,
+/// The file in the launcher's data folder that holds this install's device id.
+pub const DEVICE_ID_FILE: &str = "device-id";
+
+fn is_hex(v: &str, len: std::ops::RangeInclusive<usize>) -> bool {
+    len.contains(&v.len()) && v.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// A fresh random 16-digit hex id (std's randomly keyed hasher over the time and the process id).
+pub fn random_device_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+    h.write_u32(std::process::id());
+    format!("{:016x}", h.finish())
+}
+
+/// This install's `Settings.Secure.ANDROID_ID`: the game builds its device id (`udidNew`, through
+/// `VerdeActivity.uuid()`, from the first 12 digits) from it, and a server binds a player's name to that device.
+/// `env` (`BHPC_ANDROID_ID`, 1-16 hex digits) wins, for tests that run several games from one data folder; else
+/// the id stored in `<root>/device-id`; else a new random one, stored there (a write failure keeps it for this run).
+pub fn device_id(root: &std::path::Path, env: Option<&str>) -> String {
+    if let Some(v) = env.filter(|v| is_hex(v, 1..=16)) {
+        return v.to_ascii_lowercase();
     }
+    let path = root.join(DEVICE_ID_FILE);
+    if let Some(v) = std::fs::read_to_string(&path).ok().filter(|s| is_hex(s.trim(), 16..=16)) {
+        return v.trim().to_ascii_lowercase();
+    }
+    let id = random_device_id();
+    if let Err(e) = std::fs::write(&path, format!("{id}\n")) {
+        eprintln!("[run] the device id is not kept ({}): {e}", path.display());
+    }
+    id
 }
 
 impl Platform {
@@ -306,7 +330,6 @@ impl Platform {
             external_dir: "/sdcard".to_string(),
             obb_dir: paths.obb_dir(),
             apk_path: paths.code_path(),
-            android_id: android_id(std::env::var("BHPC_ANDROID_ID").ok().as_deref()),
             ..Platform::default()
         }
     }
@@ -362,11 +385,24 @@ mod tests {
     }
 
     #[test]
-    fn android_id_override() {
-        assert_eq!(android_id(None), "0123456789abcdef");
-        assert_eq!(android_id(Some("00000000000000A1")), "00000000000000a1");
+    fn device_id_per_install() {
+        let dir = std::env::temp_dir().join(format!("bhpc-devid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(device_id(&dir, Some("A1b2")), "a1b2", "the override wins");
+        let first = device_id(&dir, None);
+        assert!(is_hex(&first, 16..=16), "{first}");
+        assert_eq!(std::fs::read_to_string(dir.join(DEVICE_ID_FILE)).unwrap(), format!("{first}\n"));
         for bad in ["", "xyz", "0123456789abcdef0"] {
-            assert_eq!(android_id(Some(bad)), "0123456789abcdef", "{bad:?}");
+            assert_eq!(device_id(&dir, Some(bad)), first, "bad override {bad:?}: the stored id");
         }
+        std::fs::write(dir.join(DEVICE_ID_FILE), "ABCDEF0123456789").unwrap();
+        assert_eq!(device_id(&dir, None), "abcdef0123456789", "kept");
+        std::fs::write(dir.join(DEVICE_ID_FILE), "garbage").unwrap();
+        let fresh = device_id(&dir, None);
+        assert!(is_hex(&fresh, 16..=16) && fresh != "abcdef0123456789", "a broken file gets a new id");
+        assert_ne!(random_device_id(), random_device_id());
+        // A folder that cannot be written: the id still comes back.
+        assert!(is_hex(&device_id(&dir.join("missing/sub"), None), 16..=16));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

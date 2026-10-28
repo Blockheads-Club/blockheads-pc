@@ -349,6 +349,7 @@ impl Session {
         report(Phase::Apk, 1, 1);
         let dirs = data_dirs(cfg.data_dir.as_deref(), DataDirs::platform_default());
         dirs.create_all()?;
+        let device_id = bhpc_jni::platform::device_id(&dirs.root, std::env::var("BHPC_ANDROID_ID").ok().as_deref());
         let mut vcfg = VfsConfig::new(&cfg.apk, dirs);
         vcfg.package = cfg.package.clone();
         if let Some(p) = &cfg.pictures {
@@ -384,6 +385,7 @@ impl Session {
         cpu.clear_cache();
         report(Phase::Libraries, 1, 1);
         let mut platform = bhpc_jni::Platform::for_guest(&storage.guest);
+        platform.android_id = device_id;
         platform.lan = crate::vfd::host_has_lan();
         if let Some((w, h)) = cfg.screen {
             (platform.screen_width, platform.screen_height) = (w, h);

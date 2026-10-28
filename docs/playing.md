@@ -41,6 +41,11 @@ game: Join World > Advanced... > Online IP/Port..., tap the port field and enter
 pre-filled with 15151), optionally set a nickname, then Join Online World. Details and a script that does this are in
 [`m7/net-bringup.md`](m7/net-bringup.md).
 
+Each install has its own device id (`DIR/device-id`, 16 random hex digits made on the first start; servers tie a
+player's name to the device). Release note: *PC now has its own device id per install; servers may see an existing PC
+player as a new device once.* (Before, every copy of the port reported the same id, so two PC players could not be on
+one server at the same time.) Deleting the file makes a new device; `BHPC_ANDROID_ID=<hex>` overrides it for tests.
+
 ## Where saves go
 
 Into the data directory: `--data-dir DIR`, or by default `$XDG_DATA_HOME/blockheads-pc`

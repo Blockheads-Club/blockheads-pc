@@ -139,9 +139,9 @@ done
 script ALICE "key enter" 200000 0 "click 700 380" > "$run/alice.script"
 script BOB wait 190000 15000 "click 330 380" > "$run/bob.script"
 script VANILLA wait 30000 0 wait > "$run/vanilla.script"
-game alice "$run/alice.script" BHPC_ANDROID_ID=a1a1a1a1a1a1a1a1 BHPC_VOICE_TRACE=1 BHPC_VOICE_TEST_MIC=pulse:440:300:1000 --
+game alice "$run/alice.script" BHPC_VOICE_TRACE=1 BHPC_VOICE_TEST_MIC=pulse:440:300:1000 --
 sleep 8
-game bob "$run/bob.script" BHPC_ANDROID_ID=b2b2b2b2b2b2b2b2 BHPC_VOICE_TRACE=1 BHPC_VOICE_TEST_MIC=sine:660 -- \
+game bob "$run/bob.script" BHPC_VOICE_TRACE=1 BHPC_VOICE_TEST_MIC=sine:660 -- \
   --mods-auto-accept
 wait_for "$run/bob.err" "got auth_ok [1-9]" 300 || note "BOB never got AUTH_OK"
 for _ in $(seq 120); do [[ -s "$run/bob/shots/spawned.png" ]] && break; sleep 1; done
@@ -157,7 +157,7 @@ sleep 15
 console "/voice unmute ALICE"
 sleep 15
 note "phase vanilla"
-game vanilla "$run/vanilla.script" BHPC_ANDROID_ID=c3c3c3c3c3c3c3c3 -- --no-mods
+game vanilla "$run/vanilla.script" -- --no-mods
 for _ in $(seq 150); do [[ $(grep -c "Player Connected" "$run/server.log") -ge 3 ]] && break; sleep 1; done
 note "end"
 
