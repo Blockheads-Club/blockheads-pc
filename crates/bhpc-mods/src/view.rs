@@ -313,3 +313,28 @@ pub fn status_line(mods: &[(ModStatus, &'static str)]) -> String {
         .collect();
     format!("@mods {}", serde_json::to_string(&items).expect("status serialises"))
 }
+
+/// The notice for an optional server mod this loader is too old for (`lang`: the launcher's language code).
+pub fn skipped_notice(lang: &str, m: &bhmod_client::session::SkippedMod) -> String {
+    let lang = lang.split(['-', '_']).next().unwrap_or_default().to_ascii_lowercase();
+    let name = m.name.get(&lang).or_else(|| m.name.get("en")).cloned().unwrap_or_else(|| m.id.clone());
+    let voice = m.id == "voice";
+    match lang.as_str() {
+        "tr" => {
+            let what = if voice { format!("{name} (sesli sohbet)") } else { name };
+            format!("Bu sunucuda {what} var: kullanmak için Blockheads PC'yi güncelle")
+        }
+        "ru" => {
+            let what = if voice { format!("{name} (голосовой чат)") } else { name };
+            format!("На этом сервере есть {what}: обнови Blockheads PC, чтобы пользоваться им")
+        }
+        "kk" => {
+            let what = if voice { format!("{name} (дауыстық чат)") } else { name };
+            format!("Бұл серверде {what} бар: қолдану үшін Blockheads PC-ді жаңарт")
+        }
+        _ => {
+            let what = if voice { format!("{name} (voice chat)") } else { name };
+            format!("This server has {what}: update Blockheads PC to use it")
+        }
+    }
+}

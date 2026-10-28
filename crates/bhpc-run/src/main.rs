@@ -212,6 +212,7 @@ fn play_apk(args: &[String], init: bhpc_run::apkrun::InitConfig, stderr: &mut dy
             java_home: opt(args, "--mods-java-home").map(Into::into),
             features: Vec::new(),
             voice_master,
+            lang: opt(args, "--lang").cloned().unwrap_or_default(),
         });
     }
     cfg.control = args.iter().any(|a| a == "--control");

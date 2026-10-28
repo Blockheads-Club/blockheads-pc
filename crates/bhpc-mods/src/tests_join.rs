@@ -793,3 +793,27 @@ fn voice_and_settings_ops_once_both_sides_listed_them() {
     let r = bhmod_proto::SettingsResult { mod_id: Some("m".into()), key: None, outcome: Ok(()) };
     assert_eq!(f.packet(&Message::SettingsResult(r.clone()).encode(), t), vec![Action::SettingsResult(r)]);
 }
+
+#[test]
+fn an_optional_mod_for_a_newer_api_is_skipped_with_a_notice() {
+    let d = tempfile::tempdir().unwrap();
+    // A package asking for a far newer API than this loader has.
+    let nv = {
+        let toml = "schema = 1\nid = \"nv\"\nversion = \"1.0.0\"\nname = { en = \"Mod nv\" }\nauthors = [\"a\"]\n\
+                    license = \"MIT\"\napi = \"^9.0\"\n[sides]\nclient = true\n[entry.client]\nruntime = \"lua\"\n\
+                    path = \"client/main.luau\"\n";
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        w.start_file("mod.toml", o).unwrap();
+        std::io::Write::write_all(&mut w, toml.as_bytes()).unwrap();
+        w.start_file("client/main.luau", o).unwrap();
+        std::io::Write::write_all(&mut w, b"return {}\n").unwrap();
+        w.finish().unwrap().into_inner()
+    };
+    let (mut f, t) = at_prompt(d.path(), vec![optional(info("nv", &nv, false))], cfg(d.path()));
+    f.decide(true, false, t);
+    let a = f.packet(&chunks(&nv)[0], t);
+    let skipped = a.iter().find_map(|x| if let Action::Skipped(s) = x { Some(s.clone()) } else { None });
+    let skipped = skipped.unwrap_or_else(|| panic!("{a:?}"));
+    assert_eq!(skipped[0].id, "nv");
+}

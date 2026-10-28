@@ -57,6 +57,8 @@ pub struct ModsOptions {
     pub features: Vec<String>,
     /// The voice chat master volume set in the launcher (`--voice-master`), 0..=200.
     pub voice_master: Option<u16>,
+    /// The launcher's language (`--lang`), for the loader's notices.
+    pub lang: String,
 }
 
 /// The platform I/O the voice chat host plugs into (mod-sdk `bhmod-voice` does crypto, Opus, jitter, mixing policy,
@@ -863,6 +865,13 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
                     log(&format!("server settings of {}: not readable", schema.mod_id));
                 }
                 refresh_settings(sh);
+            }
+            Action::Skipped(mods) => {
+                let mut v = sh.view.lock().unwrap_or_else(PoisonError::into_inner);
+                for m in &mods {
+                    log(&format!("{} {} skipped: {}", m.id, m.version, m.refusal));
+                    v.toasts.push((Instant::now(), bhpc_mods::view::skipped_notice(&opts.lang, m)));
+                }
             }
             Action::SettingsResult(r) => {
                 MAIN.with(|m| m.borrow_mut().settings_status = Some(bhpc_mods::form::result_status(&r)));

@@ -160,6 +160,8 @@ pub enum Action {
     SettingsSchema(bhmod_proto::SettingsSchema),
     /// The answer to a `SETTINGS_SET`.
     SettingsResult(bhmod_proto::SettingsResult),
+    /// Optional server mods left out because this loader is too old for them (once per join, after the load).
+    Skipped(Vec<session::SkippedMod>),
 }
 
 /// A server mod the player accepted, downloaded and checked.
@@ -572,6 +574,7 @@ impl JoinFlow {
                 Output::Voice(m) => actions.push(Action::Voice(m)),
                 Output::SettingsSchema(sc) => actions.push(Action::SettingsSchema(sc)),
                 Output::SettingsResult(r) => actions.push(Action::SettingsResult(r)),
+                Output::Skipped(m) => actions.push(Action::Skipped(m)),
             }
         }
         actions

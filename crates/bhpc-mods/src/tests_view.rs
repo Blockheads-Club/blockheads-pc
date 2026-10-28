@@ -202,3 +202,30 @@ fn status_line_is_json() {
     assert_eq!(UiCmd::Dismiss, UiCmd::Dismiss);
     assert!(View::default().join.is_none());
 }
+
+#[test]
+fn notice_for_a_mod_this_loader_is_too_old_for() {
+    use bhmod_client::session::SkippedMod;
+    let m = |id: &str, names: &[(&str, &str)]| SkippedMod {
+        id: id.into(),
+        version: "1.0.0".into(),
+        name: names.iter().map(|(l, n)| (l.to_string(), n.to_string())).collect(),
+        refusal: bhmod_client::Refusal::NeedsNewerApi("^0.4".into()),
+    };
+    let voice = m("voice", &[("en", "Voice"), ("tr", "Ses")]);
+    assert_eq!(
+        crate::view::skipped_notice("en", &voice),
+        "This server has Voice (voice chat): update Blockheads PC to use it"
+    );
+    assert_eq!(
+        crate::view::skipped_notice("tr-TR", &voice),
+        "Bu sunucuda Ses (sesli sohbet) var: kullanmak için Blockheads PC'yi güncelle"
+    );
+    assert!(crate::view::skipped_notice("ru", &voice).contains("Voice (голосовой чат)"));
+    assert!(crate::view::skipped_notice("kk", &voice).contains("Voice (дауыстық чат)"));
+    let other = m("maps", &[]);
+    assert_eq!(crate::view::skipped_notice("", &other), "This server has maps: update Blockheads PC to use it");
+    assert!(crate::view::skipped_notice("tr", &other).starts_with("Bu sunucuda maps var"));
+    assert!(crate::view::skipped_notice("ru", &other).contains("есть maps:"));
+    assert!(crate::view::skipped_notice("kk", &other).contains("серверде maps бар"));
+}
