@@ -80,6 +80,3 @@ opt-level = 3
 strip = true
 lto = "thin"
 
-# TEMP: the local mod-sdk voice-api worktree (replace with a git rev before pushing).
-[patch."https://github.com/Blockheads-Club/mod-sdk"]
-bhmod-manifest = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-manifest" }

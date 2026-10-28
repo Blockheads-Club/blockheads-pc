@@ -35,27 +35,16 @@ bhpc-jni = { path = "crates/bhpc-jni" }
 bhpc-vfs = { path = "crates/bhpc-vfs" }
 # The shared mod host (Luau + WASM), the 0xBC codec and the package rules, from Blockheads-Club/mod-sdk at a pinned
 # commit (the same crates the Blockheads Server uses).
-bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-client = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-native = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-voice = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-opus-sys = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
+bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
+bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
+bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
+bhmod-client = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
+bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
+bhmod-native = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
+bhmod-voice = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
+bhmod-opus-sys = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "5abde2d0333f7340de99908beae61f9182d4055e" }
 
-# TEMP: the local mod-sdk voice-api worktree (replace with a git rev before pushing).
-[patch."https://github.com/Blockheads-Club/mod-sdk"]
-bhmod-core = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-core" }
-bhmod-wasm = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-wasm" }
-bhmod-manifest = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-manifest" }
-bhmod-proto = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-proto" }
-bhmod-client = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-client" }
-bhmod-content = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-content" }
-bhmod-native = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-native" }
-bhmod-voice = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-voice" }
-bhmod-opus-sys = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-opus-sys" }
 
 [profile.release]
 debug = 1

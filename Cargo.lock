@@ -83,7 +83,8 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bhmod-client"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 dependencies = [
  "bhmod-content",
  "bhmod-manifest",
@@ -95,7 +96,8 @@ dependencies = [
 
 [[package]]
 name = "bhmod-content"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 dependencies = [
  "bhmod-manifest",
  "bhmod-proto",
@@ -105,7 +107,8 @@ dependencies = [
 
 [[package]]
 name = "bhmod-core"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 dependencies = [
  "bhmod-manifest",
  "bhmod-proto",
@@ -121,7 +124,8 @@ dependencies = [
 
 [[package]]
 name = "bhmod-manifest"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 dependencies = [
  "semver",
  "serde",
@@ -133,11 +137,13 @@ dependencies = [
 
 [[package]]
 name = "bhmod-native"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 
 [[package]]
 name = "bhmod-opus-sys"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 dependencies = [
  "bhmod-voice",
  "cc",
@@ -145,14 +151,16 @@ dependencies = [
 
 [[package]]
 name = "bhmod-proto"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "bhmod-voice"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 dependencies = [
  "bhmod-core",
  "bhmod-proto",
@@ -166,7 +174,8 @@ dependencies = [
 
 [[package]]
 name = "bhmod-wasm"
-version = "0.3.1"
+version = "0.4.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5abde2d0333f7340de99908beae61f9182d4055e#5abde2d0333f7340de99908beae61f9182d4055e"
 dependencies = [
  "bhmod-core",
  "bhmod-manifest",
