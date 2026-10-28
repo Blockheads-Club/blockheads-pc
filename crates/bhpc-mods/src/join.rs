@@ -41,7 +41,7 @@ pub struct JoinConfig {
     pub api: String,
     /// `HELLO.runtimes`.
     pub runtimes: Vec<String>,
-    /// `HELLO.features` ([`crate::voice::features`]: `settings`, `voice`, `voice-unsequenced`).
+    /// `HELLO.features` ([`crate::voice::features`]: `settings`, `voice`).
     pub features: Vec<String>,
     /// The launcher's mod folders (the server-mod cache lives in `cache/blobs`).
     pub dirs: ModsDirs,

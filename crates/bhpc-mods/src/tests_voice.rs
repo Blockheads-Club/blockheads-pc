@@ -11,9 +11,8 @@ use bhpc_input::VoiceMode;
 
 #[test]
 fn hello_features() {
-    assert_eq!(features(true, true), vec!["settings", "voice", "voice-unsequenced"]);
-    assert_eq!(features(true, false), vec!["settings", "voice"]);
-    assert_eq!(features(false, true), vec!["settings"]);
+    assert_eq!(features(true), vec!["settings", "voice"]);
+    assert_eq!(features(false), vec!["settings"]);
     assert_eq!(mode_of(VoiceMode::Proximity), Mode::Proximity);
     assert_eq!(mode_of(VoiceMode::Channel), Mode::Channel);
     assert_eq!(mode_of(VoiceMode::Global), Mode::Global);
@@ -140,7 +139,6 @@ struct FakeIo {
     device: Option<MicDevice>,
     chunks: Vec<Vec<i16>>,
     reliable: Vec<Vec<u8>>,
-    unseq: Vec<Vec<u8>>,
     udp: Vec<(u16, Vec<u8>)>,
     udp_in: Vec<Vec<u8>>,
     queued: usize,
@@ -160,10 +158,6 @@ impl VoiceIo for FakeIo {
     }
     fn send_reliable(&mut self, p: Vec<u8>) {
         self.reliable.push(p);
-    }
-    fn send_unsequenced(&mut self, p: &[u8]) -> bool {
-        self.unseq.push(p.to_vec());
-        true
     }
     fn send_udp(&mut self, port: u16, d: &[u8]) {
         self.udp.push((port, d.to_vec()));
@@ -190,11 +184,10 @@ fn pump_starts_sends_receives_and_mixes() {
     let mut io = FakeIo::default();
     let mut p = VoicePump::new(Consent::Granted);
     assert_eq!(p.consent_state(), Consent::Granted);
-    d.send.borrow_mut().extend([Outgoing::Reliable(vec![1]), Outgoing::Unsequenced(vec![2]), Outgoing::Udp(vec![3])]);
+    d.send.borrow_mut().extend([Outgoing::Reliable(vec![1]), Outgoing::Udp(vec![3])]);
     io.udp_in.push(vec![9]);
     let out = p.frame(&d, &mut io, 1);
     assert_eq!(io.reliable, vec![vec![0xbc, 0x15], vec![1]]);
-    assert_eq!(io.unseq, vec![vec![2]]);
     assert!(io.udp.is_empty(), "no port yet: the datagram is dropped");
     assert_eq!(d.udp_in.get(), 1);
     assert_eq!(io.pushed.len(), OUT_TARGET);
@@ -222,7 +215,7 @@ fn pump_starts_sends_receives_and_mixes() {
 
 #[test]
 fn the_opus_voice_client_behind_the_driver_seam() {
-    let d = opus_client(true);
+    let d = opus_client();
     let key = d.start().unwrap();
     assert!(matches!(Message::decode(&key), Ok(Message::VoiceKey(_))));
     d.on_message(&Message::ListRequest);
@@ -337,6 +330,5 @@ fn fake_driver_rest() {
 fn voice_client_sends_map_one_to_one() {
     use bhmod_voice::client::Outgoing as O;
     assert_eq!(outgoing(O::Reliable(vec![1])), Outgoing::Reliable(vec![1]));
-    assert_eq!(outgoing(O::Unsequenced(vec![2])), Outgoing::Unsequenced(vec![2]));
     assert_eq!(outgoing(O::Udp(vec![3])), Outgoing::Udp(vec![3]));
 }

@@ -64,8 +64,6 @@ pub struct ModsOptions {
 /// The platform I/O the voice chat host plugs into (mod-sdk `bhmod-voice` does crypto, Opus, jitter, mixing policy,
 /// VAD and the push-to-talk state machine on top of it).
 pub struct VoiceIo {
-    /// Unsequenced in-band send; `None` when the game does not export what it needs.
-    pub unsequenced: Option<crate::voicenet::Unsequenced>,
     /// The microphone (opened by the window thread only while wanted).
     pub mic: Arc<bhpc_audio::capture::MicControl>,
     /// Per-speaker playback on the game's mixer.
@@ -181,7 +179,6 @@ impl VoiceSession {
 struct Devices {
     mic: Arc<bhpc_audio::capture::MicControl>,
     out: Arc<bhpc_audio::voice::VoiceOut>,
-    outbox: Option<Arc<crate::voicenet::Outbox>>,
 }
 
 static DEVICES: std::sync::OnceLock<Devices> = std::sync::OnceLock::new();
@@ -347,13 +344,8 @@ impl ModGlue {
         let objc = Arc::new(Objc { rt, cache: Mutex::new(HashMap::new()) });
         let shared = Arc::new(Shared::default());
         shared.view.lock().unwrap_or_else(PoisonError::into_inner).dev = !opts.dev.is_empty();
-        let unsequenced = voice.unsequenced.is_some();
-        let _ = DEVICES.set(Devices {
-            mic: voice.mic.clone(),
-            out: voice.out.clone(),
-            outbox: voice.unsequenced.as_ref().map(|u| u.outbox.clone()),
-        });
-        opts.features.extend(bhpc_mods::voice::features(true, unsequenced));
+        let _ = DEVICES.set(Devices { mic: voice.mic.clone(), out: voice.out.clone() });
+        opts.features.extend(bhpc_mods::voice::features(true));
         let opts = Arc::new(opts);
         let g = ModGlue { hooks, rt, shared, objc, opts, voice };
         g.register();
@@ -537,22 +529,13 @@ impl ModGlue {
         publish(&self.shared, false);
     }
 
-    /// Queue one voice payload (a whole 0xBC packet) for an unsequenced send on the game connection; any thread.
-    /// It leaves at the next frame (main thread), only while in a world on a server.
-    pub fn send_unsequenced(&self, payload: &[u8]) -> Result<(), crate::voicenet::SendError> {
-        match &self.voice.unsequenced {
-            Some(u) => u.outbox.queue(payload),
-            None => Err(crate::voicenet::SendError::Unsupported),
-        }
-    }
-
     /// Voice once per frame (main thread): keys to the mods' bindings and push-to-talk, the voice client pumped
-    /// (microphone, sends, the mix), the unsequenced queue flushed, overhead icons published; the microphone is never
+    /// (microphone, reliable 0xBC and voice UDP sends, the mix), overhead icons published; the microphone is never
     /// left open outside a server's world.
     fn voice_frame(&self, c: &mut Cpu) {
-        let (in_world, matcher) = MAIN.with(|m| {
+        let in_world = MAIN.with(|m| {
             let m = m.borrow();
-            (m.host.is_some() && m.host_online && m.conn.is_some(), m.conn.map_or(0, |c| c.matcher))
+            m.host.is_some() && m.host_online && m.conn.is_some()
         });
         let keys = self.voice.talk.take();
         let (out, reliable) = MAIN.with(|m| {
@@ -604,12 +587,6 @@ impl ModGlue {
             log("a mod wants the microphone: asking the player");
             self.shared.view.lock().unwrap_or_else(PoisonError::into_inner).mic_ask = true;
             self.shared.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        if let Some(u) = &self.voice.unsequenced {
-            u.outbox.set_in_world(in_world);
-            if in_world {
-                u.flush(c, matcher);
-            }
         }
         if !in_world && self.voice.mic.wanted() {
             self.voice.mic.set_wanted(false);
@@ -982,9 +959,8 @@ fn start_voice(opts: &ModsOptions) -> Option<VoiceSession> {
     if !enabled {
         return None;
     }
-    let outbox = io.outbox.clone();
-    // mod-sdk's voice client with Opus; without in-band sends it needs the server's UDP port.
-    let driver = bhpc_mods::voice::opus_client(outbox.is_some());
+    // mod-sdk's voice client with Opus; frames go over the server's voice UDP port (no port: voice stays off).
+    let driver = bhpc_mods::voice::opus_client();
     let prefs_path = bhpc_mods::voice::VoicePrefs::path(&opts.data_dir);
     let mut prefs = bhpc_mods::voice::VoicePrefs::load(&prefs_path);
     driver.load_prefs(&prefs.client);
@@ -995,7 +971,7 @@ fn start_voice(opts: &ModsOptions) -> Option<VoiceSession> {
     }
     use std::net::ToSocketAddrs;
     let server = address.to_socket_addrs().ok().and_then(|mut a| a.next()).map(|a| a.ip());
-    let pcio = crate::voicenet::PcVoiceIo::new(io.mic.clone(), io.out.clone(), outbox, server);
+    let pcio = crate::voicenet::PcVoiceIo::new(io.mic.clone(), io.out.clone(), server);
     log("voice chat is on for this server");
     Some(VoiceSession {
         driver,

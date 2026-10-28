@@ -5,7 +5,8 @@
 //! - [`features`]: what this client tells the server in `HELLO.features`.
 //! - [`VoiceDriver`]: the calls the loader makes on the voice client (the `VoiceClient` driver of mod-sdk, or a
 //!   fake in tests); it is also the [`VoiceHost`] the mods' `voice.*` calls reach.
-//! - [`VoiceIo`]: the PC's devices and sends (microphone, playback, unsequenced ENet, the voice UDP socket).
+//! - [`VoiceIo`]: the PC's devices and sends (microphone, playback, reliable 0xBC, the voice UDP socket: voice frames
+//!   travel only over the server's voice UDP port).
 //! - [`VoicePump`]: once per frame on the game's main thread, moves microphone frames in, packets out and the mix to
 //!   the speakers, asks the player before the microphone opens the first time, and reports the microphone state.
 //! - [`TalkKeys`]: push-to-talk and mod key-binding presses from the window's input thread.
@@ -23,19 +24,12 @@ use bhpc_input::VoiceMode;
 pub const FEATURE_SETTINGS: &str = "settings";
 /// `HELLO.features`: the client runs voice chat.
 pub const FEATURE_VOICE: &str = "voice";
-/// `HELLO.features`: the client sends voice frames as unsequenced ENet packets on the game connection.
-pub const FEATURE_VOICE_UNSEQUENCED: &str = "voice-unsequenced";
-
-/// The `HELLO.features` of this client: `settings` always, `voice` when a voice client can run (`voice`), and
-/// `voice-unsequenced` when it also can send unsequenced packets in-band (`unsequenced`; without it the server uses
-/// its UDP port, if it has one).
-pub fn features(voice: bool, unsequenced: bool) -> Vec<String> {
+/// The `HELLO.features` of this client: `settings` always, `voice` when a voice client can run (`voice`). Voice
+/// frames use the server's voice UDP port only.
+pub fn features(voice: bool) -> Vec<String> {
     let mut f = vec![FEATURE_SETTINGS.to_string()];
     if voice {
         f.push(FEATURE_VOICE.to_string());
-        if unsequenced {
-            f.push(FEATURE_VOICE_UNSEQUENCED.to_string());
-        }
     }
     f
 }
@@ -60,8 +54,6 @@ pub const OUT_TARGET: usize = 3;
 pub enum Outgoing {
     /// A 0xBC packet on the reliable path (`VOICE_KEY`, `VOICE_CTRL`).
     Reliable(Vec<u8>),
-    /// A 0xBC packet (`VOICE_FRAME`) as an unsequenced ENet packet on the game connection.
-    Unsequenced(Vec<u8>),
     /// A datagram for the server's voice UDP port.
     Udp(Vec<u8>),
 }
@@ -124,8 +116,6 @@ pub trait VoiceIo {
     fn mic_chunk(&mut self) -> Option<Vec<i16>>;
     /// Send a 0xBC packet reliably.
     fn send_reliable(&mut self, packet: Vec<u8>);
-    /// Send a 0xBC packet unsequenced; false when it could not be queued.
-    fn send_unsequenced(&mut self, packet: &[u8]) -> bool;
     /// Send a datagram to the server's voice UDP `port`.
     fn send_udp(&mut self, port: u16, datagram: &[u8]);
     /// Datagrams received on the voice UDP socket since the last call.
@@ -315,10 +305,6 @@ impl VoicePump {
         for o in d.poll_send(now_ms) {
             match o {
                 Outgoing::Reliable(p) => io.send_reliable(p),
-                Outgoing::Unsequenced(p) => {
-                    // Dropped when it cannot go (voice is useless late or reliable).
-                    io.send_unsequenced(&p);
-                }
                 Outgoing::Udp(p) => {
                     if let Some(port) = d.udp_port() {
                         io.send_udp(port, &p);
@@ -398,7 +384,6 @@ pub(crate) fn outgoing(o: bhmod_voice::client::Outgoing) -> Outgoing {
     use bhmod_voice::client::Outgoing as O;
     match o {
         O::Reliable(p) => Outgoing::Reliable(p),
-        O::Unsequenced(p) => Outgoing::Unsequenced(p),
         O::Udp(p) => Outgoing::Udp(p),
     }
 }
@@ -459,11 +444,8 @@ impl VoiceDriver for bhmod_voice::client::SharedVoiceClient {
     }
 }
 
-/// A new voice client with Opus (`unsequenced`: in-band sends work; else it needs the server's UDP port).
-pub fn opus_client(unsequenced: bool) -> std::rc::Rc<dyn VoiceDriver> {
+/// A new voice client with Opus (voice needs the server's voice UDP port).
+pub fn opus_client() -> std::rc::Rc<dyn VoiceDriver> {
     let codec = std::sync::Arc::new(bhmod_opus_sys::OpusCodec);
-    std::rc::Rc::new(bhmod_voice::client::SharedVoiceClient::new(bhmod_voice::client::VoiceClient::new(
-        codec,
-        unsequenced,
-    )))
+    std::rc::Rc::new(bhmod_voice::client::SharedVoiceClient::new(bhmod_voice::client::VoiceClient::new(codec)))
 }

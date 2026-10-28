@@ -1148,11 +1148,7 @@ fn boot(
         let ivars = crate::cosmetics::Ivars::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
             .inspect_err(|e| eprintln!("[cosmetics] off: {e}"))
             .ok();
-        let enet = crate::voicenet::EnetExports::resolve(|n| sess.linker.modules().iter().find_map(|m| m.export(n)))
-            .inspect_err(|e| eprintln!("[voice] no unsequenced send: {e}"))
-            .ok();
         let voice = crate::modglue::VoiceIo {
-            unsequenced: enet.map(crate::voicenet::Unsequenced::new),
             mic: flags.mic.clone(),
             out: Arc::new(bhpc_audio::voice::VoiceOut::new(mixer.clone())),
             talk: flags.talk.clone(),
