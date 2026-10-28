@@ -255,11 +255,11 @@ dependencies = [
 
 [[package]]
 name = "bhpc-input"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "bhpc-launcher"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bhmod-manifest",
  "bhpc-input",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "bhpc-loader"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bhpc-mem",
  "miniz_oxide 0.8.9",
@@ -286,14 +286,14 @@ dependencies = [
 
 [[package]]
 name = "bhpc-mem"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bhpc-vfs"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dirs 6.0.0",
  "getrandom 0.3.4",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "blockheads-pc-app"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bhpc-input",
  "bhpc-launcher",
