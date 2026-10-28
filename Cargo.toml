@@ -42,6 +42,20 @@ bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "50607
 bhmod-client = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
 bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
 bhmod-native = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-voice = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-opus-sys = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+
+# TEMP: the local mod-sdk voice-api worktree (replace with a git rev before pushing).
+[patch."https://github.com/Blockheads-Club/mod-sdk"]
+bhmod-core = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-core" }
+bhmod-wasm = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-wasm" }
+bhmod-manifest = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-manifest" }
+bhmod-proto = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-proto" }
+bhmod-client = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-client" }
+bhmod-content = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-content" }
+bhmod-native = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-native" }
+bhmod-voice = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-voice" }
+bhmod-opus-sys = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-opus-sys" }
 
 [profile.release]
 debug = 1
