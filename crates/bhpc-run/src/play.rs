@@ -1852,6 +1852,21 @@ impl UiThread {
                 let mods = flags.mods.lock().unwrap_or_else(PoisonError::into_inner).clone();
                 if let Some(m) = mods {
                     use bhpc_mods::ui::UiInput;
+                    // A dialog's text field takes typed characters (SDL text input is always on for the window).
+                    if let Event::Text(t) = &ev {
+                        let field = {
+                            let view = m.view.lock().unwrap_or_else(PoisonError::into_inner);
+                            view.dialog.as_ref().is_some_and(|d| d.dialog.field.is_some())
+                        };
+                        if field {
+                            let view = m.view.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                            for ch in t.chars() {
+                                m.ui.lock().unwrap_or_else(PoisonError::into_inner).input(UiInput::Char(ch), &view);
+                            }
+                            m.serial.fetch_add(1, Ordering::SeqCst);
+                            continue;
+                        }
+                    }
                     let input = match &ev {
                         Event::Key { key, pressed: true, .. } => UiInput::Key(key.0),
                         Event::MouseButton { button: bhpc_app::MouseButton::Left, pressed: true, x, y } => {

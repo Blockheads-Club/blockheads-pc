@@ -151,6 +151,10 @@ pub(crate) struct Main {
     /// The settings screen shows this mod.
     settings_open: Option<String>,
     settings_status: Option<(bool, String)>,
+    /// The HUD change counter last copied into the view.
+    hud_serial: u64,
+    /// Notices for the next session (the join's, before the mods run).
+    pending_notices: Vec<String>,
 }
 
 /// Voice chat while a session runs on a server that has it.
@@ -505,6 +509,12 @@ impl ModGlue {
                 }
                 // The switch already changed the flow; show it.
                 UiCmd::Toggle(_) => sync_join(&self.shared),
+                UiCmd::DialogAnswer { id, button, text } => {
+                    with_host(|h| {
+                        h.dialog_answer(*id, *button, text.clone());
+                    });
+                    sync_hud(&self.shared, now);
+                }
                 UiCmd::Setting { .. } | UiCmd::Rebind { .. } | UiCmd::MicConsent(_) | UiCmd::CloseSettings => {
                     settings_cmd(&self.objc, &self.shared, c, cmd.clone());
                 }
@@ -520,6 +530,7 @@ impl ModGlue {
         if SETTINGS_DIRTY.with(|d| d.replace(false)) {
             refresh_settings(&self.shared);
         }
+        sync_hud(&self.shared, now);
         self.voice_frame(c);
         crate::cosmetics::frame(c);
         self.join_from_menu(c);
@@ -867,10 +878,11 @@ fn run_actions(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu, actions: 
                 refresh_settings(sh);
             }
             Action::Skipped(mods) => {
-                let mut v = sh.view.lock().unwrap_or_else(PoisonError::into_inner);
+                // Shown as warning notices once the session's HUD exists (this join only).
                 for m in &mods {
                     log(&format!("{} {} skipped: {}", m.id, m.version, m.refusal));
-                    v.toasts.push((Instant::now(), bhpc_mods::view::skipped_notice(&opts.lang, m)));
+                    let text = bhpc_mods::view::skipped_notice(&opts.lang, m);
+                    MAIN.with(|mm| mm.borrow_mut().pending_notices.push(text));
                 }
             }
             Action::SettingsResult(r) => {
@@ -1033,12 +1045,16 @@ fn start_session(o: &Objc, opts: &ModsOptions, sh: &Shared, c: &mut Cpu) {
         local_player: local.unwrap_or_default(),
         voice: voice.as_ref().map(|v| v.driver.clone()),
         binds: Some(bhpc_mods::binds::Binds::path(&opts.data_dir)),
+        hud: Some(bhpc_mods::hud::Hud::hidden_path(&opts.data_dir)),
         client_settings: Some(bhpc_mods::host::client_settings_path(&opts.data_dir)),
     });
     let world = server.as_ref().map_or("single-player".to_string(), |(s, _)| s.clone());
     start_natives(opts, &dir, c);
     if server.is_some() {
         host.set_local_id(Some(local_player_id(o, c)));
+    }
+    for text in MAIN.with(|m| std::mem::take(&mut m.borrow_mut().pending_notices)) {
+        host.notice(bhmod_core::ui::NoticeLevel::Warning, &text);
     }
     host.enable(&world, &key);
     log(&format!("session started ({world}): {} mod(s)", placed.len()));
@@ -1146,6 +1162,10 @@ fn stop_session(sh: &Shared, why: &str, keep_join: bool, c: &mut Cpu) {
         v.server = None;
         v.settings = None;
         v.mic_ask = false;
+        v.widgets.clear();
+        v.notices.clear();
+        v.dialog = None;
+        v.mod_toasts.clear();
     }
     WANT_HEADS.with(|w| w.set(false));
     sh.overheads.lock().unwrap_or_else(PoisonError::into_inner).clear();
@@ -1323,7 +1343,9 @@ fn players(o: &Objc, inv: &mut Invocation<'_>) {
     let list = o.send(c, me, "livePlayerInfos", &[]);
     let n = o.send(c, list, "count", &[]);
     let key = o.new_string(c, "alias");
+    let id_key = o.new_string(c, "playerID");
     let mut names = Vec::new();
+    let mut ids = Vec::new();
     let dict_sel = o.sel(c, "objectForKey:");
     for i in 0..n.min(256) {
         let e = o.send(c, list, "objectAtIndex:", &[i]);
@@ -1346,12 +1368,30 @@ fn players(o: &Objc, inv: &mut Invocation<'_>) {
         } else {
             String::new()
         };
+        // The vanilla `playerID`: the info dict's, else the entry itself when it is a peer id (a string).
+        let from_dict = if d != 0 && o.send(c, d, "respondsToSelector:", &[dict_sel]) != 0 {
+            let i = o.send(c, d, "objectForKey:", &[id_key]);
+            if i != 0 && o.send(c, i, "respondsToSelector:", &[utf8]) != 0 {
+                o.string(c, i)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+        let id = if from_dict.is_empty() && d != e && o.send(c, e, "respondsToSelector:", &[utf8]) != 0 {
+            o.string(c, e)
+        } else {
+            from_dict
+        };
         if !name.is_empty() {
+            ids.push((id, name.clone()));
             names.push(name);
         }
     }
     MAIN.with(|m| {
         if let Some(h) = m.borrow_mut().host.as_mut() {
+            h.set_ids(ids);
             h.players(names);
         }
     });
@@ -1449,8 +1489,16 @@ fn refresh_settings(sh: &Shared) {
         let h = m.host.as_ref()?;
         let binds = h.binds(id);
         let voice = m.voice.as_ref().map(|v| (v.driver.as_host().master().unwrap_or(100), v.pump.consent_state()));
-        let src =
-            bhpc_mods::form::Sources { voice, client: h.client_settings(id), binds: &binds, server: m.forms.get(id) };
+        let players = m.voice.as_ref().map(|v| bhpc_mods::voice::player_volumes(&*v.driver)).unwrap_or_default();
+        let widgets = h.hud().has_widgets(id).then(|| !h.hud().is_hidden(id));
+        let src = bhpc_mods::form::Sources {
+            voice,
+            client: h.client_settings(id),
+            binds: &binds,
+            server: m.forms.get(id),
+            players,
+            widgets,
+        };
         Some(bhpc_mods::form::SettingsView::build(id, id, src, m.settings_status.clone()))
     });
     sh.view.lock().unwrap_or_else(PoisonError::into_inner).settings = view;
@@ -1459,7 +1507,7 @@ fn refresh_settings(sh: &Shared) {
 
 /// The player changed something on the settings screen or answered the microphone dialog.
 fn settings_cmd(o: &Objc, sh: &Shared, c: &mut Cpu, cmd: UiCmd) {
-    use bhpc_mods::form::{Section, MASTER, MIC};
+    use bhpc_mods::form::{Section, MASTER, MIC, MUTE, VOLUME};
     let packet = MAIN.with(|m| {
         let mut m = m.borrow_mut();
         let m = &mut *m;
@@ -1493,6 +1541,25 @@ fn settings_cmd(o: &Objc, sh: &Shared, c: &mut Cpu, cmd: UiCmd) {
                 v.save();
                 (true, "Saved".to_string())
             }),
+            UiCmd::Setting { section: Section::Players, key, value, .. } => m.voice.as_mut().map(|v| {
+                let host = v.driver.as_host();
+                let r = match (key.strip_prefix(VOLUME), key.strip_prefix(MUTE)) {
+                    (Some(id), _) => host.set_player_volume(id, value.as_u64().unwrap_or(100).min(200) as u16),
+                    (_, Some(id)) => host.mute_player(id, value.as_bool().unwrap_or(false)),
+                    _ => Ok(()),
+                };
+                v.save();
+                match r {
+                    Ok(()) => (true, "Saved on this device".to_string()),
+                    Err(e) => (false, e.to_string()),
+                }
+            }),
+            UiCmd::Setting { section: Section::Hud, mod_id, value, .. } => {
+                m.host.as_ref().map(|h| match h.hide_widgets(&mod_id, !value.as_bool().unwrap_or(true)) {
+                    Ok(()) => (true, "Saved".to_string()),
+                    Err(e) => (false, format!("Not saved: {e}")),
+                })
+            }
             UiCmd::Setting { section: Section::Client, mod_id, key, value } => {
                 m.host.as_mut().map(|h| match h.set_client_setting(&mod_id, &key, &value) {
                     Ok(()) => (true, "Saved on this device".to_string()),
@@ -1532,5 +1599,31 @@ fn hud_kind(icon: bhmod_core::ui::OverheadIcon) -> bhpc_app::hud::Overhead {
         I::SelfMute => O::SelfMute,
         I::Deafen => O::Deafen,
         I::AdminMute => O::AdminMute,
+    }
+}
+
+/// The mods' HUD into the view when it changed (toasts and notices that ran out go first).
+fn sync_hud(sh: &Shared, now: Instant) {
+    let snap = MAIN.with(|m| {
+        let mut m = m.borrow_mut();
+        let h = m.host.as_ref()?;
+        h.expire_hud(now);
+        let hud = h.hud();
+        if hud.serial == m.hud_serial {
+            return None;
+        }
+        let snap = (hud.serial, hud.widgets(), hud.notices(), hud.dialog(), hud.toasts());
+        drop(hud);
+        m.hud_serial = snap.0;
+        Some(snap)
+    });
+    if let Some((_, widgets, notices, dialog, toasts)) = snap {
+        let mut v = sh.view.lock().unwrap_or_else(PoisonError::into_inner);
+        v.widgets = widgets;
+        v.notices = notices;
+        v.dialog = dialog;
+        v.mod_toasts = toasts;
+        drop(v);
+        sh.serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
