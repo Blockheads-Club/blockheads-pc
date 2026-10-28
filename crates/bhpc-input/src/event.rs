@@ -112,6 +112,39 @@ pub enum HostAction {
     Pause,
     /// Open the game's chat (like Minecraft's T).
     OpenChat,
+    /// A push-to-talk key went down (`pressed`) or up; for the voice chat host (key repeat is filtered out).
+    Voice {
+        mode: VoiceMode,
+        pressed: bool,
+    },
+}
+
+/// The voice chat talk modes that have a push-to-talk key of their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum VoiceMode {
+    /// Players nearby.
+    Proximity,
+    /// The player's channel (team).
+    Channel,
+    /// Everyone on the server.
+    Global,
+    /// Admin broadcast.
+    Broadcast,
+}
+
+impl VoiceMode {
+    /// All modes, in the order of [`Bindings::voice`].
+    pub const ALL: [VoiceMode; 4] = [VoiceMode::Proximity, VoiceMode::Channel, VoiceMode::Global, VoiceMode::Broadcast];
+
+    /// Lower-case name (`proximity`, `channel`, `global`, `broadcast`), as the voice protocol and settings use.
+    pub fn name(self) -> &'static str {
+        match self {
+            VoiceMode::Proximity => "proximity",
+            VoiceMode::Channel => "channel",
+            VoiceMode::Global => "global",
+            VoiceMode::Broadcast => "broadcast",
+        }
+    }
 }
 
 /// `com.apportable.Lifecycle` static natives.
@@ -382,6 +415,8 @@ pub struct Bindings {
     pub hide_ui: Trigger,
     /// Open the chat (a host action; ignored while a text field has focus).
     pub chat: Trigger,
+    /// Push-to-talk per [`VoiceMode`] (in [`VoiceMode::ALL`] order; host actions, ignored while a text field has focus).
+    pub voice: [Trigger; 4],
 }
 
 impl Default for Bindings {
@@ -395,6 +430,8 @@ impl Default for Bindings {
             fullscreen: Trigger::plain(Input::Key(HostKey::F(11))),
             hide_ui: Trigger::plain(Input::Key(HostKey::Char('h'))),
             chat: Trigger::plain(Input::Key(HostKey::Char('t'))),
+            // V, B, G as planned; broadcast is J because H already hides the game's buttons.
+            voice: ['v', 'b', 'g', 'j'].map(|c| Trigger::plain(Input::Key(HostKey::Char(c)))),
         }
     }
 }

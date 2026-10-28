@@ -771,3 +771,59 @@ fn every_notch_counts_in_either_direction_whatever_the_wheel_reports() {
     let r = run(&mut m, vec![(wheel(-0.6, 1.0, 1.0), 0), (wheel(1.0, 1.0, 1.0), 1), (wheel(-1.0, 1.0, 1.0), 2)]);
     assert_eq!(r.actions, vec![z(1), z(-1)]);
 }
+
+fn talk(mode: VoiceMode, pressed: bool) -> HostAction {
+    HostAction::Voice { mode, pressed }
+}
+
+#[test]
+fn push_to_talk_keys_go_down_and_up_once_and_never_reach_the_game() {
+    assert_eq!(VoiceMode::ALL.map(VoiceMode::name), ["proximity", "channel", "global", "broadcast"]);
+    let mut m = InputMapper::new(cfg());
+    let v = HostKey::Char('v');
+    let rep = HostEvent::Key { key: v, pressed: true, repeat: true, mods: Mods::default() };
+    let r = run(&mut m, vec![(key(v, true), 0), (rep, 1), (key(HostKey::Char('j'), true), 2), (key(v, false), 3)]);
+    assert!(r.events.is_empty(), "{:?}", r.events);
+    assert_eq!(
+        r.actions,
+        vec![talk(VoiceMode::Proximity, true), talk(VoiceMode::Broadcast, true), talk(VoiceMode::Proximity, false)]
+    );
+    // Focus loss lets go of what is still held (J).
+    let r = run(&mut m, vec![(HostEvent::FocusLost, 4), (HostEvent::Minimized, 5)]);
+    assert_eq!(r.actions, vec![talk(VoiceMode::Broadcast, false)]);
+    // A stray key up of a binding (pressed before) does nothing and is not passed on.
+    let r = run(&mut m, vec![(key(HostKey::Char('g'), false), 6)]);
+    assert!(r.actions.is_empty() && r.events.is_empty());
+}
+
+#[test]
+fn push_to_talk_types_in_text_fields_but_a_held_key_still_releases() {
+    let mut m = InputMapper::new(cfg());
+    let mut r = Recorder::new();
+    m.handle(key(HostKey::Char('b'), true), 0, &mut r);
+    m.set_text_focus(Some((1, "")), &mut r);
+    m.handle(key(HostKey::Char('g'), true), 1, &mut r);
+    m.handle(key(HostKey::Char('b'), false), 2, &mut r);
+    assert_eq!(
+        r.actions,
+        vec![talk(VoiceMode::Channel, true), HostAction::StartTextInput, talk(VoiceMode::Channel, false)]
+    );
+    // G belongs to the field (its letter arrives as text input), not to push-to-talk.
+}
+
+#[test]
+fn push_to_talk_rebinds_and_back_wins_over_it() {
+    let shift = Mods { shift: true, ..Mods::default() };
+    let mut voice = Bindings::default().voice;
+    voice[2] = Trigger { mods: shift, input: Input::Key(HostKey::Char('v')) };
+    let b = Bindings { voice, back: Trigger::plain(Input::Key(HostKey::Char('b'))), ..Bindings::default() };
+    let mut m = InputMapper::new(Config { bindings: b, ..cfg() });
+    let shift_v = HostEvent::Key { key: HostKey::Char('v'), pressed: true, repeat: false, mods: shift };
+    let r = run(&mut m, vec![(shift_v, 0), (key(HostKey::Char('v'), false), 1), (key(HostKey::Char('b'), true), 2)]);
+    assert_eq!(
+        r.actions,
+        vec![talk(VoiceMode::Global, true), talk(VoiceMode::Global, false)],
+        "the most specific wins"
+    );
+    assert_eq!(r.events.len(), 1, "B is back now");
+}

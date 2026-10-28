@@ -2,7 +2,8 @@ import { vi } from 'vitest';
 import type { ApkReport, BootState, LaunchConfig, Prefs, Snapshot } from './types';
 import { makeModsApi } from './mods/mock';
 
-export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H', chat: 'T' };
+export const KEYS = { touch: 'Left', pan: 'Right', zoom: 'Wheel', pinch: 'Ctrl+Left', back: 'Esc', fullscreen: 'F11', hide_ui: 'H', chat: 'T',
+  voice_proximity: 'V', voice_channel: 'B', voice_global: 'G', voice_broadcast: 'J' };
 
 export function makeConfig(over: Partial<LaunchConfig> = {}): LaunchConfig {
   return {

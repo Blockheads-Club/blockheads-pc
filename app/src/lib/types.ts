@@ -37,6 +37,10 @@ export interface KeyBindings {
   fullscreen: string;
   hide_ui: string;
   chat: string;
+  voice_proximity: string;
+  voice_channel: string;
+  voice_global: string;
+  voice_broadcast: string;
 }
 export type ActionId = keyof KeyBindings;
 

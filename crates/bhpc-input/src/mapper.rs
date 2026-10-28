@@ -1,7 +1,7 @@
 //! The stateful host-to-guest mapping.
 
 use crate::event::{
-    Bindings, EventSink, GuestEvent, HostAction, HostEvent, HostKey, Input, Lifecycle, Mods, MouseButton,
+    Bindings, EventSink, GuestEvent, HostAction, HostEvent, HostKey, Input, Lifecycle, Mods, MouseButton, VoiceMode,
 };
 use crate::keymap;
 use crate::pad::{PadConfig, PadState};
@@ -125,6 +125,8 @@ pub struct InputMapper {
     world_zoom: bool,
     /// Wheel amount not yet turned into a whole zoom step (touchpads scroll in fractions of a notch).
     wheel_rest: f32,
+    /// Push-to-talk keys held down, with their mode (the key up releases whatever its press started).
+    talking: Vec<(HostKey, VoiceMode)>,
 }
 
 impl InputMapper {
@@ -140,6 +142,7 @@ impl InputMapper {
             pad,
             world_zoom: false,
             wheel_rest: 0.0,
+            talking: Vec::new(),
         }
     }
 
@@ -242,11 +245,13 @@ impl InputMapper {
             // only drop a touch in progress. Only a minimised window goes to the background.
             HostEvent::FocusGained => self.pad.set_focused(true),
             HostEvent::FocusLost => {
+                self.release_talk(sink);
                 self.cancel_gesture(now_ms, sink);
                 self.pad.release(now_ms, sink);
                 self.pad.set_focused(false);
             }
             HostEvent::Minimized => {
+                self.release_talk(sink);
                 self.cancel_gesture(now_ms, sink);
                 self.pad.release(now_ms, sink);
                 sink.deliver(&GuestEvent::Lifecycle(Lifecycle::WillResignActive));
@@ -447,6 +452,9 @@ impl InputMapper {
             }
             return;
         }
+        if !b.back.fires(Input::Key(key), mods) && self.talk_key(key, pressed, mods, sink) {
+            return;
+        }
         // The back binding stands for the Android back key; the Escape key itself is only that when it is bound.
         let key = if b.back.fires(Input::Key(key), mods) {
             HostKey::Escape
@@ -472,6 +480,38 @@ impl InputMapper {
             GuestEvent::KeyUp { key_code, unicode, meta, time_ms: now_ms }
         };
         sink.deliver(&ev);
+    }
+
+    /// Push-to-talk: true when the key belongs to it (the guest does not see it). A held key is released by its key
+    /// up even if a text field took the focus meanwhile.
+    fn talk_key(&mut self, key: HostKey, pressed: bool, mods: Mods, sink: &mut dyn EventSink) -> bool {
+        if let Some(i) = self.talking.iter().position(|(k, _)| *k == key) {
+            if !pressed {
+                let (_, mode) = self.talking.remove(i);
+                sink.host_action(HostAction::Voice { mode, pressed: false });
+            }
+            return true;
+        }
+        if self.text.is_some() {
+            return false;
+        }
+        let voice = self.cfg.bindings.voice;
+        let best =
+            (0..voice.len()).filter(|&i| voice[i].fires(Input::Key(key), mods)).max_by_key(|&i| voice[i].weight());
+        let Some(i) = best else { return false };
+        if pressed {
+            let mode = VoiceMode::ALL[i];
+            self.talking.push((key, mode));
+            sink.host_action(HostAction::Voice { mode, pressed: true });
+        }
+        true
+    }
+
+    /// Every push-to-talk key held is released (the window lost the keyboard).
+    fn release_talk(&mut self, sink: &mut dyn EventSink) {
+        for (_, mode) in std::mem::take(&mut self.talking) {
+            sink.host_action(HostAction::Voice { mode, pressed: false });
+        }
     }
 
     fn edit_key(&mut self, key: HostKey, repeat: bool, sink: &mut dyn EventSink) {

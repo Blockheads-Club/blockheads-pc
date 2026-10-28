@@ -16,7 +16,8 @@ export const PAGES: { id: SettingsPage; icon: IconName; labelKey: Key }[] = [
   { id: 'about', icon: 'info', labelKey: 'set.nav.about' }
 ];
 
-export const ACTIONS: ActionId[] = ['touch', 'pan', 'zoom', 'pinch', 'back', 'fullscreen', 'hide_ui', 'chat'];
+export const ACTIONS: ActionId[] = ['touch', 'pan', 'zoom', 'pinch', 'back', 'fullscreen', 'hide_ui', 'chat',
+  'voice_proximity', 'voice_channel', 'voice_global', 'voice_broadcast'];
 
 /**
  * A searchable setting. `id` is also the DOM id of its row on the page (the scroll and focus target);
@@ -47,8 +48,16 @@ const ACTION_WORDS: Record<ActionId, string[]> = {
     'hud', 'hide', 'buttons', 'interface', 'screenshot', 'gizle', 'düğmeler', 'arayüz', 'ekran görüntüsü',
     'скрыть', 'кнопки', 'интерфейс', 'скриншот', 'жасыру', 'батырмалар'
   ],
-  chat: ['chat', 'message', 'talk', 't', 'sohbet', 'mesaj', 'yaz', 'чат', 'сообщение', 'хабар', 'сөйлесу']
+  chat: ['chat', 'message', 'talk', 't', 'sohbet', 'mesaj', 'yaz', 'чат', 'сообщение', 'хабар', 'сөйлесу'],
+  voice_proximity: ['nearby', 'proximity', 'yakın', 'yakındaki', 'рядом', 'близко', 'жақын'],
+  voice_channel: ['channel', 'team', 'kanal', 'takım', 'канал', 'команда', 'арна', 'топ'],
+  voice_global: ['global', 'everyone', 'all', 'herkes', 'genel', 'все', 'всем', 'барлығы', 'жалпы'],
+  voice_broadcast: ['broadcast', 'admin', 'announce', 'yayın', 'duyuru', 'трансляция', 'админ', 'объявление', 'тарату', 'хабарландыру']
 };
+const VOICE_WORDS = [
+  'voice', 'mic', 'microphone', 'push to talk', 'ptt', 'talk', 'ses', 'mikrofon', 'bas konuş', 'konuş',
+  'голос', 'микрофон', 'рация', 'говорить', 'дауыс', 'микрофон', 'сөйлеу'
+];
 const MOD_WORDS = ['mod', 'mods', 'modlar', 'мод', 'моды', 'модтар', 'плагин', 'addon', 'eklenti'];
 const PAD_WORDS = [
   'controller', 'gamepad', 'joystick', 'xbox', 'playstation', 'stick', 'kol', 'oyun kolu', 'gamepad',
@@ -77,7 +86,7 @@ export const SETTINGS: SettingEntry[] = [
     page: 'controls',
     titleKey: `act.${a}` as Key,
     hintKey: `act.${a}.desc` as Key,
-    keywords: [...ACTION_WORDS[a], ...CONTROL_WORDS]
+    keywords: [...ACTION_WORDS[a], ...(a.startsWith('voice_') ? VOICE_WORDS : []), ...CONTROL_WORDS]
   })),
   { id: 'set-ctl-dpad', page: 'controls', titleKey: 'osc.dpad', hintKey: 'osc.dpadHint', keywords: ['dpad', 'd-pad', 'arrows', 'arrow pad', 'joystick', 'on-screen', 'touch controls', 'yön tuşları', 'ok tuşları', 'ekran', 'dokunmatik', 'крестовина', 'стрелки', 'экранные', 'сенсорное', 'көрсеткілер', 'экрандағы', 'сенсорлық'] },
   { id: 'set-ctl-pad', page: 'controls', titleKey: 'pad.enable', hintKey: 'pad.enableHint', keywords: [...PAD_WORDS, 'on', 'off', 'aç', 'kapat', 'включить', 'выключить', 'қосу', 'өшіру'] },
