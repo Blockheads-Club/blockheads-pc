@@ -12,8 +12,8 @@
 # `/mods set voice mode_proximity false` on the server console stops the frames live and `true` brings them back,
 # `/voice mute ALICE` stops ALICE's audio at BOB and `/voice unmute` brings it back, overhead icons (speaking, admin
 # mute, no voice) and talk events show in the traces. The test hooks: BHPC_VOICE_TEST_MIC (bhpc_audio::testmic),
-# BHPC_VOICE_TRACE (voice path counters, onsets for latency), BHPC_ANDROID_ID (one device id per game: a server lets
-# one device play under one name only).
+# BHPC_VOICE_TRACE (voice path counters, onsets for latency). Each game has its own data folder and so its own device
+# id (<data>/device-id): a server lets one device play under one name only.
 #
 # Needs: the APK (as smoke-game.sh), xvfb-run, dbus-run-session, a blockheads-server with voice
 # ($BHPC_SERVER_BIN) and the voice mod folder ($BHPC_VOICE_MOD: mod.toml, server/mod.wasm, client/mod.wasm, as
@@ -175,6 +175,8 @@ expect "$run/bob.err" "overhead icons .*Speaking" "BOB: speaking icon"
 expect "$run/bob.err" "overhead icons .*AdminMute" "BOB: admin mute icon"
 expect "$run/bob.err" "overhead icons .*NoVoice" "BOB: no-voice icon of the vanilla player"
 expect "$run/server.log" "Player Connected VANILLA" "VANILLA joined with the loader off"
+ids=$(cat "$run"/{alice,bob,vanilla}/data/device-id 2> /dev/null | sort -u | grep -cE '^[0-9a-f]{16}$')
+[[ $ids == 3 ]] && echo "  ok: three device ids" || { echo "  FAILED: $ids distinct device ids" >&2; fail=1; }
 [[ $(grep -c '\[mods\]' "$run/vanilla.err") == 0 ]] && echo "  ok: VANILLA ran no mod code" || {
   echo "  FAILED: the vanilla game logged mod lines" >&2
   fail=1
