@@ -120,9 +120,9 @@ game() {
   shift
   mkdir -p "$run/$name/home" "$run/$name/data" "$run/$name/shots"
   env -u WAYLAND_DISPLAY -u DISPLAY HOME="$run/$name/home" BROWSER=true SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11 \
-    GDK_BACKEND=x11 "${envs[@]}" timeout --kill-after=10 420 dbus-run-session --config-file="$run/bus.conf" -- \
+    GDK_BACKEND=x11 "${envs[@]}" timeout --kill-after=10 480 dbus-run-session --config-file="$run/bus.conf" -- \
     xvfb-run -a -s "-screen 0 1280x800x24" "$bin" --apk "$apk" --data-dir "$run/$name/data" --script "$script" \
-    --shot-dir "$run/$name/shots" --seconds 400 "$@" > "$run/$name.out" 2> "$run/$name.err" &
+    --shot-dir "$run/$name/shots" --seconds 460 "$@" > "$run/$name.out" 2> "$run/$name.err" &
   pids+=($!)
 }
 wait_for() { # file pattern seconds
@@ -136,8 +136,8 @@ for n in alice bob; do
   printf 'mic = "granted"\n' > "$run/$n/data/voice.toml"
   printf '[voice.settings]\nmic = "on"\nactivation = "vad"\n' > "$run/$n/data/mod-settings.toml"
 done
-script ALICE "key enter" 200000 0 "click 700 380" > "$run/alice.script"
-script BOB wait 190000 15000 "click 330 380" > "$run/bob.script"
+script ALICE "key enter" 290000 0 "click 700 380" > "$run/alice.script"
+script BOB wait 280000 15000 "click 330 380" > "$run/bob.script"
 script VANILLA wait 30000 0 wait > "$run/vanilla.script"
 game alice "$run/alice.script" BHPC_VOICE_TRACE=1 BHPC_VOICE_TEST_MIC=pulse:440:300:1000 --
 sleep 8
@@ -159,6 +159,8 @@ sleep 15
 note "phase vanilla"
 game vanilla "$run/vanilla.script" -- --no-mods
 for _ in $(seq 150); do [[ $(grep -c "Player Connected" "$run/server.log") -ge 3 ]] && break; sleep 1; done
+# The icon needs VANILLA's blockhead on BOB's screen (warped in after the join).
+wait_for "$run/bob.err" "overhead icons .*NoVoice" 60 || true
 note "end"
 
 fail=0
