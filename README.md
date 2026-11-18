@@ -141,7 +141,7 @@ No. It is a free fan project, not affiliated with Majic Jungle or Noodlecake.
 
 <table>
   <tr>
-    <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/blockheads-patcher"><img src="https://raw.githubusercontent.com/Blockheads-Club/blockheads-patcher/dev/app/static/favicon.svg" width="64" alt=""><br><b>Patcher</b></a><br><sub>Fix the game on your phone</sub></td>
+    <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/blockheads-patcher"><img src="https://raw.githubusercontent.com/Blockheads-Club/blockheads-patcher/dev/app/src/lib/assets/patcher-icon.svg" width="64" alt=""><br><b>Patcher</b></a><br><sub>Fix the game on your phone</sub></td>
     <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/blockheads-server"><img src="https://raw.githubusercontent.com/Blockheads-Club/blockheads-server/dev/app/static/server-icon.svg" width="64" alt=""><br><b>Server</b></a><br><sub>Host worlds for friends</sub></td>
     <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/world-tool"><img src="https://raw.githubusercontent.com/Blockheads-Club/world-tool/dev/app/static/wt-icon.svg" width="64" alt=""><br><b>World Tool</b></a><br><sub>Move and edit your worlds</sub></td>
     <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/mod-sdk"><img src="https://raw.githubusercontent.com/Blockheads-Club/mod-sdk/dev/.github/readme/icon.svg" width="64" alt=""><br><b>Mod SDK</b></a><br><sub>Make your own mods</sub></td>
