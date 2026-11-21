@@ -384,6 +384,11 @@ mod tests {
         let lines = std::fs::read_to_string(&trace).unwrap().lines().count();
         std::fs::remove_file(&trace).unwrap();
         assert!(lines > 1000);
+        // A trace file that cannot be created: the run still single-steps, without writing anything.
+        let missing = std::env::temp_dir().join(format!("bhpc-no-such-dir-{}", std::process::id())).join("t.txt");
+        let (mut o3, mut e3) = (Vec::new(), Vec::new());
+        assert_eq!(run(&s(&[fx, "--trace-pc", &missing.to_string_lossy()]), &mut o3, &mut e3), 0);
+        assert!(!missing.exists());
         // A tiny watchdog budget aborts the run.
         let (mut o2, mut e2) = (Vec::new(), Vec::new());
         assert_eq!(run(&s(&[fx, "--watchdog", "50"]), &mut o2, &mut e2), 1);

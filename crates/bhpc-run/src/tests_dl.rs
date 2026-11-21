@@ -129,3 +129,25 @@ fn guest_calls_reach_the_table() {
     assert_eq!(call(&mut r, "dlopen", &[dep, 2]), 0);
     assert_eq!(call(&mut r, "dlerror", &[]), 0);
 }
+
+#[test]
+fn a_dependency_reached_twice_is_searched_once() {
+    let (mut cpu, st) = new_env(Box::new(std::io::sink()), None).unwrap();
+    let mut linker = Linker::new(cpu.mem().clone());
+    // libtop.so needs libdep.so directly and through libmid.so, and libdep.so needs libtop.so back.
+    let dep =
+        Builder { syms: vec![def("dep_fn", 0x40)], needed: vec!["libtop.so"], ..Default::default() }.build().bytes;
+    let mid =
+        Builder { syms: vec![def("mid_fn", 0x40)], needed: vec!["libdep.so"], ..Default::default() }.build().bytes;
+    let top = Builder { syms: vec![def("top_fn", 0x40)], needed: vec!["libmid.so", "libdep.so"], ..Default::default() }
+        .build()
+        .bytes;
+    let mut hle = bhpc_bionic::Hle::new(&mut cpu, st.clone());
+    linker.load("libdep.so", &dep, &mut hle).unwrap();
+    linker.load("libmid.so", &mid, &mut hle).unwrap();
+    linker.load("libtop.so", &top, &mut hle).unwrap();
+    let mut t = DlTable::new(&linker, &[], Box::new(|_, _| None));
+    let top = t.dlopen(Some("libtop.so"));
+    assert!(t.dlsym(&mut cpu, top, "dep_fn").is_some());
+    assert!(t.dlsym(&mut cpu, top, "nowhere").is_none());
+}

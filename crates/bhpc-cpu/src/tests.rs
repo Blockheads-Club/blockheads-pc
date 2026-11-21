@@ -1242,3 +1242,13 @@ fn code_invalidations_reach_the_other_threads_cpus() {
     c.set_sp(STACK_TOP - 0x400);
     assert_eq!(c.call(CODE, &[]).unwrap().r0, 4);
 }
+
+#[test]
+fn svc_after_an_earlier_stop_in_the_block_is_ignored() {
+    // Whether the JIT leaves a block right after a faulting access depends on the backend, so drive the
+    // trampoline directly: an svc reached while a stop is pending must not replace that stop.
+    let mut cpu = setup();
+    cpu.request_stop(Stop::Host("earlier".into()));
+    tramp::svc(&mut *cpu as *mut Cpu as *mut c_void, 0);
+    assert_eq!(cpu.stop, Some(Stop::Host("earlier".into())));
+}

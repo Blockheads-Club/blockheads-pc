@@ -202,6 +202,13 @@ fn deadline_of(timeout_ms: i32) -> Option<Instant> {
 
 type Thunk = Arc<dyn Fn(&mut Cpu) + Send + Sync>;
 
+/// Hand a call a wrapper does not handle to bionic's own thunk (`builtin`), if bionic has one.
+pub(crate) fn chain(inner: Option<&bhpc_cpu::SharedThunkFn>, c: &mut Cpu) {
+    if let Some(f) = inner {
+        f(c);
+    }
+}
+
 impl Vfd {
     fn t(&self) -> std::sync::MutexGuard<'_, Table> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
@@ -282,8 +289,8 @@ impl Vfd {
                     if wr32(c, out, 1024) && wr32(c, out + 4, 4096) {
                         c.ret_u32(0);
                     }
-                } else if let Some(f) = &inner {
-                    f(c);
+                } else {
+                    chain(inner.as_ref(), c);
                 }
             }),
         );
@@ -297,11 +304,7 @@ impl Vfd {
                 // `eventfd(initval)` (libkqueue's user filter) and `eventfd2(initval, flags)`.
                 SYS_EVENTFD => v.eventfd_new(c, &s, c.reg(1), 0),
                 SYS_EVENTFD2 => v.eventfd_new(c, &s, c.reg(1), c.reg(2)),
-                _ => {
-                    if let Some(f) = &inner {
-                        f(c);
-                    }
-                }
+                _ => chain(inner.as_ref(), c),
             }),
         );
         // `poll` is not forwarded by descriptor (its first argument is an array), see `poll`.
@@ -311,9 +314,7 @@ impl Vfd {
             "poll",
             Arc::new(move |c| {
                 if !v.poll(c, &s) {
-                    if let Some(f) = &inner {
-                        f(c);
-                    }
+                    chain(inner.as_ref(), c);
                 }
             }),
         );
@@ -463,9 +464,9 @@ impl Vfd {
                     if bits != 0 && ready.len() < max as usize {
                         ready.push((bits, w.data));
                         if w.events & EPOLLONESHOT != 0 {
-                            if let Some(s) = t.epolls.get_mut(&ep) {
+                            t.epolls.entry(ep).and_modify(|s| {
                                 s.insert(fd, Watch { events: 0, data: w.data });
-                            }
+                            });
                         }
                     }
                 }
@@ -702,9 +703,7 @@ impl Vfd {
             }
             FIONBIO => {
                 let Some(on) = rd32(c, arg) else { return };
-                if let Some(e) = self.t().fds.get_mut(&fd) {
-                    e.nonblock = on != 0;
-                }
+                self.t().fds.entry(fd).and_modify(|e| e.nonblock = on != 0);
                 c.ret_u32(0);
             }
             _ => fail(c, st, errno::EINVAL),
@@ -752,9 +751,9 @@ impl Vfd {
                 }
             }
             if count > 0 {
-                if wr(c, fds, &out) {
-                    c.ret_u32(count);
-                }
+                // `fds` was just read, so the copy back cannot fail short of the guest unmapping it (a stop).
+                let ok = wr(c, fds, &out);
+                c.ret_u32(if ok { count } else { 0 });
                 return true;
             }
             if deadline.is_some_and(|d| Instant::now() >= d) {

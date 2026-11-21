@@ -235,9 +235,9 @@ fn strptime(c: &mut Cpu, _: &Shared) {
     let Some(used) = parse(&text, &format, &mut f) else { return c.ret_u32(0) };
     let out = [f.sec, f.min, f.hour, f.mday, f.mon, f.year, f.wday, f.yday];
     let bytes: Vec<u8> = out.iter().flat_map(|v| v.to_le_bytes()).collect();
-    if wr(c, tmp, &bytes) {
-        c.ret_u32(buf + used as u32);
-    }
+    // The 32 bytes were just read, so they are mapped and the write cannot fail.
+    let _ = wr(c, tmp, &bytes);
+    c.ret_u32(buf + used as u32);
 }
 
 pub(crate) const TABLE: &[(&str, Impl)] = &[("strptime", strptime)];

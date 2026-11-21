@@ -65,6 +65,20 @@ fn pc_voice_io_over_the_devices() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(got, vec![b"back".to_vec()]);
+    // Datagrams from any other address are dropped (127.0.0.2 is loopback too, where the host allows binding it).
+    if let Ok(stranger) = UdpSocket::bind((Ipv4Addr::new(127, 0, 0, 2), 0)) {
+        stranger.send_to(b"spoof", from).unwrap();
+        server.send_to(b"real", from).unwrap();
+        let mut got = Vec::new();
+        for _ in 0..200 {
+            got.extend(io.recv_udp());
+            if got.contains(&b"real".to_vec()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(got, vec![b"real".to_vec()]);
+    }
     io.send_udp(port, b"again");
     let (n, _) = server.recv_from(&mut buf).unwrap();
     assert_eq!(&buf[..n], b"again", "the same socket");

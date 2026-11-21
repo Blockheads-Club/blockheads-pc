@@ -660,9 +660,9 @@ impl Vfd {
         }
         mem[32..32 + addr.len()].copy_from_slice(addr);
         mem[48..48 + name_bytes.len()].copy_from_slice(name_bytes);
-        if wr(c, buf, &mem) {
-            c.ret_u32(buf);
-        }
+        // A failed copy (no buffer: the heap is full) stops the guest and answers NULL.
+        let ok = wr(c, buf, &mem);
+        c.ret_u32(if ok { buf } else { 0 });
     }
 
     pub(super) fn gethostbyname(&self, c: &mut Cpu, st: &Shared) {
@@ -835,9 +835,7 @@ impl Vfd {
                 name,
                 Arc::new(move |c: &mut Cpu| {
                     if v.select_in(c, &s, pselect) == Some(false) {
-                        if let Some(f) = &inner {
-                            f(c);
-                        }
+                        super::chain(inner.as_ref(), c);
                     }
                 }),
             );

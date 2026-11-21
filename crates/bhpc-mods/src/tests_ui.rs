@@ -182,6 +182,14 @@ fn native_prompt_needs_the_box() {
     render(&mut ui, &off, 3, "native-off");
     assert!(ui.hits_for_tests().iter().all(|(_, h)| *h != Hit::NativeBox));
     assert_eq!(ui.input(UiInput::Key(HID_ENTER), &off), (true, Some(UiCmd::Decide { accept: true, native_ok: false })));
+    // The focus moved from the box to an optional mod's switch: the box has no ring.
+    let mut ui = ModUi::new();
+    let both = prompt(vec![jm("Turbo Physics", true, &[]), optional(jm("Minimap", false, &[]))]);
+    let ringed = render(&mut ui, &both, 1, "native-focus");
+    ui.input(UiInput::Key(HID_DOWN), &both);
+    assert_eq!(ui.input(UiInput::Key(HID_SPACE), &both), (true, Some(UiCmd::Toggle(1))));
+    let moved = render(&mut ui, &both, 2, "native-focus-moved");
+    assert_ne!(*ringed, *moved);
 }
 
 #[test]
@@ -201,6 +209,10 @@ fn downloading_failed_and_rejected() {
     j.progress = (519_120, 1_167_360);
     j.eta = Some(4);
     render(&mut ui, &v, 1, "downloading");
+    // Nothing received yet: an empty bar.
+    v.join.as_mut().unwrap().progress = (0, 1_167_360);
+    render(&mut ui, &v, 2, "downloading-start");
+    v.join.as_mut().unwrap().progress = (519_120, 1_167_360);
     assert_eq!(ui.input(UiInput::Key(HID_ESCAPE), &v), (true, Some(UiCmd::Cancel)));
     assert_eq!(click(&mut ui, &v, Hit::Cancel), (true, Some(UiCmd::Cancel)));
     assert_eq!(ui.input(UiInput::Key(HID_ENTER), &v), (true, None));

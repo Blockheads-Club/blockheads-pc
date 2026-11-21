@@ -257,6 +257,10 @@ fn bridge_answers() {
     assert!(b.host_name().starts_with("blockheads-pc "));
     *b.players_for_tests() = vec!["ME".into(), "BOB".into()];
     assert_eq!(b.online_players().len(), 2);
+    // A player the list holds twice is online once.
+    b.players_for_tests().push("BOB".into());
+    assert_eq!(b.online_players(), vec!["ME".to_string(), "BOB".to_string()]);
+    b.players_for_tests().pop();
     assert_eq!(b.player_alias("BOB"), Some("BOB".into()));
     assert_eq!(b.player_alias("X"), None);
     assert_eq!(b.player_role("BOB"), bhmod_core::types::Role::Player);

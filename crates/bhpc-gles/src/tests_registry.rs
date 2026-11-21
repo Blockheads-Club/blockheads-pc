@@ -49,6 +49,17 @@ fn registry_is_consistent() {
 }
 
 #[test]
+fn aliases_only_bind_to_functions() {
+    fn nop(_: &mut bhpc_cpu::Cpu, _: &Gles) {}
+    let mut m = std::collections::HashMap::new();
+    m.insert("glReal", Kind::Fn(nop));
+    m.insert("glStub", Kind::Ignored);
+    add_aliases(&mut m, &[("glRealOES", "glReal"), ("glStubOES", "glStub"), ("glGoneOES", "glGone")]);
+    assert!(matches!(m.get("glRealOES"), Some(Kind::Fn(_))));
+    assert!(!m.contains_key("glStubOES") && !m.contains_key("glGoneOES"));
+}
+
+#[test]
 fn register_all_binds_every_name_once() {
     let mut e = Env::new();
     let n = register_all(&mut e.cpu, &e.gl);

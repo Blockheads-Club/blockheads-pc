@@ -96,12 +96,7 @@ fn registry() -> &'static HashMap<&'static str, Kind> {
         for (n, h) in direct::TABLE.iter().flatten().chain(tables.iter().flat_map(|t| t.iter())) {
             m.insert(*n, Kind::Fn(*h));
         }
-        for (alias, target) in ext::ALIASES {
-            if let Some(Kind::Fn(h)) = m.get(target) {
-                let h = *h;
-                m.insert(alias, Kind::Fn(h));
-            }
-        }
+        add_aliases(&mut m, ext::ALIASES);
         for n in stubs::IGNORED {
             m.insert(n, Kind::Ignored);
         }
@@ -110,6 +105,16 @@ fn registry() -> &'static HashMap<&'static str, Kind> {
         }
         m
     })
+}
+
+/// Bind each alias to its target's handler; an alias of an unknown or non-function name is skipped.
+fn add_aliases(m: &mut HashMap<&'static str, Kind>, aliases: &[(&'static str, &str)]) {
+    for (alias, target) in aliases {
+        if let Some(Kind::Fn(h)) = m.get(target) {
+            let h = *h;
+            m.insert(alias, Kind::Fn(h));
+        }
+    }
 }
 
 /// Every `gl*`/`egl*` symbol this crate binds, sorted.

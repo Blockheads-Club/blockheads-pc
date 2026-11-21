@@ -147,6 +147,17 @@ fn the_dpad_steps_the_cursor_and_repeats() {
 }
 
 #[test]
+fn releasing_one_of_two_opposite_directions_waits_for_a_new_press() {
+    let (mut m, mut r) = mapper();
+    m.handle(btn(7, PadButton::Up, true), 0, &mut r);
+    let at = m.pad().cursor();
+    m.handle(btn(7, PadButton::Down, true), 10, &mut r); // up + down cancel out
+    m.handle(btn(7, PadButton::Down, false), 20, &mut r); // up is held again, but nothing repeats
+    m.tick(2000, &mut r);
+    assert_eq!(m.pad().cursor(), at);
+}
+
+#[test]
 fn the_cursor_snaps_to_tiles() {
     let g = grid();
     // Tiles are 20 px: the middle of the picture is the centre of tile (100, 50).

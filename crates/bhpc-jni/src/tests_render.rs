@@ -257,6 +257,11 @@ fn view_properties_show_in_the_dump_and_survive_gc() {
     assert!(lit(&frame, 0, 0, 800, 480) > 0);
     // A view whose bitmap has no pixels (not a bitmap) summarises as none.
     assert_eq!(e.vm.bitmap_summary(img), "none");
+    // An image that is not a bitmap draws nothing (the rest still does).
+    let not_bitmap = e.vm.new_string("not a bitmap");
+    e.vm.ui_update(img, |v| v.image = Some((not_bitmap, 2, 2)));
+    let again = e.vm.render_ui().unwrap();
+    assert_eq!(lit(&again, 0, 0, 800, 480), lit(&frame, 0, 0, 800, 480));
 }
 
 #[test]

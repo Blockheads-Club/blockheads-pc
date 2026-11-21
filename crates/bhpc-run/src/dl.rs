@@ -198,19 +198,18 @@ pub fn install(cpu: &Cpu, st: &Shared, table: Arc<Mutex<Option<DlTable>>>) {
     reg(
         "dlerror",
         Arc::new(move |c: &mut Cpu| {
-            let (msg, buf) = match lock_table_opt(&t).as_mut() {
-                Some(d) => (d.take_error(), d.err_buf),
-                None => (None, 0),
-            };
-            let Some(msg) = msg else { return c.ret_u32(0) };
-            let buf = if buf != 0 { buf } else { lock(&st).heap.alloc(ERR_BUF) };
-            if let Some(d) = lock_table_opt(&t).as_mut() {
-                d.err_buf = buf;
-            }
+            let pending = lock_table_opt(&t).as_mut().and_then(|d| {
+                let msg = d.take_error()?;
+                if d.err_buf == 0 {
+                    d.err_buf = lock(&st).heap.alloc(ERR_BUF);
+                }
+                Some((msg, d.err_buf))
+            });
+            let Some((msg, buf)) = pending else { return c.ret_u32(0) };
             let bytes = &msg.as_bytes()[..msg.len().min(ERR_BUF as usize - 1)];
-            if buf != 0 && wr_cstr(c, buf, bytes) {
-                c.ret_u32(buf);
-            }
+            // No buffer (the heap is full) or a failed copy (the guest stops) answers NULL.
+            let ok = buf != 0 && wr_cstr(c, buf, bytes);
+            c.ret_u32(if ok { buf } else { 0 });
         }),
     );
 }

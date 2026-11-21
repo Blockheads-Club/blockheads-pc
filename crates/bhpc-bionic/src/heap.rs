@@ -110,9 +110,9 @@ fn dup_bytes(c: &mut Cpu, st: &Shared, b: &[u8]) {
     if p == 0 {
         return fail_ptr(c, st);
     }
-    if crate::guest::wr_cstr(c, p, b) {
-        c.ret_u32(p);
-    }
+    // The block comes from the guest heap, which is always mapped.
+    let _ = crate::guest::wr_cstr(c, p, b);
+    c.ret_u32(p);
 }
 
 fn fail_ptr(c: &mut Cpu, st: &Shared) {

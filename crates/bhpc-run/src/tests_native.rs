@@ -242,3 +242,19 @@ fn the_runner_hooks_its_own_functions_and_reads_import_targets() {
     w.f.cpu.mem().write_u32(a, 7).unwrap();
     assert_eq!(w.f.cpu.mem().read_u32(a).unwrap(), 7);
 }
+
+#[test]
+fn a_hook_without_an_original_slot_still_hooks() {
+    let mut w = World::new();
+    w.n.register(&w.f.cpu);
+    let seven =
+        w.f.cpu
+            .register_shared_thunk("test:seven0", std::sync::Arc::new(|c: &mut bhpc_cpu::Cpu| c.ret_u32(7)))
+            .unwrap();
+    let hook = w.f.cpu.thunk_addr("bhmod:hook_address").unwrap();
+    let module = w.f.cstr("libfake.so");
+    // hook_address(api, module, offset, replacement, original = NULL) from a table no mod owns.
+    let handle = w.f.cpu.call(hook, &[0xdead, module, 0x40, seven, 0]).unwrap().r0;
+    assert!((handle as i32) > 0, "{}", handle as i32);
+    assert_eq!(w.call(BASE + 0x40, 1, 2), 7);
+}

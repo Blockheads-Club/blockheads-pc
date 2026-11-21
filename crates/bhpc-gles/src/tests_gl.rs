@@ -669,6 +669,20 @@ fn map_buffer_is_a_flushed_guest_shadow() {
 }
 
 #[test]
+fn unmapping_a_shadow_that_is_not_mapped_faults() {
+    let mut e = Env::with(|c| c.expose_mapbuffer = true);
+    e.call("glBindBuffer", &[GL_ARRAY_BUFFER, 4]);
+    e.call("glBufferData", &[GL_ARRAY_BUFFER, 16, 0, 0]);
+    assert_ne!(e.call("glMapBufferOES", &[GL_ARRAY_BUFFER, GL_WRITE_ONLY_OES]), 0);
+    // The shadow comes from the guest arena, which stays mapped; pretend it ran off the end.
+    e.gl.lock().maps.get_mut(&4).unwrap().size = 0x8000_0000;
+    e.rec.take();
+    assert!(fault(e.try_call("glUnmapBufferOES", &[GL_ARRAY_BUFFER])));
+    assert!(e.rec.take().is_empty(), "nothing is flushed");
+    assert!(e.gl.lock().maps.is_empty());
+}
+
+#[test]
 fn map_buffer_out_of_arena_memory() {
     let mut e = Env::with(|c| c.arena_size = 0x1000);
     e.call("glBindBuffer", &[GL_ARRAY_BUFFER, 4]);

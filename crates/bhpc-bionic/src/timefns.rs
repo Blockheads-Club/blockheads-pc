@@ -558,6 +558,13 @@ mod tests {
             let r = e.try_call(f, &args);
             assert!(matches!(r, Err(bhpc_cpu::Stop::Fault(_))), "{f} {args:?} -> {r:?}");
         }
+        // The shared `struct tm` of gmtime/localtime is always mapped; an unmapped one faults too.
+        e.mem().write_u32(SCRATCH, 0).unwrap();
+        crate::lock(&e.st).tm_buf = 0x10;
+        for f in ["gmtime", "localtime"] {
+            let r = e.try_call(f, &[SCRATCH]);
+            assert!(matches!(r, Err(bhpc_cpu::Stop::Fault(_))), "{f} -> {r:?}");
+        }
     }
 
     #[test]

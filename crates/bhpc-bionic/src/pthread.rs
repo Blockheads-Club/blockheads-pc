@@ -705,9 +705,9 @@ fn attr_setdetachstate(c: &mut Cpu, _: &Shared) {
         return c.ret_u32(errno::EINVAL);
     }
     let Some(f) = rd32(c, at + attr::FLAGS) else { return };
-    if wr32(c, at + attr::FLAGS, f & !attr::CREATE_DETACHED | state) {
-        c.ret_u32(0);
-    }
+    // The word was just read, so it is mapped and the write cannot fail.
+    let _ = wr32(c, at + attr::FLAGS, f & !attr::CREATE_DETACHED | state);
+    c.ret_u32(0);
 }
 
 fn attr_getstacksize(c: &mut Cpu, _: &Shared) {
@@ -1118,7 +1118,19 @@ mod tests {
             assert!(matches!(e.try_call(f, &[AT, BAD, BAD]), Err(Stop::Fault(_))), "{f}");
         }
         assert!(matches!(e.try_call("pthread_attr_setschedparam", &[AT, BAD]), Err(Stop::Fault(_))));
+        assert!(matches!(e.try_call("pthread_attr_setschedparam", &[BAD, OUT]), Err(Stop::Fault(_))));
         assert!(matches!(e.try_call("pthread_attr_setdetachstate", &[BAD, 0]), Err(Stop::Fault(_))));
         assert!(matches!(e.try_call("pthread_attr_getstack", &[AT, OUT, BAD]), Err(Stop::Fault(_))));
+    }
+
+    #[test]
+    fn pthread_exit_of_a_thread_without_a_record_still_ends_it() {
+        use crate::sched::{ctx, set_ctx, Ctx, EXIT_MARK};
+        let mut e = Env::new();
+        let saved = ctx();
+        set_ctx(Ctx { tid: 9, handle: 0xdead_0000, errno: 0 });
+        let r = e.try_call("pthread_exit", &[5]);
+        set_ctx(saved);
+        assert!(matches!(r, Err(Stop::Host(ref m)) if m == EXIT_MARK), "{r:?}");
     }
 }

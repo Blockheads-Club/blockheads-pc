@@ -148,6 +148,7 @@ fn at_prompt(dir: &Path, mods: Vec<ModInfo>, c: JoinConfig) -> (JoinFlow, Instan
     assert!(matches!(sent(&f.contact(now))[0], Message::Hello(_)));
     assert_eq!(f.player_info(), PlayerInfo::Hold);
     assert_eq!(sent(&f.packet(&hello(mods.len() as u64, true), now)), vec![Message::ListRequest]);
+    assert_eq!(f.stage(), Stage::Listing);
     assert_eq!(f.packet(&list(mods), now), vec![Action::Prompt]);
     assert_eq!(f.stage(), Stage::Prompt);
     (f, now)

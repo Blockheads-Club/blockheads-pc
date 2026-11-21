@@ -123,15 +123,15 @@ impl SharedMaps {
                 return true;
             }
         };
-        let Ok(addr) = c.mem().map_anywhere(size, PAGE) else {
+        // A region that cannot be mapped or filled (`content` fits the fresh region) is out of memory.
+        let mem = c.mem();
+        let Some(addr) = mem.map_anywhere(size, PAGE).ok().filter(|a| mem.write_bytes(*a, &content).is_ok()) else {
             fail(c, st, errno::ENOMEM);
             return true;
         };
-        if wr(c, addr, &content) {
-            let path = lock(st).vfs.path_of(fd as i32).unwrap_or_default();
-            self.maps().push(Map { addr, len: size, path, off: u64::from(off) });
-            c.ret_u32(addr);
-        }
+        let path = lock(st).vfs.path_of(fd as i32).unwrap_or_default();
+        self.maps().push(Map { addr, len: size, path, off: u64::from(off) });
+        c.ret_u32(addr);
         true
     }
 
@@ -215,9 +215,7 @@ impl SharedMaps {
             "mmap",
             Arc::new(move |c: &mut Cpu| {
                 if !m.mmap(c, &s) {
-                    if let Some(f) = &inner {
-                        f(c);
-                    }
+                    crate::vfd::chain(inner.as_ref(), c);
                 }
             }),
         );
@@ -227,9 +225,7 @@ impl SharedMaps {
             "munmap",
             Arc::new(move |c: &mut Cpu| {
                 if !m.munmap(c) {
-                    if let Some(f) = &inner {
-                        f(c);
-                    }
+                    crate::vfd::chain(inner.as_ref(), c);
                 }
             }),
         );

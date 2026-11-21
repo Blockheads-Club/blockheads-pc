@@ -349,11 +349,7 @@ fn do_set_field(j: &mut J, ty: Ty, is_static: bool) {
     }
     match holder {
         None => st.fields[fid as usize].value = v,
-        Some(o) => {
-            if let Some(x) = st.obj_mut(o) {
-                x.fields.insert(fid, v);
-            }
-        }
+        Some(o) => st.put_field(o, fid, v),
     }
 }
 
@@ -437,12 +433,11 @@ fn array_region(j: &mut J, set: bool) {
     }
     let (off, cnt) = (start as usize * ty.size(), len as usize * ty.size());
     if set {
+        // `bytes` is a copy of the array: fill it and store it back whole.
         let src = j.vm.mem().read_bytes(buf, cnt as u32).unwrap_or_default();
-        j.vm.with_data(arr.unwrap_or(Obj::NULL), |d| {
-            if let Data::Prim(_, v) = d {
-                v[off..off + src.len()].copy_from_slice(&src);
-            }
-        });
+        let mut v = bytes;
+        v[off..off + src.len()].copy_from_slice(&src);
+        j.vm.with_data(arr.unwrap_or(Obj::NULL), |d| *d = Data::Prim(ty, v));
     } else {
         let _ = j.vm.mem().write_bytes(buf, &bytes[off..off + cnt]);
     }

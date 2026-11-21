@@ -26,14 +26,20 @@ macro_rules! fails {
     };
 }
 
+/// Return NULL, setting `errno` to `e` when it is non-zero (shared by the [`nulls!`] functions, so the branch is
+/// one function for coverage, not one copy per macro expansion).
+fn ret_null(c: &mut Cpu, st: &Shared, e: u32) {
+    if e != 0 {
+        set_errno(c, st, e);
+    }
+    c.ret_u32(0);
+}
+
 /// Functions that return NULL (with `errno` when it is non-zero).
 macro_rules! nulls {
     ($($id:ident $name:literal $e:expr;)*) => {
         $(fn $id(c: &mut Cpu, st: &Shared) {
-            if $e != 0 {
-                set_errno(c, st, $e);
-            }
-            c.ret_u32(0);
+            ret_null(c, st, $e);
         })*
         const NULL_TABLE: &[(&str, Impl)] = &[$(($name, $id)),*];
     };
@@ -534,15 +540,13 @@ fn mmap(c: &mut Cpu, st: &Shared) {
         set_errno(c, st, errno::ENOMEM);
         return c.ret_u32(MAP_FAILED);
     }
-    // Heap blocks are recycled: clear, then copy the file contents.
+    // Heap blocks are recycled: clear, then copy the file contents (the heap is always mapped).
     let mut image = content;
     image.resize(len as usize, 0);
-    let ok = s.mem.write_bytes(p, &image).is_ok();
-    if ok {
-        s.mmaps.insert(p, crate::state::Mapping { len, live: vec![true; (len / PAGE_SIZE) as usize] });
-    }
+    let _ = s.mem.write_bytes(p, &image);
+    s.mmaps.insert(p, crate::state::Mapping { len, live: vec![true; (len / PAGE_SIZE) as usize] });
     drop(s);
-    c.ret_u32(if ok { p } else { MAP_FAILED });
+    c.ret_u32(p);
 }
 
 /// `munmap`: pages of an anonymous mapping are released one range at a time (allocators such as

@@ -833,6 +833,25 @@ fn field_accessors() {
     assert_eq!(e.jni("GetStaticIntField", &[ch, 0]).r0, 0);
     // A stale object handle reads the declared default.
     assert_eq!(e.jni("GetIntField", &[oh ^ 0x40000, fid]).r0, 0);
+    e.clear_pending();
+    // A handle whose object slot was freed under it: the store is dropped.
+    let dead = e.vm.alloc_object(k);
+    let dh = e.local(dead);
+    e.vm.st().objs[dead.0 as usize] = None;
+    e.jni("SetIntField", &[dh, fid, 5]);
+    assert_eq!(e.pending_class(), None);
+}
+
+#[test]
+fn release_elements_skips_an_array_that_changed_size() {
+    let mut e = Env::new();
+    let a = e.jni("NewIntArray", &[2]).r0;
+    let obj = e.vm.resolve(a).unwrap();
+    let p = e.jni("GetIntArrayElements", &[a, 0]).r0;
+    e.mem().write_u8(p, 0xAA).unwrap();
+    e.vm.with_data(obj, |d| *d = Data::Prim(Ty::Int, vec![0; 12]));
+    e.jni("ReleaseIntArrayElements", &[a, p, 0]);
+    assert_eq!(e.vm.data(obj), Some(Data::Prim(Ty::Int, vec![0; 12])));
 }
 
 #[test]

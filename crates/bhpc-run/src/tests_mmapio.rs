@@ -149,6 +149,9 @@ fn sequential_writes_refresh_maps() {
     let iov = r.put(300, &[x.to_le_bytes(), 2u32.to_le_bytes(), y.to_le_bytes(), 3u32.to_le_bytes()].concat());
     assert_eq!(r.call("writev", &[fd, iov, 2]), 5);
     assert_eq!(r.cpu.mem().read_bytes(map + 4096, 5).unwrap(), b"ABCDE");
+    // an empty write to a mapped file leaves the map as it is
+    assert_eq!(r.call("write", &[fd, a, 0]), 0);
+    assert_eq!(r.cpu.mem().read_bytes(map + 4096, 5).unwrap(), b"ABCDE");
     // a failing write changes nothing; writes to descriptors without maps are plain bionic
     assert_eq!(r.call("write", &[999, a, 5]), NEG1);
     let p = r.put(400, b"/tmp/bhpc-mmapio-other\0");

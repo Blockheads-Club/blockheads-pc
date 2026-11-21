@@ -164,6 +164,7 @@ fn descriptor_controls_nonblocking_dup_and_ioctl() {
     assert_eq!(r.call("ioctl", &[FD_BASE + 300, 0x541B, out]), NEG1);
     let ep = r.call("epoll_create", &[1]);
     assert_eq!(r.call("ioctl", &[ep, 0x541B, out]), 0);
+    assert!(r.faults("ioctl", &[ep, 0x541B, 0xDEAD_0000]), "FIONREAD into a bad pointer");
     assert_eq!(r.call("dup", &[ep]), NEG1, "an epoll instance cannot be duplicated");
     // Not ours: forwarded to bionic (descriptor 1 is stdout).
     assert_eq!(r.call("close", &[1]), 0);
@@ -380,4 +381,15 @@ fn every_kind_of_descriptor_can_be_watched_and_deadlocks_are_reported() {
     };
     let p = r.put(2000, &rec);
     assert!(r.faults("poll", &[p, 1, NEG1]));
+}
+
+#[test]
+fn a_wrapper_without_a_bionic_thunk_leaves_the_call_alone() {
+    let mut r = rig();
+    r.cpu.set_reg(0, 42);
+    crate::vfd::chain(None, &mut r.cpu);
+    assert_eq!(r.cpu.reg(0), 42);
+    let seven: bhpc_cpu::SharedThunkFn = std::sync::Arc::new(|c: &mut bhpc_cpu::Cpu| c.ret_u32(7));
+    crate::vfd::chain(Some(&seven), &mut r.cpu);
+    assert_eq!(r.cpu.reg(0), 7);
 }

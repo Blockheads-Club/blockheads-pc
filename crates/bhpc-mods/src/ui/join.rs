@@ -233,7 +233,7 @@ impl ModUi {
     }
 
     fn header(&mut self, c: &mut Canvas, px: Px, r: Rect, j: &JoinView) {
-        let (tag, title): (Option<(String, Look, bool)>, String) = match &j.stage {
+        let ((text, look, pill), title): ((String, Look, bool), String) = match &j.stage {
             JoinStage::Prompt => {
                 let n = j.mods.iter().filter(|m| m.enabled && !m.cached).count();
                 let tag = if zone(j) {
@@ -243,10 +243,10 @@ impl ModUi {
                 } else {
                     (format!("{} to download", mods_word(n)), L_PRIMARY, true)
                 };
-                (Some(tag), format!("{} uses mods", j.server))
+                (tag, format!("{} uses mods", j.server))
             }
             JoinStage::Downloading => {
-                (Some(("Downloading".to_string(), L_PRIMARY, true)), format!("Getting {}'s mods", j.server))
+                (("Downloading".to_string(), L_PRIMARY, true), format!("Getting {}'s mods", j.server))
             }
             JoinStage::Failed(f) => {
                 let (tag, title) = match &f.kind {
@@ -255,23 +255,18 @@ impl ModUi {
                     FailKind::Newer => ("Update needed", "This server needs a newer mod loader".to_string()),
                     FailKind::Other => ("Join failed", format!("Could not join {}", j.server)),
                 };
-                (Some((tag.to_string(), L_BAD, true)), title)
+                ((tag.to_string(), L_BAD, true), title)
             }
             JoinStage::Rejected(text, _) if newer(text) => {
-                (Some(("Update needed".to_string(), L_BAD, true)), "This server needs a newer mod loader".into())
+                (("Update needed".to_string(), L_BAD, true), "This server needs a newer mod loader".into())
             }
-            JoinStage::Rejected(..) => {
-                (Some(("Join refused".to_string(), L_BAD, true)), format!("Can't join {}", j.server))
-            }
+            JoinStage::Rejected(..) => (("Join refused".to_string(), L_BAD, true), format!("Can't join {}", j.server)),
         };
         let (x, y) = (r.x + px.p(26.0), r.y + px.p(22.0));
         Self::tile(c, px, (x, y), 52.0, PASTELS[2], &initials(&j.server));
         let tx = x + px.p(52.0 + 16.0);
-        let mut ty = y;
-        if let Some((text, look, pill)) = tag {
-            Self::chip(c, px, (tx, ty), &text, look, pill, true);
-            ty += px.p(26.0);
-        }
+        Self::chip(c, px, (tx, y), &text, look, pill, true);
+        let ty = y + px.p(26.0);
         c.text(Face::Bold, px.f(26.0), tx as f32, ty as f32, O_TEXT, &title);
         let addr = if j.address.is_empty() { &j.server } else { &j.address };
         let line = match j.players {

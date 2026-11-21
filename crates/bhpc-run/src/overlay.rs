@@ -155,9 +155,7 @@ impl SpriteCache {
                 self.cursor =
                     Some((size, Overlay { width: p.width, height: p.height, serial, rgba: Arc::new(p.rgba) }));
             }
-            if let Some((_, ov)) = &self.cursor {
-                out.push(Sprite { overlay: ov.clone(), at: (x / cw, y / ch) });
-            }
+            out.extend(self.cursor.as_ref().map(|(_, ov)| Sprite { overlay: ov.clone(), at: (x / cw, y / ch) }));
         }
         if let Some((text, _)) = view.message.as_ref().filter(|(_, at)| now.duration_since(*at) < MESSAGE_TIME) {
             let scale = hud_scale(picture.1);
@@ -166,9 +164,7 @@ impl SpriteCache {
                 let sp = message_sprite(&localise(self.lang, text), scale, serial, (0.5, 0.12));
                 self.message = Some((text.clone(), scale, sp.overlay));
             }
-            if let Some((_, _, ov)) = &self.message {
-                out.push(Sprite { overlay: ov.clone(), at: (0.5, 0.12) });
-            }
+            out.extend(self.message.as_ref().map(|(_, _, ov)| Sprite { overlay: ov.clone(), at: (0.5, 0.12) }));
         }
         if !view.overheads.is_empty() {
             let size = 9 * hud_scale(picture.1);
@@ -192,9 +188,7 @@ impl SpriteCache {
                 let serial = self.next();
                 self.mic = Some((size, Overlay { width: p.width, height: p.height, serial, rgba: Arc::new(p.rgba) }));
             }
-            if let Some((_, ov)) = &self.mic {
-                out.push(Sprite { overlay: ov.clone(), at: MIC_AT });
-            }
+            out.extend(self.mic.as_ref().map(|(_, ov)| Sprite { overlay: ov.clone(), at: MIC_AT }));
         }
         out
     }

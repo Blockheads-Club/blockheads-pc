@@ -74,6 +74,8 @@ fn keys_and_text() {
         ("tab", 43),
         ("space", 44),
         ("delete", 76),
+        ("F5", 62),
+        ("f9", 66),
         ("right", 79),
         ("down", 81),
         ("up", 82),

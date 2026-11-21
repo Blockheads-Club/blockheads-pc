@@ -153,6 +153,8 @@ fn hit_testing_finds_enabled_visible_controls() {
     e.call(s.popup, "insertSubview", "(Lcom/apportable/ui/View;I)V", &[Value::Ref(Some(over)), Value::Int(99)])
         .unwrap();
     assert_eq!(e.vm.hit_test(150.0, 370.0).unwrap().view, over, "index is clamped");
+    e.call(s.popup, "insertSubview", "(Lcom/apportable/ui/View;I)V", &[Value::Ref(None), Value::Int(0)]).unwrap();
+    assert_eq!(e.vm.hit_test(150.0, 370.0).unwrap().view, over, "a null subview is ignored");
     // a view moves between parents; bounds shift the content of a parent
     let rc = rect(&mut e, 0.0, 0.0, 50.0, 50.0);
     e.call(over, "setFrame", "(Landroid/graphics/RectF;)V", &[rc]).unwrap();
@@ -571,12 +573,20 @@ fn the_chat_reads_like_a_desktop_chat() {
     assert_eq!(at(&e, send), [75.0, 5.0, 40.0, 20.0]);
     assert_eq!(e.vm.chat_close_button(), Some((close, false)));
     // The game takes the input line out while it lists: the panel is then known by its title.
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(0)]).unwrap();
+    let composing = vm.chat_buttons();
+    e.call(text, "setHidden", "(Z)V", &[Value::Int(1)]).unwrap();
     e.vm.ui_detach(text);
     e.vm.ui_detach(field_bg);
     assert_eq!(at(&e, scroll)[1], 72.0, "an untitled panel without an input line is no chat");
     let t = e.string("CHAT");
     e.call(title, "setText", "(Ljava/lang/String;)V", &[t]).unwrap();
     assert_eq!(at(&e, scroll), [4.0, 34.0, 192.0, 242.0]);
+    // A send that ended there: NEW is pressed, and with no input line nothing takes the keyboard.
+    let calls = event_calls(&e);
+    let focus = e.vm.text_focus();
+    vm.after_chat_press(&mut e.cpu, send, composing).unwrap();
+    assert_eq!((event_calls(&e), e.vm.text_focus()), (calls + 2, focus));
     let s = at(&e, scroll)[1];
     let b = rect(&mut e, 0.0, 0.0, 120.0, 200.0);
     e.call(scroll, "setBounds", "(Landroid/graphics/RectF;)V", &[b]).unwrap();

@@ -53,9 +53,8 @@ pub fn validate_cached_with(path: &Path, table: &[(Release, &str)], force: bool)
         return Ok(info.clone());
     }
     let info = validate_with(path, table, force)?;
-    if let Some(k) = key {
-        seen.get_or_insert_with(HashMap::new).insert(k, info.clone());
-    }
+    // A file without metadata (gone again since it was read) is not remembered.
+    seen.get_or_insert_with(HashMap::new).extend(key.map(|k| (k, info.clone())));
     Ok(info)
 }
 

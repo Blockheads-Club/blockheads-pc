@@ -177,6 +177,11 @@ fn string_builders() {
     let b = e.new_obj("java/lang/StringBuilder", "(Ljava/lang/String;)V", &[Value::Ref(None)]);
     assert_eq!(text!(e, e.call(b, "toString", "()Ljava/lang/String;", &[])), "");
     e.new_obj("java/lang/StringBuilder", "(I)V", &[Value::Int(16)]);
+    // Appending to a builder without text storage leaves it alone and still returns it.
+    let bare = e.vm.alloc_object(e.vm.class_named("java/lang/StringBuilder").unwrap());
+    e.vm.with_data(bare, |d| *d = Data::None);
+    assert_eq!(obj(e.call(bare, "append", "(I)Ljava/lang/StringBuilder;", &[Value::Int(1)])), bare);
+    assert_eq!(e.vm.data(bare), Some(Data::None));
 }
 
 #[test]
@@ -606,6 +611,10 @@ fn files_and_streams() {
     let part = e.vm.new_prim_array(Ty::Byte, 4);
     assert_eq!(int(e.call(bis, "read", "([BII)I", &[Value::Ref(Some(part)), Value::Int(1), Value::Int(2)])), 2);
     assert_eq!(int(e.call(bis, "read", "([BII)I", &[Value::Ref(Some(part)), Value::Int(0), Value::Int(0)])), 0);
+    // An object array as the buffer: the bytes are consumed but nothing is stored.
+    let objs = e.vm.new_object_array("java/lang/Object", 2);
+    assert_eq!(int(e.call(bis, "read", "([BII)I", &[Value::Ref(Some(objs)), Value::Int(0), Value::Int(1)])), 1);
+    assert_eq!(e.vm.data(objs), Some(Data::Objs(vec![None, None])));
     for (off, len) in [(-1, 1), (0, -1), (3, 2)] {
         let r = e.call(bis, "read", "([BII)I", &[Value::Ref(Some(part)), Value::Int(off), Value::Int(len)]);
         assert_eq!(exc_class(&e, r), "java/lang/IndexOutOfBoundsException");

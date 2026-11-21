@@ -421,9 +421,14 @@ mod tests {
         }
         assert_eq!(scan(&mut e, "08", "%i%c"), 2);
         assert_eq!((word(&e, 0), word(&e, 1) & 0xff), (0, '8' as u32), "octal 0 then the 8");
-        for (input, fmt, expect) in
-            [("ff", "%x", 255), ("FF", "%X", 255), ("0xff", "%x", 255), ("17", "%o", 15), ("0x10", "%p", 16)]
-        {
+        for (input, fmt, expect) in [
+            ("ff", "%x", 255),
+            ("FF", "%X", 255),
+            ("0xff", "%x", 255),
+            ("17", "%o", 15),
+            ("0x10", "%p", 16),
+            ("017", "%x", 0x17),
+        ] {
             assert_eq!(scan(&mut e, input, fmt), 1, "{input} {fmt}");
             assert_eq!(word(&e, 0), expect, "{input} {fmt}");
         }
@@ -572,6 +577,7 @@ mod tests {
         }
         e.put_str(FMT, "%d");
         assert!(matches!(e.try_call("sscanf", &[BAD, FMT, OUT]), Err(Stop::Fault(_))));
+        assert!(matches!(e.try_call("vsscanf", &[BAD, FMT, OUT]), Err(Stop::Fault(_))));
         assert!(matches!(e.try_call("sscanf", &[IN, BAD, OUT]), Err(Stop::Fault(_))));
         e.put_str(FMT, "%lf");
         assert!(matches!(e.try_call("sscanf", &[IN, FMT, BAD]), Err(Stop::Fault(_))));

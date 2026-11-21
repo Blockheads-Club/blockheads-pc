@@ -441,6 +441,10 @@ fn resolver_builds_addrinfo_hostent_and_nameinfo_in_guest_memory() {
     assert!(r.faults("getaddrinfo", &[EFAULT_ADDR, 0, 0, res]));
     assert!(r.faults("getaddrinfo", &[host, EFAULT_ADDR, 0, res]));
     assert!(r.faults("getaddrinfo", &[host, 0, 0, EFAULT_ADDR]));
+    r.vfd.set_trace_net(false);
+    assert_eq!(r.call("getaddrinfo", &[host, svc, 0, res]), 0, "the same without the call log");
+    r.call("freeaddrinfo", &[rd(&r, res)]);
+    r.vfd.set_trace_net(true);
     // gethostbyname / gethostbyname2.
     let he = r.call("gethostbyname", &[host]);
     assert_ne!(he, 0);

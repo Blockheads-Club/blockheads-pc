@@ -198,6 +198,24 @@ fn unimplemented_imports_are_named_and_listed() {
 }
 
 #[test]
+fn a_zero_cycle_budget_keeps_the_budget_the_cpu_has_left() {
+    let dir = Tmp::new("nobudget");
+    let app = lib(&[BX_LR], |b, at| {
+        b.needed = vec!["libv.so"];
+        b.init = Some(at);
+    });
+    let apk = apk_file(&dir, &[("libApplication.so", app), ("libv.so", libv())]);
+    let cfg = config(apk);
+    let mut sess = Session::open(&cfg, Box::new(std::io::sink())).unwrap();
+    // Calls with a zero budget do not reset the cycle counter: they run on what the session started with.
+    let mut no_reset = config(cfg.apk.clone());
+    no_reset.watchdog_cycles = 0;
+    let (rep, failures) = sess.run_constructors(&no_reset).unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((rep.ran, rep.failures.len()), (1, 0));
+}
+
+#[test]
 fn a_runaway_constructor_is_stopped_by_the_cycle_budget() {
     let dir = Tmp::new("spin");
     let app = lib(&[SPIN], |b, at| b.init = Some(at));

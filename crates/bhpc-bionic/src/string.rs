@@ -787,6 +787,14 @@ mod tests {
         for f in ["strchr", "strrchr", "strnlen", "strdup", "atoi", "strtol", "strtoull"] {
             assert!(matches!(e.try_call(f, &[BAD, 10, 10]), Err(Stop::Fault(_))), "{f}");
         }
+        // A destination whose NUL is the last mapped byte: appending runs off the mapping.
+        let end = SCRATCH + 0x10000 - 3;
+        e.put_str(end, "ab");
+        e.put_str(A, "xyz");
+        for f in ["strcat", "strncat", "strlcat"] {
+            assert!(matches!(e.try_call(f, &[end, A, 100]), Err(Stop::Fault(_))), "{f}");
+            assert_eq!(e.get_str(end), "ab", "{f}");
+        }
     }
 
     #[test]

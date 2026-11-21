@@ -336,9 +336,8 @@ pub fn client_settings_path(data_dir: &Path) -> std::path::PathBuf {
 pub fn default_runtimes(cache: &Path) -> Vec<Box<dyn Runtime>> {
     let mut v = bhmod_core::default_runtimes();
     let wasm = bhmod_wasm::WasmConfig { cache_dir: Some(cache.to_path_buf()), ..Default::default() };
-    if let Ok(rt) = bhmod_wasm::WasmRuntime::new(wasm) {
-        v.push(Box::new(rt));
-    }
+    // Without a WASM engine only the default runtimes are offered.
+    v.extend(bhmod_wasm::WasmRuntime::new(wasm).ok().map(|rt| Box::new(rt) as Box<dyn Runtime>));
     v
 }
 

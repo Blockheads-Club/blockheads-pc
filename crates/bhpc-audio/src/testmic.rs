@@ -151,9 +151,7 @@ struct Running {
 impl Drop for Running {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
+        let _ = self.thread.take().map(std::thread::JoinHandle::join);
     }
 }
 

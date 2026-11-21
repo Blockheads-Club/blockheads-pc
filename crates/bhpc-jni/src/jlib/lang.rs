@@ -427,20 +427,15 @@ fn arraycopy(c: &mut Call) -> JResult {
     }
     let (sp, dp, n) = (sp as usize, dp as usize, n as usize);
     match (sd, dd) {
-        (Data::Prim(t1, a), Data::Prim(t2, _)) if t1 == t2 => {
+        // `dd` is a copy of the destination: fill it and store it back whole.
+        (Data::Prim(t1, a), Data::Prim(t2, mut b)) if t1 == t2 => {
             let sz = t1.size();
-            c.vm.with_data(dst, |d| {
-                if let Data::Prim(_, b) = d {
-                    b[dp * sz..(dp + n) * sz].copy_from_slice(&a[sp * sz..(sp + n) * sz]);
-                }
-            });
+            b[dp * sz..(dp + n) * sz].copy_from_slice(&a[sp * sz..(sp + n) * sz]);
+            c.vm.with_data(dst, |d| *d = Data::Prim(t2, b));
         }
-        (Data::Objs(a), Data::Objs(_)) => {
-            c.vm.with_data(dst, |d| {
-                if let Data::Objs(b) = d {
-                    b[dp..dp + n].copy_from_slice(&a[sp..sp + n]);
-                }
-            });
+        (Data::Objs(a), Data::Objs(mut b)) => {
+            b[dp..dp + n].copy_from_slice(&a[sp..sp + n]);
+            c.vm.with_data(dst, |d| *d = Data::Objs(b));
         }
         _ => return Err(c.vm.throw_new("java/lang/ArrayStoreException", "arraycopy")),
     }

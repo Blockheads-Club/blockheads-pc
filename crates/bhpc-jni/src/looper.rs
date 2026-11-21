@@ -48,12 +48,11 @@ pub(crate) fn enqueue(vm: &Vm, looper: Obj, msg: Obj, when: i64) -> bool {
     vm.set_field(msg, "when", Value::Long(when));
     let mut st = vm.st();
     let Some(q) = st.field_named(looper, "queue").and_then(|v| v.as_ref()) else { return false };
-    let Some(Data::Queue(items)) = st.obj(q).map(|o| o.data.clone()) else { return false };
+    let Some(Data::Queue(mut items)) = st.obj(q).map(|o| o.data.clone()) else { return false };
     let at =
         items.iter().position(|m| st.field_named(*m, "when").map_or(0, |w| w.as_long()) > when).unwrap_or(items.len());
-    if let Some(Data::Queue(items)) = st.obj_mut(q).map(|o| &mut o.data) {
-        items.insert(at, msg);
-    }
+    items.insert(at, msg);
+    st.put_data(q, Data::Queue(items));
     true
 }
 
@@ -176,14 +175,18 @@ fn init_handler(c: &mut Call, looper: Option<Obj>, callback: Option<Obj>) -> JRe
     void()
 }
 
+fn message(vm: &Vm, handler: Option<Obj>, what: i32, a1: i32, a2: i32, obj: Option<Obj>) -> Obj {
+    let m = new_message(vm);
+    vm.set_field(m, "target", Value::Ref(handler));
+    vm.set_field(m, "what", Value::Int(what));
+    vm.set_field(m, "arg1", Value::Int(a1));
+    vm.set_field(m, "arg2", Value::Int(a2));
+    vm.set_field(m, "obj", Value::Ref(obj));
+    m
+}
+
 fn obtain(c: &mut Call, handler: Option<Obj>, what: i32, a1: i32, a2: i32, obj: Option<Obj>) -> JResult {
-    let m = new_message(c.vm);
-    c.vm.set_field(m, "target", Value::Ref(handler));
-    c.vm.set_field(m, "what", Value::Int(what));
-    c.vm.set_field(m, "arg1", Value::Int(a1));
-    c.vm.set_field(m, "arg2", Value::Int(a2));
-    c.vm.set_field(m, "obj", Value::Ref(obj));
-    object(Some(m))
+    object(Some(message(c.vm, handler, what, a1, a2, obj)))
 }
 
 fn remove_where(c: &Call, keep: impl Fn(&Vm, Obj) -> bool) {
@@ -261,11 +264,9 @@ pub(crate) fn install(vm: &Vm) {
             obtain(c, c.obj(0), c.int(1), c.int(2), c.int(3), c.obj(4))
         })
         .static_method("obtain", "(Landroid/os/Handler;Ljava/lang/Runnable;)Landroid/os/Message;", |c| {
-            let m = obtain(c, c.obj(0), 0, 0, 0, None)?;
-            if let Some(mo) = m.as_ref() {
-                c.vm.set_field(mo, "callback", c.args[1]);
-            }
-            Ok(m)
+            let m = message(c.vm, c.obj(0), 0, 0, 0, None);
+            c.vm.set_field(m, "callback", c.args[1]);
+            object(Some(m))
         })
         .method("recycle", "()V", |_| void())
         .method("sendToTarget", "()V", |c| {

@@ -188,13 +188,23 @@ impl Sock {
     }
 }
 
+/// A list `getifaddrs` made, released with `freeifaddrs` when dropped.
+struct IfAddrs(*mut libc::ifaddrs);
+
+impl Drop for IfAddrs {
+    fn drop(&mut self) {
+        // SAFETY: the list from getifaddrs, freed once.
+        unsafe { libc::freeifaddrs(self.0) };
+    }
+}
+
 /// The host's IPv4 interface addresses as `(up, loopback, address)`; empty when they cannot be listed.
 pub(crate) fn ipv4_interfaces() -> Vec<(bool, bool, Ipv4Addr)> {
     let mut out = Vec::new();
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
-    // SAFETY: getifaddrs fills `list`, released below with freeifaddrs.
-    let ok = unsafe { libc::getifaddrs(&mut list) } == 0;
-    let mut p = if ok { list } else { std::ptr::null_mut() };
+    // SAFETY: getifaddrs fills `list`, released by `IfAddrs` with freeifaddrs.
+    let owned = (unsafe { libc::getifaddrs(&mut list) } == 0).then(|| IfAddrs(list));
+    let mut p = owned.as_ref().map_or(std::ptr::null_mut(), |l| l.0);
     // SAFETY: walking the list getifaddrs made; every node and its address stay valid until freeifaddrs.
     while let Some(ifa) = unsafe { p.as_ref() } {
         let sa = ifa.ifa_addr as *const libc::sockaddr_in;
@@ -209,9 +219,6 @@ pub(crate) fn ipv4_interfaces() -> Vec<(bool, bool, Ipv4Addr)> {
         }
         p = ifa.ifa_next;
     }
-    if ok {
-        // SAFETY: the list from getifaddrs above, freed once.
-        unsafe { libc::freeifaddrs(list) };
-    }
+    drop(owned);
     out
 }

@@ -48,18 +48,17 @@ fn callback(c: &Cpu, fp: u32, field: u32) -> Option<(u32, u32)> {
     Some((f, c.mem().read_u32(fp + file::COOKIE).unwrap_or(0)))
 }
 
-/// Run a guest stream callback on `data` (written to a scratch buffer first for output).
+/// Run a guest write callback on `data` (written to a scratch buffer first).
 /// Returns the callback's result, or `None` after a guest failure.
-fn call_stream_io(c: &mut Cpu, st: &Shared, func: u32, cookie: u32, data: Option<&[u8]>, n: u32) -> Option<i32> {
+fn call_stream_io(c: &mut Cpu, st: &Shared, func: u32, cookie: u32, data: &[u8]) -> Option<i32> {
+    let n = data.len() as u32;
     let buf = lock(st).heap.alloc(n.max(1));
     if buf == 0 {
         set_errno(c, st, errno::ENOMEM);
         return Some(-1);
     }
-    if let Some(d) = data {
-        // The scratch block comes from the guest heap, which is always mapped.
-        let _ = c.mem().write_bytes(buf, d);
-    }
+    // The scratch block comes from the guest heap, which is always mapped.
+    let _ = c.mem().write_bytes(buf, data);
     let r = c.call_or_stop(func, &[cookie, buf, n]).map(|r| r.r0 as i32);
     lock(st).heap.free(buf);
     r
@@ -72,7 +71,7 @@ fn write_stream(c: &mut Cpu, st: &Shared, fp: u32, data: &[u8]) -> bool {
         let mut done = 0;
         while done < data.len() {
             let chunk = &data[done..];
-            match call_stream_io(c, st, func, cookie, Some(chunk), chunk.len() as u32) {
+            match call_stream_io(c, st, func, cookie, chunk) {
                 Some(n) if n > 0 => done += n as usize,
                 Some(_) => {
                     set_flag(c, fp, file::SERR, true);
@@ -1681,6 +1680,24 @@ mod file_tests {
         e.put_str(A, "%d %d");
         assert_eq!(e.call("fscanf", &[m, A, B, B + 4]).r0, 2);
         assert_eq!(e.mem().read_u32(B + 4).unwrap(), 6);
+    }
+
+    #[test]
+    fn copied_funopen_files_seek_and_scan_without_a_stream_record() {
+        // A FILE block copied from a funopen stream (as libv does for stdout) has callbacks but no record.
+        let mut e = Env::new();
+        let (m, pos) = memory_stream(&mut e, b"5 6", true);
+        let copy = SCRATCH + 0x4000;
+        let image = e.mem().read_bytes(m, file::SIZE).unwrap();
+        e.mem().write_bytes(copy, &image).unwrap();
+        assert!(!crate::lock(&e.st).files.contains_key(&copy));
+        assert_eq!(e.call("fseek", &[copy, 0, 0]).r0, 0);
+        assert_eq!(*pos.lock().unwrap(), 0);
+        // The byte the scan peeked at has no record to go back to.
+        e.put_str(A, "%d");
+        assert_eq!(e.call("fscanf", &[copy, A, B]).r0, 1);
+        assert_eq!(e.mem().read_u32(B).unwrap(), 5);
+        assert_eq!(*pos.lock().unwrap(), 2);
     }
 
     #[test]

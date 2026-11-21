@@ -411,6 +411,9 @@ fn invoke_dispatch() {
     assert!(matches!(vm.invoke(&mut e.cpu, 0, Recv::Static(base), &[], false), Err(Throw::Exc(_))));
     assert!(matches!(vm.invoke(&mut e.cpu, 123456, Recv::Static(base), &[], false), Err(Throw::Exc(_))));
     assert!(matches!(vm.invoke(&mut e.cpu, 123456, Recv::Instance(o), &[], true), Err(Throw::Exc(_))));
+    // A receiver whose class chain lacks the method keeps the method id it was called with.
+    let other = vm.alloc_object(vm.define("t/Unrelated").id());
+    assert_eq!(vm.invoke(&mut e.cpu, mid, Recv::Instance(other), &[], true), Ok(Value::Int(1)));
     // new_object runs the constructor.
     vm.define("t/Ctor").field("v", "I").method("<init>", "(I)V", |c| {
         c.vm.set_field(c.this, "v", c.args[0]);
@@ -589,4 +592,56 @@ fn bare_vm_has_no_classes_but_object() {
     let s = vm.new_string("x");
     assert_eq!(vm.string(s).as_deref(), Some("x"));
     assert!(vm.now_ms() < 60_000);
+}
+
+#[test]
+fn gc_marks_lent_buffers_view_images_and_pending_exceptions() {
+    let e = Env::new();
+    let vm = &e.vm;
+    let lent = vm.new_byte_array(&[1, 2, 3, 4]);
+    vm.st().lent.insert(0x1000, crate::vm::Lent { obj: lent, len: 4 });
+    let view = vm.new_data_object("com/apportable/ui/View", Data::None);
+    vm.ui_create(view, "ImageView", 1, [0.0; 4]);
+    let image = vm.new_byte_array(&[0; 4]);
+    vm.ui_update(view, |v| v.image = Some((image, 1, 1)));
+    let pending = vm.new_string("pending");
+    vm.st().threads.insert(7, crate::vm::ThreadState { pending: Some(pending), ..Default::default() });
+    // A root that names a slot already freed is skipped.
+    let gone = vm.new_string("gone");
+    vm.pin(gone);
+    vm.st().objs[gone.0 as usize] = None;
+    let garbage = vm.new_string("garbage");
+    assert_eq!(vm.gc(), 1);
+    assert_eq!(vm.string(garbage), None);
+    assert!(vm.data(lent).is_some() && vm.data(image).is_some());
+    assert_eq!(vm.string(pending).as_deref(), Some("pending"));
+}
+
+#[test]
+fn ui_update_ignores_unknown_views() {
+    let e = Env::new();
+    let vm = &e.vm;
+    let plain = vm.new_string("not a view");
+    let view = vm.new_data_object("com/apportable/ui/View", Data::None);
+    vm.ui_create(view, "View", 1, [0.0; 4]);
+    // One closure (one instantiation of `ui_update`) for both cases, so each of its lines is covered there.
+    for (o, changes) in [(plain, 0), (view, 1)] {
+        let before = vm.st().ui.generation;
+        vm.ui_update(o, |v| v.hidden = true);
+        assert_eq!(vm.st().ui.generation, before + changes);
+    }
+    assert!(vm.st().ui.views[&view].hidden);
+}
+
+#[test]
+fn state_stores_ignore_dead_objects() {
+    let e = Env::new();
+    let vm = &e.vm;
+    let o = vm.new_string("s");
+    vm.st().objs[o.0 as usize] = None;
+    let mut st = vm.st();
+    st.put_field(o, 1, Value::Int(1));
+    st.put_data(o, Data::None);
+    st.put_data(Obj::NULL, Data::None);
+    assert!(st.obj(o).is_none());
 }

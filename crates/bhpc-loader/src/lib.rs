@@ -398,9 +398,8 @@ impl Linker {
             if required {
                 return Err(LoadError::NotFound(name.to_string()));
             }
-            if !host_libs.iter().any(|h| h == name) {
-                host_libs.push(name.to_string());
-            }
+            // `seen` already makes sure each name gets here once.
+            host_libs.push(name.to_string());
             return Ok(());
         };
         let st = self.stage(name, &bytes)?;

@@ -670,9 +670,7 @@ impl Vm {
             };
             st.ensure_field(cls, name, desc)
         });
-        if let Some(x) = st.obj_mut(o) {
-            x.fields.insert(fid, v);
-        }
+        st.put_field(o, fid, v);
     }
 
     /// Read an instance field by name (`Value::Int(0)`-like zero if unset or unknown).
@@ -1024,6 +1022,20 @@ impl State {
 
     pub(crate) fn obj_mut(&mut self, o: Obj) -> Option<&mut Object> {
         self.objs.get_mut(o.0 as usize).and_then(Option::as_mut).filter(|_| o != Obj::NULL)
+    }
+
+    /// Store field `fid` of `o` (ignored if `o` is not a live object).
+    pub(crate) fn put_field(&mut self, o: Obj, fid: u32, v: Value) {
+        if let Some(x) = self.obj_mut(o) {
+            x.fields.insert(fid, v);
+        }
+    }
+
+    /// Replace the payload of `o` (ignored if `o` is not a live object).
+    pub(crate) fn put_data(&mut self, o: Obj, d: Data) {
+        if let Some(x) = self.obj_mut(o) {
+            x.data = d;
+        }
     }
 
     /// Field `name` of `o` (declared default if unset), or None if unknown.

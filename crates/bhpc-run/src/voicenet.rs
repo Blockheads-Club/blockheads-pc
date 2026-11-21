@@ -71,10 +71,8 @@ impl bhpc_mods::voice::VoiceIo for PcVoiceIo {
 
     fn send_udp(&mut self, port: u16, datagram: &[u8]) {
         let Some(ip) = self.server else { return };
-        if let Some(s) = self.socket(ip) {
-            // Lost datagrams are voice that arrives late anyway.
-            let _ = s.send_to(datagram, (ip, port));
-        }
+        // Lost datagrams (and sends without a socket) are voice that arrives late anyway.
+        let _ = self.socket(ip).map(|s| s.send_to(datagram, (ip, port)));
     }
 
     fn recv_udp(&mut self) -> Vec<Vec<u8>> {

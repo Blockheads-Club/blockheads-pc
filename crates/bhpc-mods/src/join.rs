@@ -540,7 +540,8 @@ impl JoinFlow {
                     actions.push(Action::Prompt);
                 }
                 Output::Progress { id, done, .. } => {
-                    if let Some(e) = self.entries.iter_mut().find(|e| e.info.id == id) {
+                    // The first entry of that id (the session only reports the files it offered).
+                    for e in self.entries.iter_mut().filter(|e| e.info.id == id).take(1) {
                         e.have = done;
                         e.done = done >= e.info.size;
                     }

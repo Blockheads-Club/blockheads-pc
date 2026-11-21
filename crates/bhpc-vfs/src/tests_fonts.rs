@@ -62,6 +62,21 @@ fn apk_fonts_win_over_bundled_and_aliases_work() {
 }
 
 #[test]
+fn directories_in_the_apk_font_folder_are_not_fonts() {
+    use std::io::Write;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    w.start_file(format!("{APK_FONT_DIR}/Own.ttf"), stored).unwrap();
+    w.write_all(b"OWN").unwrap();
+    w.start_file(format!("{APK_FONT_DIR}/nested/Deep.ttf"), stored).unwrap();
+    w.write_all(b"DEEP").unwrap();
+    let apk = crate::archive::ApkArchive::from_bytes(w.finish().unwrap().into_inner()).unwrap();
+    let names = FontFs::new(Some(Arc::new(apk)), None).names();
+    assert!(names.contains(&"Own.ttf".to_string()));
+    assert!(!names.contains(&"nested".to_string()) && !names.contains(&"Deep.ttf".to_string()));
+}
+
+#[test]
 fn user_overrides_win() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("Roboto-Regular.ttf"), b"MINE").unwrap();

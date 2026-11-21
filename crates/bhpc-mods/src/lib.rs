@@ -25,11 +25,16 @@ pub const LOADER_VERSION: &str = bhpc_launcher::mods::LOADER_VERSION;
 
 /// `HELLO.platform` for this build.
 pub fn platform() -> String {
-    let arch = match std::env::consts::ARCH {
+    platform_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// `HELLO.platform` for `os` and Rust's `arch` name (`aarch64` is announced as `arm64`).
+fn platform_for(os: &str, arch: &str) -> String {
+    let arch = match arch {
         "aarch64" => "arm64",
         a => a,
     };
-    format!("pc-{}-{arch}", std::env::consts::OS)
+    format!("pc-{os}-{arch}")
 }
 
 #[cfg(test)]

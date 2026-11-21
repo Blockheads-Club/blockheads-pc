@@ -227,6 +227,9 @@ fn players_by_id_once_voice_lists_them() {
     let b = h.bridge_for_tests();
     assert_eq!(b.local_player(), Some("ME".into()));
     assert!(b.platform().starts_with("pc-"));
+    // Rust's `aarch64` is announced as `arm64`; other arches keep their name.
+    assert_eq!(crate::platform_for("linux", "aarch64"), "pc-linux-arm64");
+    assert_eq!(crate::platform_for("windows", "x86_64"), "pc-windows-x86_64");
     assert_eq!(b.online_players(), vec!["ME".to_string()]);
     h.set_local_id(Some("id-me".into()));
     assert_eq!(b.local_player(), Some("id-me".into()));

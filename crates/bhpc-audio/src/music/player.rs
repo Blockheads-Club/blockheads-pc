@@ -46,6 +46,11 @@ pub enum PlayerEvent {
 
 type Listener = Arc<dyn Fn(PlayerEvent) + Send + Sync>;
 
+/// Hand `events` to the listener, if there is one (kept out of the generic `MediaPlayer::run`).
+fn deliver(mut events: Vec<PlayerEvent>, listener: Option<Listener>) {
+    listener.iter().for_each(|l| events.drain(..).for_each(|e| l(e)));
+}
+
 struct Inner {
     mixer: Mixer,
     state: PlayerState,
@@ -160,11 +165,7 @@ impl MediaPlayer {
             let out = f(&mut g, &mut events);
             (out, g.listener.clone())
         };
-        for e in events {
-            if let Some(l) = &listener {
-                l(e);
-            }
-        }
+        deliver(events, listener);
         out
     }
 
@@ -452,8 +453,6 @@ pub struct PumpGuard {
 impl Drop for PumpGuard {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
+        let _ = self.handle.take().map(JoinHandle::join);
     }
 }
