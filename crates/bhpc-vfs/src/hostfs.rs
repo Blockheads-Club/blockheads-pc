@@ -48,8 +48,10 @@ impl VFile for HostFile {
         Ok(self.file.set_len(len)?)
     }
 
+    /// Queued on the background flusher ([`crate::flush`]): the caller (the game's frame) does not wait for the disk.
     fn sync(&mut self) -> Result<()> {
-        Ok(self.file.sync_all()?)
+        crate::flush::queue(self.file.try_clone()?);
+        Ok(())
     }
 }
 

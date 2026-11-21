@@ -219,6 +219,8 @@ fn abort(c: &mut Cpu, _: &Shared) {
 fn exit(c: &mut Cpu, st: &Shared) {
     let code = c.args().u32(c) as i32;
     lock(st).exit_code = Some(code);
+    // The game's last save (`saved one last time`) reaches the disk before the process ends.
+    bhpc_vfs::flush::wait();
     c.request_stop(Stop::Host(format!("guest called exit({code})")));
 }
 

@@ -12,6 +12,7 @@
 pub mod archive;
 pub mod asset;
 pub mod error;
+pub mod flush;
 pub mod fontname;
 pub mod fonts;
 pub mod fs;
@@ -24,6 +25,8 @@ pub mod zipfs;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_flush;
 #[cfg(test)]
 mod tests_fonts;
 #[cfg(test)]
