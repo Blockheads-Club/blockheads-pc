@@ -28,7 +28,7 @@ keyboard, your game controller, your worlds. It runs **your own copy** of the An
 and nothing is downloaded.
 
 > [!NOTE]
-> **Alpha (v0.5.0 pre-release).** The game starts, worlds load, sound plays and online servers work. Expect a few rough
+> **Alpha (v0.5.1 pre-release).** The game starts, worlds load, sound plays and online servers work. Expect a few rough
 > edges, and please [tell us what you find](https://github.com/Blockheads-Club/blockheads-pc/issues).
 
 ## ✨ What you get
